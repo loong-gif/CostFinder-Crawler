@@ -1,27 +1,29 @@
 """
-Social media finder
-Main crawler logic implementation
+Async social media finder
+Main async crawler logic implementation
 """
 
+import asyncio
 from datetime import datetime
-from typing import Dict, Optional
-from crawler.base_crawler import BaseCrawler
+from typing import Dict, List
+from crawler.async_crawler import AsyncBaseCrawler
 from crawler.parsers import SocialMediaParser
 from utils.logger import Logger
+import config
 
 
-class SocialMediaFinder(BaseCrawler):
-    """Social media information finder"""
+class AsyncSocialMediaFinder(AsyncBaseCrawler):
+    """Async social media information finder"""
 
     def __init__(self):
-        """Initialize finder"""
+        """Initialize async finder"""
         super().__init__()
         self.parser = SocialMediaParser()
         self.logger = Logger.get_logger(self.__class__.__name__)
 
-    def find(self, url: str) -> Dict:
+    async def find(self, url: str) -> Dict:
         """
-        Find social media information from specified website.
+        Find social media information from specified website asynchronously.
         
         Args:
             url: Target website URL
@@ -40,13 +42,12 @@ class SocialMediaFinder(BaseCrawler):
         }
         
         # Initialize all platform lists
-        import config
         for platform in config.SOCIAL_MEDIA_PLATFORMS.keys():
             result[platform] = []
 
         try:
             # Get page content
-            html = self.fetch_page(url)
+            html = await self.fetch_page(url)
             
             if not html:
                 result["status"] = "failed"
@@ -67,7 +68,6 @@ class SocialMediaFinder(BaseCrawler):
             )
 
             # Update results for all platforms
-            import config
             total_found = 0
             platform_counts = []
             
@@ -93,31 +93,27 @@ class SocialMediaFinder(BaseCrawler):
 
         return result
 
-    def find_multiple(self, urls: list) -> list:
+    async def find_multiple(self, urls: List[str]) -> List[Dict]:
         """
-        Batch find social media information from multiple websites.
+        Batch find social media information from multiple websites sequentially.
+        Processes one URL at a time to prevent IP blocking.
         
         Args:
             urls: List of target website URLs
             
         Returns:
-            list: List containing all results
+            List[Dict]: List containing all results
         """
         results = []
         
         for i, url in enumerate(urls, 1):
             self.logger.info(f"Processing website {i}/{len(urls)}: {url}")
-            result = self.find(url)
+            result = await self.find(url)
             results.append(result)
+            
+            # Add delay between domains
+            if i < len(urls):
+                self.logger.debug(f"Waiting {config.CRAWL_DELAY_BETWEEN_DOMAINS} seconds before next domain")
+                await asyncio.sleep(config.CRAWL_DELAY_BETWEEN_DOMAINS)
 
         return results
-
-
-
-
-
-
-
-
-
-

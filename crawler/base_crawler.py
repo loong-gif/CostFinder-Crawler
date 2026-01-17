@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from utils.logger import Logger
 from utils.url_validator import URLValidator
 from utils.retry_handler import RetryHandler
+from utils.rate_limiter import RateLimiter
 import config
 
 
@@ -21,6 +22,16 @@ class BaseCrawler:
         self.logger = Logger.get_logger(self.__class__.__name__)
         self.session = requests.Session()
         self.session.headers.update(config.DEFAULT_HEADERS)
+        
+        # Initialize rate limiter
+        self.rate_limiter = RateLimiter(
+            requests_per_second=config.RATE_LIMIT_REQUESTS_PER_SECOND,
+            requests_per_minute=config.RATE_LIMIT_REQUESTS_PER_MINUTE,
+            requests_per_hour=config.RATE_LIMIT_REQUESTS_PER_HOUR,
+        )
+        
+        # Track last request time for delay between requests
+        self.last_request_time = 0
 
     def fetch_page(self, url: str, timeout: int = None) -> Optional[str]:
         """
@@ -65,6 +76,17 @@ class BaseCrawler:
         # Define the actual request function
         def _make_request():
             """Internal function to make HTTP request"""
+            # Apply rate limiting
+            self.rate_limiter.acquire(wait=True)
+            
+            # Apply delay between requests
+            current_time = time.time()
+            time_since_last_request = current_time - self.last_request_time
+            if time_since_last_request < config.CRAWL_DELAY_BETWEEN_REQUESTS:
+                sleep_time = config.CRAWL_DELAY_BETWEEN_REQUESTS - time_since_last_request
+                self.logger.debug(f"Sleeping {sleep_time:.2f} seconds before request")
+                time.sleep(sleep_time)
+            
             self.logger.info(f"Fetching page: {url}")
             response = self.session.get(
                 url,
@@ -72,6 +94,9 @@ class BaseCrawler:
                 allow_redirects=True
             )
             response.raise_for_status()
+            
+            # Update last request time
+            self.last_request_time = time.time()
             
             # Check content type
             content_type = response.headers.get("Content-Type", "")

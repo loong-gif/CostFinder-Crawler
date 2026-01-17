@@ -4,6 +4,9 @@ lxml>=4.9.0
 validators>=0.22.0
 urllib3>=2.0.0
 
+# Async HTTP client
+aiohttp>=3.9.0
+
 # OCR截图提取依赖
 playwright>=1.40.0
 easyocr>=1.7.0

@@ -31,10 +31,9 @@ class SocialMediaParser:
             Dict: Social media information categorized by platform
         """
         soup = BeautifulSoup(html, "lxml")
-        results = {
-            "instagram": [],
-            "facebook": [],
-        }
+        
+        # Initialize results dynamically for all enabled platforms
+        results = {platform: [] for platform in self.platforms.keys() if self.platforms[platform].get("enabled", True)}
 
         # Extract all links
         all_links = self._extract_all_links(soup, base_url)
@@ -45,8 +44,9 @@ class SocialMediaParser:
 
         # Categorize by platform (use set for deduplication)
         seen_usernames = {
-            "instagram": set(),
-            "facebook": set(),
+            platform: set() 
+            for platform in self.platforms.keys() 
+            if self.platforms[platform].get("enabled", True)
         }
         
         for link in all_links:
@@ -60,10 +60,13 @@ class SocialMediaParser:
                         results[platform].append(account_info)
                         seen_usernames[platform].add(username)
 
-        self.logger.info(
-            f"Extraction completed - Instagram: {len(results['instagram'])}, "
-            f"Facebook: {len(results['facebook'])}"
-        )
+        # Generate dynamic log message
+        platform_counts = [f"{platform.capitalize()}: {len(results[platform])}" 
+                          for platform in results.keys() if len(results[platform]) > 0]
+        if platform_counts:
+            self.logger.info(f"Extraction completed - {', '.join(platform_counts)}")
+        else:
+            self.logger.info("Extraction completed - No social media links found")
         
         return results
 
@@ -111,25 +114,76 @@ class SocialMediaParser:
         
         # Use regex to extract links for all platforms
         for platform, settings in self.platforms.items():
-            if not settings["enabled"]:
+            if not settings.get("enabled", True):
                 continue
                 
             for pattern in settings["patterns"]:
                 matches = re.finditer(pattern, text, re.IGNORECASE)
                 for match in matches:
-                    # Reconstruct full URL
-                    if "instagram" in platform:
-                        link = f"https://instagram.com/{match.group(1)}"
-                    elif "facebook" in platform:
-                        if "profile.php" in match.group(0):
-                            link = f"https://facebook.com/profile.php?id={match.group(1)}"
-                        else:
-                            link = f"https://facebook.com/{match.group(1)}"
-                    else:
-                        continue
-                    links.add(link)
+                    # Reconstruct full URL based on platform
+                    link = self._reconstruct_url_from_match(match, platform, pattern)
+                    if link:
+                        links.add(link)
 
         return links
+    
+    def _reconstruct_url_from_match(self, match: re.Match, platform: str, pattern: str) -> Optional[str]:
+        """
+        Reconstruct full URL from regex match.
+        
+        Args:
+            match: Regex match object
+            platform: Platform name
+            pattern: Pattern that was matched
+            
+        Returns:
+            Optional[str]: Reconstructed URL or None
+        """
+        try:
+            username = match.group(1) if match.lastindex >= 1 else None
+            if not username:
+                return None
+            
+            # Platform-specific URL reconstruction
+            if platform == "instagram":
+                return f"https://instagram.com/{username}"
+            elif platform == "facebook":
+                if "profile.php" in match.group(0):
+                    return f"https://facebook.com/profile.php?id={username}"
+                else:
+                    return f"https://facebook.com/{username}"
+            elif platform == "twitter":
+                return f"https://twitter.com/{username}"
+            elif platform == "linkedin":
+                if "/in/" in match.group(0):
+                    return f"https://linkedin.com/in/{username}"
+                elif "/company/" in match.group(0):
+                    return f"https://linkedin.com/company/{username}"
+                else:
+                    return f"https://linkedin.com/in/{username}"
+            elif platform == "youtube":
+                if "youtu.be" in match.group(0):
+                    return f"https://youtube.com/watch?v={username}"
+                else:
+                    return f"https://youtube.com/@{username}"
+            elif platform == "tiktok":
+                return f"https://tiktok.com/@{username}"
+            elif platform == "pinterest":
+                return f"https://pinterest.com/{username}"
+            elif platform == "snapchat":
+                return f"https://snapchat.com/add/{username}"
+            elif platform == "whatsapp":
+                if "wa.me" in match.group(0):
+                    return f"https://wa.me/{username}"
+                else:
+                    return f"https://wa.me/{username}"
+            else:
+                # Generic reconstruction for unknown platforms
+                # Try to extract domain from pattern or use platform name
+                return None
+        except Exception as e:
+            self.logger.debug(f"Failed to reconstruct URL for platform {platform}: {str(e)}")
+            return None
 
     def _identify_platform(self, url: str) -> Optional[str]:
         """

@@ -8,10 +8,10 @@ import json
 import os
 import sys
 import io
+import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from crawler.social_media_finder import SocialMediaFinder
+from crawler.async_social_media_finder import AsyncSocialMediaFinder
 from utils.logger import Logger
 from utils.url_validator import URLValidator
 
@@ -23,16 +23,17 @@ if sys.platform == 'win32':
 class BatchProcessor:
     """Batch processor"""
 
-    def __init__(self, input_file: str = "input_website_list_cleaned.txt", max_workers: int = 5) -> None:
+    def __init__(self, input_file: str = "input_website_list_cleaned.txt", max_workers: int = 1) -> None:
         """
         Initialize batch processor.
         
         Args:
             input_file: Input file path
-            max_workers: Maximum number of concurrent workers (default: 5)
+            max_workers: Maximum number of concurrent workers (deprecated, kept for compatibility)
+                         Note: Now uses async sequential processing, one at a time
         """
         self.input_file = input_file
-        self.max_workers = max_workers
+        self.max_workers = max_workers  # Deprecated, kept for compatibility
         self.logger = Logger.get_logger(self.__class__.__name__)
         self.results = []
         self.stats = {
@@ -40,9 +41,12 @@ class BatchProcessor:
             "processed": 0,
             "success": 0,
             "failed": 0,
-            "total_instagram": 0,
-            "total_facebook": 0,
         }
+        
+        # Initialize platform-specific stats dynamically
+        import config
+        for platform in config.SOCIAL_MEDIA_PLATFORMS.keys():
+            self.stats[f"total_{platform}"] = 0
 
     def read_urls(self) -> List[str]:
         """
@@ -113,8 +117,8 @@ class BatchProcessor:
         print(f"🚀 Starting batch processing of {len(urls)} websites")
         print("=" * 70)
         
-        # Process URLs with concurrent execution
-        self._process_concurrent(urls)
+        # Process URLs with async sequential execution
+        asyncio.run(self._process_async_sequential(urls))
         
         # Save results
         self.save_results()
@@ -165,21 +169,39 @@ class BatchProcessor:
                 f.write("=" * 70 + "\n\n")
                 
                 found_count = 0
+                import config
                 for result in self.results:
-                    if result["instagram"] or result["facebook"]:
+                    # Check if any platform has results
+                    has_social_media = any(
+                        len(result.get(platform, [])) > 0 
+                        for platform in config.SOCIAL_MEDIA_PLATFORMS.keys()
+                    )
+                    
+                    if has_social_media:
                         found_count += 1
                         f.write(f"\nWebsite: {result['url']}\n")
                         f.write("-" * 70 + "\n")
                         
-                        if result["instagram"]:
-                            f.write("📷 Instagram:\n")
-                            for acc in result["instagram"]:
-                                f.write(f"  - {acc['username']}: {acc['profile_url']}\n")
+                        # Write all platforms dynamically
+                        platform_icons = {
+                            "instagram": "📷",
+                            "facebook": "👥",
+                            "twitter": "🐦",
+                            "linkedin": "💼",
+                            "youtube": "📺",
+                            "tiktok": "🎵",
+                            "pinterest": "📌",
+                            "snapchat": "👻",
+                            "whatsapp": "💬",
+                        }
                         
-                        if result["facebook"]:
-                            f.write("👥 Facebook:\n")
-                            for acc in result["facebook"]:
-                                f.write(f"  - {acc['username']}: {acc['profile_url']}\n")
+                        for platform in config.SOCIAL_MEDIA_PLATFORMS.keys():
+                            accounts = result.get(platform, [])
+                            if accounts:
+                                icon = platform_icons.get(platform, "🔗")
+                                f.write(f"{icon} {platform.capitalize()}:\n")
+                                for acc in accounts:
+                                    f.write(f"  - {acc['username']}: {acc['profile_url']}\n")
                         
                         f.write("\n")
                 
@@ -190,9 +212,9 @@ class BatchProcessor:
         except Exception as e:
             self.logger.error(f"Failed to save TXT file: {str(e)}")
 
-    def _process_single_url(self, url: str) -> Dict[str, Any]:
+    async def _process_single_url_async(self, url: str) -> Dict[str, Any]:
         """
-        Process a single URL and return result.
+        Process a single URL asynchronously and return result.
         
         Args:
             url: URL to process
@@ -201,75 +223,80 @@ class BatchProcessor:
             Dict containing result and URL
         """
         try:
-            with SocialMediaFinder() as finder:
-                result = finder.find(url)
+            async with AsyncSocialMediaFinder() as finder:
+                result = await finder.find(url)
                 return {"url": url, "result": result, "error": None}
         except Exception as e:
             self.logger.error(f"Error processing {url}: {str(e)}", exc_info=True)
             return {"url": url, "result": None, "error": str(e)}
     
-    def _process_concurrent(self, urls: List[str]) -> None:
+    async def _process_async_sequential(self, urls: List[str]) -> None:
         """
-        Process URLs concurrently using ThreadPoolExecutor.
+        Process URLs sequentially using async/await.
+        Waits for each URL to complete before starting the next one.
         
         Args:
             urls: List of URLs to process
         """
         processed_count = 0
         
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tasks
-            future_to_url = {executor.submit(self._process_single_url, url): url for url in urls}
-            
-            try:
-                # Process completed tasks
-                for future in as_completed(future_to_url):
-                    url = future_to_url[future]
-                    processed_count += 1
+        try:
+            # Process URLs one by one sequentially
+            for url in urls:
+                processed_count += 1
+                
+                try:
+                    task_result = await self._process_single_url_async(url)
+                    result = task_result["result"]
+                    error = task_result["error"]
                     
-                    try:
-                        task_result = future.result()
-                        result = task_result["result"]
-                        error = task_result["error"]
-                        
-                        if error:
-                            self.stats["failed"] += 1
-                            self.stats["processed"] += 1
-                            print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - Error: {error}")
-                        elif result:
-                            self.results.append(result)
-                            self.stats["processed"] += 1
-                            
-                            if result["status"] == "success":
-                                self.stats["success"] += 1
-                                ig_count = len(result["instagram"])
-                                fb_count = len(result["facebook"])
-                                self.stats["total_instagram"] += ig_count
-                                self.stats["total_facebook"] += fb_count
-                                print(f"\n[{processed_count}/{len(urls)}] ✅ {url} - Instagram: {ig_count}, Facebook: {fb_count}")
-                            else:
-                                self.stats["failed"] += 1
-                                print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - {result['message']}")
-                        
-                        # Show progress
-                        progress = (processed_count / len(urls)) * 100
-                        print(f"📊 Overall progress: {progress:.1f}% ({processed_count}/{len(urls)})")
-                        
-                    except Exception as e:
-                        self.logger.error(f"Error getting result for {url}: {str(e)}")
+                    if error:
                         self.stats["failed"] += 1
                         self.stats["processed"] += 1
-                        print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - Error occurred: {str(e)}")
+                        print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - Error: {error}")
+                    elif result:
+                        self.results.append(result)
+                        self.stats["processed"] += 1
                         
-            except KeyboardInterrupt:
-                self.logger.warning("User interrupted processing")
-                print("\n\n⚠️  User interrupted, saving processed results...")
-                # Cancel remaining tasks
-                for future in future_to_url:
-                    future.cancel()
+                        if result["status"] == "success":
+                            self.stats["success"] += 1
+                            
+                            # Count all platforms dynamically
+                            import config
+                            platform_counts = []
+                            for platform in config.SOCIAL_MEDIA_PLATFORMS.keys():
+                                count = len(result.get(platform, []))
+                                if count > 0:
+                                    platform_counts.append(f"{platform.capitalize()}: {count}")
+                                    # Update platform stats
+                                    if f"total_{platform}" in self.stats:
+                                        self.stats[f"total_{platform}"] += count
+                            
+                            if platform_counts:
+                                print(f"\n[{processed_count}/{len(urls)}] ✅ {url} - {', '.join(platform_counts)}")
+                            else:
+                                print(f"\n[{processed_count}/{len(urls)}] ✅ {url} - No social media found")
+                        else:
+                            self.stats["failed"] += 1
+                            print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - {result['message']}")
+                    
+                    # Show progress
+                    progress = (processed_count / len(urls)) * 100
+                    print(f"📊 Overall progress: {progress:.1f}% ({processed_count}/{len(urls)})")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing {url}: {str(e)}")
+                    self.stats["failed"] += 1
+                    self.stats["processed"] += 1
+                    print(f"\n[{processed_count}/{len(urls)}] ❌ {url} - Error occurred: {str(e)}")
+                        
+        except KeyboardInterrupt:
+            self.logger.warning("User interrupted processing")
+            print("\n\n⚠️  User interrupted, saving processed results...")
 
     def print_summary(self) -> None:
         """Print processing summary."""
+        import config
         print("\n" + "=" * 70)
         print("📊 Processing Complete - Statistics Summary")
         print("=" * 70)
@@ -279,9 +306,16 @@ class BatchProcessor:
         print(f"Failed:                 {self.stats['failed']}")
         print(f"Success rate:           {(self.stats['success'] / self.stats['processed'] * 100):.1f}%" if self.stats['processed'] > 0 else "N/A")
         print("-" * 70)
-        print(f"Instagram found:        {self.stats['total_instagram']} accounts")
-        print(f"Facebook found:         {self.stats['total_facebook']} accounts")
-        print(f"Total:                  {self.stats['total_instagram'] + self.stats['total_facebook']} accounts")
+        
+        # Print platform-specific stats
+        total_accounts = 0
+        for platform in config.SOCIAL_MEDIA_PLATFORMS.keys():
+            count = self.stats.get(f"total_{platform}", 0)
+            if count > 0:
+                print(f"{platform.capitalize()} found:        {count} accounts")
+                total_accounts += count
+        
+        print(f"Total:                  {total_accounts} accounts")
         print("=" * 70)
 
 
