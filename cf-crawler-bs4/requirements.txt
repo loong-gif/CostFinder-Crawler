@@ -1,0 +1,10 @@
+# Feel free to add your Python dependencies below. For formatting guidelines, see:
+# https://pip.pypa.io/en/latest/reference/requirements-file-format/
+
+apify
+crawlee[beautifulsoup]
+crawl4ai
+# 新增 OCR 相关依赖
+httpx
+pytesseract
+playwright

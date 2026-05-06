@@ -1,0 +1,35 @@
+# 核心依赖
+playwright>=1.59.0,<2
+crawl4ai==0.7.8
+beautifulsoup4==4.12.3
+lxml>=5.4.0,<6
+pandas==2.2.0
+requests>=2.31.0,<3
+
+# OCR引擎(选择其一或安装多个)
+paddleocr==2.7.3
+paddlepaddle==2.6.2
+# easyocr==1.7.1
+# pytesseract==0.3.10
+
+# 图像处理
+Pillow>=10.4,<12
+opencv-python==4.6.0.66
+
+# 反爬虫
+playwright-stealth==1.0.6
+fake-useragent>=2.2.0
+
+# 数据处理
+openpyxl==3.1.2
+
+# 工具库
+python-dotenv==1.0.1
+tqdm>=4.66.5
+loguru==0.7.2
+tenacity==8.2.3
+
+# 可选:代理支持
+# playwright-proxy==1.0.0
+selenium==4.15.2
+webdriver-manager==4.0.1
