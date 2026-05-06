@@ -1,17 +1,12 @@
 # CostFinder
 
-面向促销/价格信息抓取与入库的 Python 项目，当前主链路包含：
-- 通用网页抓取（`main.py`）
-- 站点促销页抓取并导出（`scripts/crawl_promo_website_staging.py`）
-- Instagram/Facebook 日常促销入库（`scripts/daily_*_promo_ingestion.py`）
-
 ## 主要技术栈
 
 - `Python 3.11+`：主开发语言与脚本运行环境
 - `asyncio`：并发抓取与异步任务调度
 - `Playwright`：动态页面渲染与浏览器自动化抓取
-- `BeautifulSoup4 (bs4)`：页面结构解析与内容抽取
-- `Jina Reader API`：站点页面读取与结构化抽取入口（`https://r.jina.ai/<url>`）
+- `Crawl4AI`：页面结构解析与内容抽取
+- `Jina Reader API`：站点页面读取与结构化抽取入口
 - `Requests`：调用 Supabase PostgREST 与外部 HTTP 接口
 - `Supabase (PostgREST)`：业务数据读取与入库目标
 - `Pandas`：抓取结果整理与导出
@@ -114,19 +109,3 @@ python scripts/daily_facebook_promo_ingestion.py
 ./scripts/start_lightpanda_cdp.sh
 ./scripts/run_costfinder_with_lightpanda.sh --limit 5
 ```
-
-## 输出位置
-
-- 结果文件：`output/results/`
-- 日志文件：`output/logs/`
-- 截图文件：`output/screenshots/`
-
-## 子项目说明
-
-`cf-crawler-bs4/` 是独立的 Apify Actor 子项目（包含其自身 `README.md`、`requirements.txt`、`tests/` 与 `src/`），与根目录脚本并行维护。
-
-## 不纳入本 README 的内容
-
-为保持主文档清晰，以下内容按“历史/临时用途”处理：
-- `scripts/one_off/` 下的一次性修复、审计、回填脚本
-- 根目录中临时分析/对齐类脚本（如历史数据处理脚本）
