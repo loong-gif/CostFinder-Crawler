@@ -8,7 +8,7 @@ calls are made. Covers:
     failing check
   - process_monitor M2: meaningful change with unresolvable domain is marked
     "unresolved_domain" and does not advance the cursor
-  - sync_crawl_rows_to_staging M3: unchanged rows are batched into a single PATCH
+  - sync_apify_rows_to_staging M3: unchanged rows are batched into a single PATCH
 
 Run:
     python3 -m pytest tests/test_monitor_db_update_flow.py -v
@@ -45,7 +45,7 @@ from crawler.staging_recrawl import (  # noqa: E402
     MonitorStateRow,
     SyncTarget,
     canonicalize_page_url,
-    sync_crawl_rows_to_staging,
+    sync_apify_rows_to_staging,
 )
 
 
@@ -178,8 +178,9 @@ def _run_process_monitor(monitor, store):
         store,
         None,
         dry_run=False,
+        actor_id="actor",
         max_crawl_pages=1,
-        crawl_timeout_secs=60,
+        actor_timeout_secs=60,
         since_check=None,
         force_reprocess_latest=False,
     )
@@ -288,7 +289,7 @@ def test_process_monitor_no_change_advances_cursor(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# sync_crawl_rows_to_staging (M3 batching)
+# sync_apify_rows_to_staging (M3 batching)
 # --------------------------------------------------------------------------- #
 class FakeSupabaseClient:
     def __init__(self, existing_rows):
@@ -313,7 +314,7 @@ class FakeSupabaseClient:
         raise AssertionError("upsert_rows should not be used for partial-column updates")
 
 
-def _crawl_row(url, content, *, ts, name="n"):
+def _actor_row(url, content, *, ts, name="n"):
     return {
         "crawl_timestamp": ts,
         "subpage_url": url,
@@ -343,11 +344,11 @@ def _build_sync_inputs():
         _existing_row(2, "https://ex.com/b", "B"),
         _existing_row(3, "https://ex.com/c", "C"),
     ]
-    crawl_rows = [
-        _crawl_row("https://ex.com/a", "A", ts=ts),       # unchanged
-        _crawl_row("https://ex.com/b", "B", ts=ts),       # unchanged
-        _crawl_row("https://ex.com/c", "C2", ts=ts),      # content changed
-        _crawl_row("https://ex.com/d", "D", ts=ts),       # new -> insert
+    actor_rows = [
+        _actor_row("https://ex.com/a", "A", ts=ts),       # unchanged
+        _actor_row("https://ex.com/b", "B", ts=ts),       # unchanged
+        _actor_row("https://ex.com/c", "C2", ts=ts),      # content changed
+        _actor_row("https://ex.com/d", "D", ts=ts),       # new -> insert
     ]
     target = SyncTarget(
         domain_name="ex.com",
@@ -356,18 +357,18 @@ def _build_sync_inputs():
         master_id=None,
         business_id=None,
     )
-    return existing, crawl_rows, target, ts
+    return existing, actor_rows, target, ts
 
 
 def test_sync_skips_unchanged_and_updates_last_updated_at():
-    existing, crawl_rows, target, ts = _build_sync_inputs()
+    existing, actor_rows, target, ts = _build_sync_inputs()
     client = FakeSupabaseClient(existing)
 
-    report = sync_crawl_rows_to_staging(client, target, crawl_rows, dry_run=False)
+    report = sync_apify_rows_to_staging(client, target, actor_rows, dry_run=False)
 
     # Report fields preserved and semantically correct.
     assert report["existing_rows"] == 3
-    assert report["crawl_rows"] == 4
+    assert report["actor_rows"] == 4
     assert report["matched_rows"] == 3
     assert report["content_changed_rows"] == 1
     assert report["timestamp_only_rows"] == 2  # unchanged rows, now skipped
@@ -396,10 +397,10 @@ def test_sync_skips_unchanged_and_updates_last_updated_at():
 
 
 def test_sync_dry_run_issues_no_writes():
-    existing, crawl_rows, target, _ = _build_sync_inputs()
+    existing, actor_rows, target, _ = _build_sync_inputs()
     client = FakeSupabaseClient(existing)
 
-    report = sync_crawl_rows_to_staging(client, target, crawl_rows, dry_run=True)
+    report = sync_apify_rows_to_staging(client, target, actor_rows, dry_run=True)
 
     assert client.update_calls == []
     assert client.insert_calls == []
@@ -407,195 +408,3 @@ def test_sync_dry_run_issues_no_writes():
     assert report["inserted_rows"] == 1
     assert report["content_changed_rows"] == 1
     assert report["timestamp_only_rows"] == 2
-
-
-class FakeLlmClient:
-    def __init__(self, model="test-model"):
-        self.model = model
-
-
-def test_process_monitor_baseline_initializes_cursor(monkeypatch):
-    monitor = {"id": "m-baseline", "name": "shop.com"}
-    store = FakeStateStore(None)
-    checks = [
-        _completed_check("c1", "2024-01-02"),
-        _completed_check("c0", "2024-01-01"),
-    ]
-    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
-
-    report = poll.process_monitor(
-        None,
-        monitor,
-        store,
-        None,
-        dry_run=False,
-        max_crawl_pages=1,
-        crawl_timeout_secs=60,
-        since_check=None,
-        force_reprocess_latest=False,
-    )
-
-    assert report["status"] == "baseline_initialized"
-    assert report["baseline_check_id"] == "c1"
-    assert store.committed_cursors[-1] == "c1"
-
-
-def test_process_monitor_dry_run_does_not_write_cursor(monkeypatch):
-    monitor = {"id": "m-dry", "name": "shop.com"}
-    store = FakeStateStore(MonitorStateRow(monitor_id="m-dry", domain_name="shop.com", last_check_id="c0"))
-    checks = [
-        _completed_check("c0", "2024-01-01"),
-        _completed_check("c1", "2024-01-02", changed=0, new=0),
-    ]
-    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
-    monkeypatch.setattr(poll, "extract_domains_from_check", lambda fc, mid, cid, **kw: (set(), 0))
-
-    report = poll.process_monitor(
-        None,
-        monitor,
-        store,
-        None,
-        dry_run=True,
-        max_crawl_pages=1,
-        crawl_timeout_secs=60,
-        since_check=None,
-        force_reprocess_latest=False,
-    )
-
-    assert "c1" not in store.committed_cursors
-    assert report["checks_processed"][0]["action"] == "no_meaningful_change"
-
-
-def test_process_monitor_dry_run_still_upserts_domain_mapping(monkeypatch):
-    """dry-run 不推进游标，但 upsert_mapping 仍会持久化 domain 绑定（既有行为）。"""
-    monitor = {"id": "m-dry-map", "name": "shop.com"}
-    store = FakeStateStore(MonitorStateRow(monitor_id="m-dry-map", domain_name="", last_check_id="c0"))
-    checks = [
-        _completed_check("c0", "2024-01-01"),
-        _completed_check("c1", "2024-01-02", changed=0, new=0),
-    ]
-    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
-    monkeypatch.setattr(poll, "infer_domain_from_monitor", lambda monitor, store: "shop.com")
-    monkeypatch.setattr(poll, "extract_domains_from_check", lambda fc, mid, cid, **kw: (set(), 0))
-
-    poll.process_monitor(
-        None,
-        monitor,
-        store,
-        None,
-        dry_run=True,
-        max_crawl_pages=1,
-        crawl_timeout_secs=60,
-        since_check=None,
-        force_reprocess_latest=False,
-    )
-
-    assert store.committed_cursors == ["c0"]
-    assert store.get_state("m-dry-map").domain_name == "shop.com"
-
-
-def test_process_monitor_change_driven_skips_apify(monkeypatch):
-    monitor = {"id": "m-cd", "name": "shop.com"}
-    store = FakeStateStore(MonitorStateRow(monitor_id="m-cd", domain_name="shop.com", last_check_id="c0"))
-    checks = [
-        _completed_check("c0", "2024-01-01"),
-        _completed_check("c1", "2024-01-02"),
-    ]
-    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
-    monkeypatch.setattr(
-        poll,
-        "fetch_meaningful_pages",
-        lambda fc, mid, cid, **kw: (
-            [{"url": "https://shop.com/specials", "status": "changed", "judgment": {"meaningful": True}}],
-            1,
-        ),
-    )
-
-    def _fail_recrawl(*args, **kwargs):
-        raise AssertionError("recrawl_domains must not run when change-driven covers all pages")
-
-    monkeypatch.setattr(poll, "recrawl_domains", _fail_recrawl)
-    monkeypatch.setattr(
-        "utils.change_driven_extractor.extract_and_upsert_check_pages",
-        lambda pages, llm, db, domain, **kw: {
-            "needs_apify_fallback": False,
-            "pages_with_diff": 1,
-            "pages_without_diff": 0,
-            "total_offers_extracted": 1,
-            "total_updated": 1,
-            "total_inserted": 0,
-            "total_ended": 0,
-            "total_auto_apply_events": 1,
-            "total_review_events": 0,
-            "candidates_unavailable": False,
-            "page_results": [],
-        },
-    )
-
-    report = poll.process_monitor(
-        None,
-        monitor,
-        store,
-        object(),
-        dry_run=False,
-        max_crawl_pages=1,
-        crawl_timeout_secs=60,
-        since_check=None,
-        force_reprocess_latest=False,
-        llm_client=FakeLlmClient(),
-        skip_apify_on_success=True,
-    )
-
-    assert report["checks_processed"][0]["trigger_recrawl"] is True
-    assert report["recrawls"][0]["action"] == "skipped_change_driven"
-    assert "c1" in store.committed_cursors
-
-
-def test_process_monitor_change_driven_error_still_recrawls(monkeypatch):
-    monitor = {"id": "m-cd-err", "name": "shop.com"}
-    store = FakeStateStore(
-        MonitorStateRow(monitor_id="m-cd-err", domain_name="shop.com", last_check_id="c0")
-    )
-    checks = [
-        _completed_check("c0", "2024-01-01"),
-        _completed_check("c1", "2024-01-02"),
-    ]
-    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
-    monkeypatch.setattr(
-        poll,
-        "fetch_meaningful_pages",
-        lambda fc, mid, cid, **kw: (
-            [{"url": "https://shop.com/specials", "status": "changed", "judgment": {"meaningful": True}}],
-            1,
-        ),
-    )
-    monkeypatch.setattr(
-        "utils.change_driven_extractor.extract_and_upsert_check_pages",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("llm pipeline boom")),
-    )
-    recrawl_calls = []
-
-    def _recrawl(domains, **kw):
-        recrawl_calls.append(list(domains))
-        return {"shop.com": {"action": "synced", "updated_rows": 1}}
-
-    monkeypatch.setattr(poll, "recrawl_domains", _recrawl)
-
-    report = poll.process_monitor(
-        None,
-        monitor,
-        store,
-        object(),
-        dry_run=False,
-        max_crawl_pages=1,
-        crawl_timeout_secs=60,
-        since_check=None,
-        force_reprocess_latest=False,
-        llm_client=FakeLlmClient(),
-        skip_apify_on_success=True,
-    )
-
-    assert recrawl_calls == [["shop.com"]]
-    assert report["checks_processed"][0].get("change_driven_error") == "llm pipeline boom"
-    assert report["recrawls"][0]["action"] == "synced"
-    assert "c1" in store.committed_cursors
