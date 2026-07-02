@@ -1,9 +1,16 @@
 """
 浏览器管理器 - 管理Playwright浏览器实例
 """
-from typing import Optional
+from typing import Any, Optional
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+try:
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+except ImportError as playwright_import_error:
+    Browser = BrowserContext = Page = Playwright = Any
+    async_playwright = None
+    _PLAYWRIGHT_IMPORT_ERROR = playwright_import_error
+else:
+    _PLAYWRIGHT_IMPORT_ERROR = None
 
 from config.settings import (
     BROWSER_ARGS,
@@ -29,6 +36,12 @@ class BrowserManager:
 
     async def start(self):
         """启动浏览器"""
+        if async_playwright is None:
+            raise RuntimeError(
+                "Playwright 仅用于诊断/补抓工具。请先执行 "
+                "`uv pip install -r requirements_browser_tools.txt`，再执行 "
+                "`PLAYWRIGHT_BROWSERS_PATH=.playwright_browsers playwright install chromium`。"
+            ) from _PLAYWRIGHT_IMPORT_ERROR
         try:
             self.playwright = await async_playwright().start()
 

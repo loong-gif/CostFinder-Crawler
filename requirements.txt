@@ -1,6 +1,4 @@
 # 核心依赖
-playwright>=1.59.0,<2
-crawl4ai==0.7.8
 beautifulsoup4==4.12.3
 lxml>=5.4.0,<6
 pandas==2.2.0
@@ -16,12 +14,14 @@ paddlepaddle==2.6.2
 Pillow>=10.4,<12
 opencv-python==4.6.0.66
 
-# 反爬虫
-playwright-stealth==1.0.6
+# 反爬虫 / 请求伪装
 fake-useragent>=2.2.0
 
 # 数据处理
 openpyxl==3.1.2
+
+# Firecrawl monitoring
+firecrawl-py>=4.28.0
 
 # 工具库
 python-dotenv==1.0.1
@@ -29,7 +29,10 @@ tqdm>=4.66.5
 loguru==0.7.2
 tenacity==8.2.3
 
-# 可选:代理支持
-# playwright-proxy==1.0.0
-selenium==4.15.2
-webdriver-manager==4.0.1
+# OpenTelemetry (Superlog)
+opentelemetry-api>=1.42.0
+opentelemetry-sdk>=1.42.0
+opentelemetry-exporter-otlp-proto-http>=1.42.0
+opentelemetry-instrumentation-logging>=0.63b0
+
+# 浏览器诊断/补抓依赖已拆分到 requirements_browser_tools.txt

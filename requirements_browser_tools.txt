@@ -1,0 +1,9 @@
+# 可选浏览器诊断/补抓依赖
+# 使用方式：
+#   uv pip install -r requirements_browser_tools.txt
+#   PLAYWRIGHT_BROWSERS_PATH=.playwright_browsers playwright install chromium
+
+playwright>=1.59.0,<2
+playwright-stealth==1.0.6
+selenium==4.15.2
+webdriver-manager==4.0.1

@@ -13,8 +13,9 @@ from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
-from crawler.jina_reader_client import JinaReaderClient
+from crawler.fetch_engine import FetchEngine, create_fetch_engine
 from utils.logger import log
+from utils.page_content_processor import process_page_content
 
 CANDIDATE_KEYWORD_WEIGHTS = {
     "pricing": 5,
@@ -1054,21 +1055,21 @@ class PromoSiteCrawler:
     def __init__(
         self,
         *,
-        headless: Optional[bool] = None,
+        fetch_engine: Optional[FetchEngine] = None,
         concurrency: int = 3,
         max_candidate_pages: int = 12,
     ):
-        self._headless = headless
-        self.reader_client = JinaReaderClient()
+        self.fetch_engine = fetch_engine or create_fetch_engine()
+        self.engine_name = self.fetch_engine.engine_name
         self.semaphore = asyncio.Semaphore(concurrency)
         self.max_candidate_pages = max_candidate_pages
 
     async def start(self):
-        if self._headless is not None:
-            log.info("Jina Reader 模式下已忽略 headless 参数")
+        await self.fetch_engine.start()
+        log.info(f"PromoSiteCrawler 已启动，抓取引擎: {self.engine_name}")
 
     async def close(self):
-        return None
+        await self.fetch_engine.close()
 
     async def crawl_sites(self, sites: List[SiteTarget]) -> tuple[List[Dict[str, Any]], CrawlStats]:
         stats = CrawlStats(target_sites=len(sites))
@@ -1216,12 +1217,12 @@ class PromoSiteCrawler:
         }
 
     async def _fetch_page(self, url: str) -> Dict[str, Any]:
-        page = await self.reader_client.fetch(url)
+        page = await self.fetch_engine.fetch(url)
         return {
             "final_url": page.final_url,
             "title": page.title,
-            **prepare_page_content(page.content, source_type="markdown"),
-            "links": page.links,
+            **process_page_content(page.content, source_type=page.source_type),
+            "links": [{"href": item.href, "text": item.text} for item in page.links],
         }
 
     def _build_guessed_candidates(self, domain_name: str) -> List[str]:

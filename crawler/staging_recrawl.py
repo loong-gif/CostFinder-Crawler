@@ -1,0 +1,710 @@
+"""
+Change-gated recrawl helpers: re-crawl a domain via Apify actor (with actor-side cleaning)
+and sync rows into promo_website_staging. Also manages promo_monitor_state with
+Supabase + file fallback.
+"""
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse, urlunparse
+
+import requests
+from dotenv import load_dotenv
+
+from crawler.promo_site_crawler import (
+    SiteTarget,
+    build_start_url,
+    is_filtered_process_flag,
+    normalize_domain,
+)
+from utils.apify_client import (
+    extract_default_dataset_id,
+    fetch_dataset_items,
+    run_actor as run_apify_actor,
+)
+from utils.logger import log
+from utils.page_content_processor import normalize_raw_page_item
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROMO_MONITOR_STATE_TABLE = "promo_monitor_state"
+MONITOR_STATE_FALLBACK_PATH = PROJECT_ROOT / "output" / "monitor_results" / "monitor_state_fallback.json"
+
+DEFAULT_ACTOR_ID = os.getenv("APIFY_PROMO_ACTOR_ID", "06tTiNomvlvwWR5cm")
+DEFAULT_MAX_CRAWL_PAGES = int(os.getenv("APIFY_MAX_CRAWL_PAGES", "50"))
+DEFAULT_ACTOR_TIMEOUT_SECS = int(os.getenv("APIFY_ACTOR_TIMEOUT_SECS", "1800"))
+
+
+@dataclass(frozen=True)
+class MonitorStateRow:
+    monitor_id: str
+    domain_name: str
+    last_check_id: Optional[str] = None
+    last_change_at: Optional[str] = None
+    last_processed_at: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SyncTarget:
+    domain_name: str
+    website_url: str
+    name: str
+    master_id: Optional[int]
+    business_id: Optional[int]
+
+
+class SupabaseRestClient:
+    """Minimal Supabase PostgREST client for staging recrawl workflows."""
+
+    def __init__(self, base_url: str, service_role_key: str):
+        self.base_url = base_url.rstrip("/") + "/rest/v1"
+        self.service_role_key = service_role_key
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "apikey": service_role_key,
+                "Authorization": f"Bearer {service_role_key}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+        )
+
+    def fetch_rows(
+        self,
+        table: str,
+        select: str,
+        *,
+        filters: Optional[Dict[str, str]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, str] = {"select": select}
+        if filters:
+            params.update(filters)
+        if limit is not None:
+            params["limit"] = str(limit)
+        if offset is not None:
+            params["offset"] = str(offset)
+        if order:
+            params["order"] = order
+        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
+    def update_row(self, table: str, filters: Dict[str, str], payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        response = self.session.patch(
+            f"{self.base_url}/{table}",
+            params=filters,
+            headers={"Prefer": "return=representation"},
+            json=payload,
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def insert_rows(self, table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        response = self.session.post(
+            f"{self.base_url}/{table}",
+            headers={"Prefer": "return=representation"},
+            json=rows,
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def upsert_rows(self, table: str, rows: List[Dict[str, Any]], *, on_conflict: str) -> List[Dict[str, Any]]:
+        response = self.session.post(
+            f"{self.base_url}/{table}",
+            params={"on_conflict": on_conflict},
+            headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+            json=rows,
+            timeout=60,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestClient:
+    root = project_root or Path(__file__).resolve().parents[1]
+    load_dotenv(root / ".env")
+    base_url = os.getenv("SUPABASE_URL")
+    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not base_url or not service_role_key:
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
+    return SupabaseRestClient(base_url, service_role_key)
+
+
+def canonicalize_page_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlparse(candidate)
+    host = normalize_domain(parsed.netloc or parsed.path.split("/")[0])
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    clean = parsed._replace(netloc=host, path=path, query="", fragment="")
+    return urlunparse(clean)
+
+
+def fetch_all_rows(
+    client: SupabaseRestClient,
+    table: str,
+    select: str,
+    *,
+    filters: Optional[Dict[str, str]] = None,
+    page_size: int = 500,
+    order: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = client.fetch_rows(
+            table,
+            select,
+            filters=filters,
+            limit=page_size,
+            offset=offset,
+            order=order,
+        )
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return rows
+
+
+def normalize_seed_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlparse(candidate)
+    clean = parsed._replace(query="", fragment="")
+    return urlunparse(clean)
+
+
+def run_actor(
+    actor_id: str,
+    website_url: str,
+    *,
+    max_crawl_pages: int,
+    actor_timeout_secs: int,
+) -> Dict[str, Any]:
+    actor_input = {
+        "subpage_url": website_url,
+        "website_url": website_url,
+        "maxCrawlPages": max_crawl_pages,
+    }
+    return run_apify_actor(actor_id, actor_input, timeout_secs=actor_timeout_secs)
+
+
+def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -> SiteTarget:
+    normalized_domain = normalize_domain(domain_name)
+    if not normalized_domain:
+        raise ValueError(f"Invalid domain: {domain_name!r}")
+
+    master_rows = fetch_all_rows(
+        client,
+        "master_business_info",
+        "id,business_id,name,website,website_clean,process_flag",
+        order="id.asc",
+    )
+    promo_rows = fetch_all_rows(
+        client,
+        "promo_website_staging",
+        "domain_name,name",
+        filters={"domain_name": f"eq.{normalized_domain}"},
+        order="domain_name.asc",
+    )
+
+    master_row: Optional[Dict[str, Any]] = None
+    for row in master_rows:
+        row_domain = normalize_domain(row.get("website_clean") or row.get("website"))
+        if row_domain != normalized_domain:
+            continue
+        if is_filtered_process_flag(row.get("process_flag")):
+            continue
+        master_row = row
+        break
+
+    promo_name = ""
+    for row in promo_rows:
+        promo_name = (row.get("name") or "").strip()
+        if promo_name:
+            break
+
+    if master_row:
+        return SiteTarget(
+            master_id=master_row.get("id"),
+            business_id=master_row.get("business_id"),
+            name=(master_row.get("name") or promo_name or "").strip(),
+            website=(master_row.get("website") or "").strip(),
+            website_clean=(master_row.get("website_clean") or "").strip(),
+            process_flag=(master_row.get("process_flag") or "").strip(),
+            domain_name=normalized_domain,
+        )
+
+    return SiteTarget(
+        master_id=None,
+        business_id=None,
+        name=promo_name,
+        website=f"https://{normalized_domain}",
+        website_clean=normalized_domain,
+        process_flag="",
+        domain_name=normalized_domain,
+    )
+
+
+def build_sync_target_for_domain(client: SupabaseRestClient, domain_name: str) -> SyncTarget:
+    site = build_site_target_for_domain(client, domain_name)
+    website_url = normalize_seed_url(build_start_url(site) or f"https://{site.domain_name}")
+    if not website_url:
+        raise RuntimeError(f"No crawl entry URL for domain: {site.domain_name}")
+    return SyncTarget(
+        domain_name=site.domain_name,
+        website_url=website_url,
+        name=site.name,
+        master_id=site.master_id,
+        business_id=site.business_id,
+    )
+
+
+def normalize_actor_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -> List[Dict[str, Any]]:
+    crawl_timestamp = datetime.now(timezone.utc).isoformat()
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for item in items:
+        staging_row = normalize_raw_page_item(
+            item,
+            crawl_timestamp=crawl_timestamp,
+            default_domain_name=target.domain_name,
+            default_name=target.name,
+            default_source_type="markdown",
+        )
+        if not staging_row:
+            continue
+        staging_row["domain_name"] = normalize_domain(staging_row.get("domain_name") or target.domain_name) or target.domain_name
+        canonical_url = canonicalize_page_url(staging_row["subpage_url"])
+        normalized[canonical_url or staging_row["subpage_url"]] = staging_row
+    return list(normalized.values())
+
+
+def recrawl_domain_via_apify(
+    domain_name: str,
+    *,
+    client: Optional[SupabaseRestClient] = None,
+    actor_id: str = DEFAULT_ACTOR_ID,
+    max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
+    actor_timeout_secs: int = DEFAULT_ACTOR_TIMEOUT_SECS,
+) -> tuple[SyncTarget, List[Dict[str, Any]], Dict[str, Any]]:
+    """Re-crawl a single domain via Apify actor (actor-side cleaning)."""
+    sb_client = client or load_supabase_client()
+    target = build_sync_target_for_domain(sb_client, domain_name)
+
+    run_info = run_actor(
+        actor_id,
+        target.website_url,
+        max_crawl_pages=max_crawl_pages,
+        actor_timeout_secs=actor_timeout_secs,
+    )
+    dataset_id = extract_default_dataset_id(run_info)
+    if not dataset_id:
+        raise RuntimeError("Apify actor run missing defaultDatasetId")
+
+    actor_items = fetch_dataset_items(dataset_id)
+    actor_rows = normalize_actor_items(actor_items, target)
+    log.info(
+        "Apify recrawl finished for {domain}: actor_rows={rows}, run_id={run_id}".format(
+            domain=target.domain_name,
+            rows=len(actor_rows),
+            run_id=run_info.get("id"),
+        )
+    )
+    return target, actor_rows, {"actor_run_id": run_info.get("id"), "dataset_id": dataset_id}
+
+
+def sync_apify_rows_to_staging(
+    client: SupabaseRestClient,
+    target: SyncTarget,
+    actor_rows: List[Dict[str, Any]],
+    *,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Sync Apify actor rows into promo_website_staging (page_content diff only)."""
+    existing_rows = fetch_all_rows(
+        client,
+        "promo_website_staging",
+        "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name,"
+        "page_segments_raw,page_segments_filtered,page_content_llm,content_quality_flags",
+        filters={"domain_name": f"eq.{target.domain_name}"},
+        order="promo_website_id.asc",
+    )
+    existing_by_url = {
+        canonicalize_page_url(row.get("subpage_url") or ""): row
+        for row in existing_rows
+        if canonicalize_page_url(row.get("subpage_url") or "")
+    }
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    to_update: List[Dict[str, Any]] = []
+    to_insert: List[Dict[str, Any]] = []
+    matched = 0
+    unchanged = 0
+
+    for row in actor_rows:
+        existing = existing_by_url.get(canonicalize_page_url(row["subpage_url"]))
+        if existing is None:
+            # 新行：写入首次爬取时间 crawl_timestamp，并初始化 last_updated_at。
+            to_insert.append({**row, "last_updated_at": now_iso})
+            continue
+
+        matched += 1
+        changed = (
+            (existing.get("page_content") or "") != row["page_content"]
+            or (existing.get("page_segments_raw") or "") != (row.get("page_segments_raw") or "")
+            or (existing.get("page_segments_filtered") or "") != (row.get("page_segments_filtered") or "")
+            or (existing.get("page_content_llm") or "") != (row.get("page_content_llm") or "")
+            or (existing.get("content_quality_flags") or "") != (row.get("content_quality_flags") or "")
+            or (existing.get("name") or None) != row["name"]
+        )
+        if not changed:
+            # 内容无变更：不写库（既不动 crawl_timestamp 也不动 last_updated_at）。
+            unchanged += 1
+            continue
+
+        # 内容有变更：更新内容并刷新 last_updated_at，重置 processed_status；
+        # crawl_timestamp 保持首次爬取时间不变。
+        to_update.append(
+            {
+                "promo_website_id": existing["promo_website_id"],
+                "payload": {
+                    "page_content": row["page_content"],
+                    "page_segments_raw": row.get("page_segments_raw") or "[]",
+                    "page_segments_filtered": row.get("page_segments_filtered") or "[]",
+                    "page_content_llm": row.get("page_content_llm") or "",
+                    "content_quality_flags": row.get("content_quality_flags") or "[]",
+                    "name": row["name"],
+                    "processed_status": False,
+                    "last_updated_at": now_iso,
+                },
+                "subpage_url": row["subpage_url"],
+            }
+        )
+
+    updated_rows = 0
+    inserted_rows = 0
+    if not dry_run:
+        # 内容变更行逐行更新（各行 payload 不同，且只改指定列，避免误清其它列）。
+        for item in to_update:
+            client.update_row(
+                "promo_website_staging",
+                {"promo_website_id": f"eq.{item['promo_website_id']}"},
+                item["payload"],
+            )
+            updated_rows += 1
+        if to_insert:
+            client.insert_rows(
+                "promo_website_staging",
+                [{**row, "last_updated_at": now_iso} for row in to_insert],
+            )
+            inserted_rows = len(to_insert)
+
+    return {
+        "domain_name": target.domain_name,
+        "website_url": target.website_url,
+        "existing_rows": len(existing_rows),
+        "actor_rows": len(actor_rows),
+        "matched_rows": matched,
+        "content_changed_rows": len(to_update),
+        "timestamp_only_rows": unchanged,
+        "insert_rows": len(to_insert),
+        "updated_rows": updated_rows if not dry_run else len(to_update),
+        "inserted_rows": inserted_rows if not dry_run else len(to_insert),
+        "sample_subpage_urls": [row["subpage_url"] for row in actor_rows[:5]],
+    }
+
+
+def recrawl_and_sync_domain(
+    domain_name: str,
+    *,
+    client: Optional[SupabaseRestClient] = None,
+    dry_run: bool = False,
+    actor_id: str = DEFAULT_ACTOR_ID,
+    max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
+    actor_timeout_secs: int = DEFAULT_ACTOR_TIMEOUT_SECS,
+) -> Dict[str, Any]:
+    """Run Apify recrawl for one domain and sync cleaned rows to promo_website_staging."""
+    sb_client = client or load_supabase_client()
+    target, actor_rows, run_meta = recrawl_domain_via_apify(
+        domain_name,
+        client=sb_client,
+        actor_id=actor_id,
+        max_crawl_pages=max_crawl_pages,
+        actor_timeout_secs=actor_timeout_secs,
+    )
+    sync_report = sync_apify_rows_to_staging(sb_client, target, actor_rows, dry_run=dry_run)
+    return {
+        "action": "recrawled",
+        "engine": "apify",
+        "hit_pages": len(actor_rows),
+        "run": run_meta,
+        "upsert": sync_report,
+    }
+
+
+def upsert_hits_to_staging(
+    client: SupabaseRestClient,
+    hits: Iterable[Dict[str, Any]],
+    *,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Upsert crawl hits into promo_website_staging with processed_status reset on content change."""
+    hit_list = list(hits)
+    if not hit_list:
+        return {
+            "hit_rows": 0,
+            "updated_rows": 0,
+            "inserted_rows": 0,
+            "content_changed_rows": 0,
+            "timestamp_only_rows": 0,
+        }
+
+    domains = sorted({normalize_domain(row.get("domain_name")) for row in hit_list if normalize_domain(row.get("domain_name"))})
+    existing_by_url: Dict[str, Dict[str, Any]] = {}
+    for domain in domains:
+        existing_rows = fetch_all_rows(
+            client,
+            "promo_website_staging",
+            "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name,"
+            "page_segments_raw,page_segments_filtered,page_content_llm,content_quality_flags",
+            filters={"domain_name": f"eq.{domain}"},
+            order="promo_website_id.asc",
+        )
+        for row in existing_rows:
+            key = canonicalize_page_url(row.get("subpage_url") or "")
+            if key:
+                existing_by_url[key] = row
+
+    to_update: List[Dict[str, Any]] = []
+    to_insert: List[Dict[str, Any]] = []
+    timestamp_only = 0
+    content_changed = 0
+
+    for row in hit_list:
+        subpage_url = (row.get("subpage_url") or "").strip()
+        if not subpage_url:
+            continue
+        canonical_url = canonicalize_page_url(subpage_url)
+        existing = existing_by_url.get(canonical_url)
+
+        payload = {
+            "crawl_timestamp": row.get("crawl_timestamp") or datetime.now(timezone.utc).isoformat(),
+            "subpage_url": subpage_url,
+            "page_content": row.get("page_content") or "",
+            "page_segments_raw": row.get("page_segments_raw") or "[]",
+            "page_segments_filtered": row.get("page_segments_filtered") or "[]",
+            "page_content_llm": row.get("page_content_llm") or "",
+            "content_quality_flags": row.get("content_quality_flags") or "[]",
+            "domain_name": normalize_domain(row.get("domain_name")) or row.get("domain_name"),
+            "name": row.get("name") or None,
+        }
+
+        if existing is None:
+            to_insert.append({**payload, "processed_status": False})
+            continue
+
+        changed = (
+            (existing.get("page_content") or "") != payload["page_content"]
+            or (existing.get("page_content_llm") or "") != payload["page_content_llm"]
+            or (existing.get("page_segments_raw") or "") != payload["page_segments_raw"]
+            or (existing.get("page_segments_filtered") or "") != payload["page_segments_filtered"]
+            or (existing.get("content_quality_flags") or "") != payload["content_quality_flags"]
+            or (existing.get("name") or None) != payload["name"]
+        )
+        update_payload = dict(payload)
+        if changed:
+            update_payload["processed_status"] = False
+            content_changed += 1
+        else:
+            timestamp_only += 1
+
+        to_update.append(
+            {
+                "promo_website_id": existing["promo_website_id"],
+                "payload": update_payload,
+                "changed": changed,
+            }
+        )
+
+    updated_rows = 0
+    inserted_rows = 0
+    if not dry_run:
+        for item in to_update:
+            client.update_row(
+                "promo_website_staging",
+                {"promo_website_id": f"eq.{item['promo_website_id']}"},
+                item["payload"],
+            )
+            updated_rows += 1
+        if to_insert:
+            client.insert_rows("promo_website_staging", to_insert)
+            inserted_rows = len(to_insert)
+
+    return {
+        "hit_rows": len(hit_list),
+        "updated_rows": updated_rows if not dry_run else len(to_update),
+        "inserted_rows": inserted_rows if not dry_run else len(to_insert),
+        "content_changed_rows": content_changed,
+        "timestamp_only_rows": timestamp_only,
+        "would_update_rows": len(to_update),
+        "would_insert_rows": len(to_insert),
+    }
+
+
+class MonitorStateStore:
+    """Persist monitor polling state in Supabase, with local JSON fallback if table is missing."""
+
+    def __init__(
+        self,
+        client: Optional[SupabaseRestClient] = None,
+        *,
+        fallback_path: Path = MONITOR_STATE_FALLBACK_PATH,
+    ):
+        self.client = client
+        self.fallback_path = fallback_path
+        self.use_supabase = client is not None
+        self._fallback: Dict[str, Dict[str, Any]] = {}
+        self._probe_backend()
+
+    def _probe_backend(self) -> None:
+        if not self.client:
+            self.use_supabase = False
+            self._load_fallback()
+            log.warning("Monitor state using local fallback (no Supabase client).")
+            return
+        try:
+            self.client.fetch_rows(PROMO_MONITOR_STATE_TABLE, "monitor_id", limit=1)
+            self.use_supabase = True
+        except Exception as exc:
+            self.use_supabase = False
+            self._load_fallback()
+            log.error(
+                "promo_monitor_state table unavailable ({error}); using local fallback at {path}".format(
+                    error=exc,
+                    path=self.fallback_path,
+                )
+            )
+
+    def _load_fallback(self) -> None:
+        if not self.fallback_path.exists():
+            self._fallback = {}
+            return
+        try:
+            payload = json.loads(self.fallback_path.read_text(encoding="utf-8"))
+        except Exception:
+            self._fallback = {}
+            return
+        rows = payload.get("rows", payload)
+        if isinstance(rows, dict):
+            self._fallback = rows
+        else:
+            self._fallback = {}
+
+    def _save_fallback(self) -> None:
+        self.fallback_path.parent.mkdir(parents=True, exist_ok=True)
+        self.fallback_path.write_text(
+            json.dumps({"rows": self._fallback}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def get_state(self, monitor_id: str) -> Optional[MonitorStateRow]:
+        if self.use_supabase and self.client:
+            rows = self.client.fetch_rows(
+                PROMO_MONITOR_STATE_TABLE,
+                "monitor_id,domain_name,last_check_id,last_change_at,last_processed_at",
+                filters={"monitor_id": f"eq.{monitor_id}"},
+                limit=1,
+            )
+            if rows:
+                row = rows[0]
+                return MonitorStateRow(
+                    monitor_id=row["monitor_id"],
+                    domain_name=row.get("domain_name") or "",
+                    last_check_id=row.get("last_check_id"),
+                    last_change_at=row.get("last_change_at"),
+                    last_processed_at=row.get("last_processed_at"),
+                )
+            return None
+
+        raw = self._fallback.get(monitor_id)
+        if not raw:
+            return None
+        return MonitorStateRow(
+            monitor_id=monitor_id,
+            domain_name=raw.get("domain_name") or "",
+            last_check_id=raw.get("last_check_id"),
+            last_change_at=raw.get("last_change_at"),
+            last_processed_at=raw.get("last_processed_at"),
+        )
+
+    def upsert_mapping(self, monitor_id: str, domain_name: str) -> None:
+        """Ensure monitor_id -> domain_name mapping exists without overwriting check cursor."""
+        existing = self.get_state(monitor_id)
+        if existing and existing.domain_name:
+            domain_name = existing.domain_name
+        self.save_state(
+            monitor_id=monitor_id,
+            domain_name=domain_name,
+            last_check_id=existing.last_check_id if existing else None,
+            last_change_at=existing.last_change_at if existing else None,
+            last_processed_at=existing.last_processed_at if existing else None,
+        )
+
+    def save_state(
+        self,
+        *,
+        monitor_id: str,
+        domain_name: str,
+        last_check_id: Optional[str],
+        last_change_at: Optional[str] = None,
+        last_processed_at: Optional[str] = None,
+    ) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "monitor_id": monitor_id,
+            "domain_name": normalize_domain(domain_name) or domain_name,
+            "last_check_id": last_check_id,
+            "last_change_at": last_change_at,
+            "last_processed_at": last_processed_at,
+            "updated_at": now_iso,
+        }
+
+        if self.use_supabase and self.client:
+            try:
+                self.client.upsert_rows(
+                    PROMO_MONITOR_STATE_TABLE,
+                    [payload],
+                    on_conflict="monitor_id",
+                )
+                return
+            except Exception as exc:
+                log.error("Failed to upsert monitor state to Supabase ({error}); falling back to file.", error=exc)
+                self.use_supabase = False
+                self._load_fallback()
+
+        self._fallback[monitor_id] = {
+            "domain_name": payload["domain_name"],
+            "last_check_id": last_check_id,
+            "last_change_at": last_change_at,
+            "last_processed_at": last_processed_at,
+            "updated_at": now_iso,
+        }
+        self._save_fallback()

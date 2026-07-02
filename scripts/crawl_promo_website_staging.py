@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config.settings import OUTPUT_DIR
 from crawler.promo_site_crawler import PromoSiteCrawler, build_target_sites
 from utils.logger import log
+from utils.observability import init_observability
 
 CSV_FIELDS = [
     "promo_website_id",
@@ -97,14 +98,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-from", type=int, default=1, help="从第几个目标站点开始处理（1-based）")
     parser.add_argument("--output", type=str, default=None, help="输出 CSV 路径")
     parser.add_argument("--concurrency", type=int, default=3, help="站点并发数")
-    parser.add_argument("--headless", dest="headless", action="store_true", help="兼容参数（Jina Reader 模式下忽略）")
-    parser.add_argument(
-        "--no-headless",
-        dest="headless",
-        action="store_false",
-        help="兼容参数（Jina Reader 模式下忽略）",
-    )
-    parser.set_defaults(headless=None)
     return parser.parse_args()
 
 
@@ -132,8 +125,8 @@ async def run_crawl(args: argparse.Namespace) -> tuple[List[Dict[str, Any]], Dic
         targets = targets[: args.limit]
 
     log.info(f"目标站点数: {len(targets)}")
-    log.info("抓取引擎: jina reader API (https://r.jina.ai)")
-    crawler = PromoSiteCrawler(headless=args.headless, concurrency=max(1, args.concurrency))
+    log.info("抓取引擎: jina")
+    crawler = PromoSiteCrawler(concurrency=max(1, args.concurrency))
     await crawler.start()
     try:
         hits, stats = await crawler.crawl_sites(targets)
@@ -152,6 +145,7 @@ async def run_crawl(args: argparse.Namespace) -> tuple[List[Dict[str, Any]], Dic
 
 def main():
     args = parse_args()
+    init_observability()
     output_path = resolve_output_path(args.output)
     hits, stats = asyncio.run(run_crawl(args))
     write_csv(hits, output_path)
