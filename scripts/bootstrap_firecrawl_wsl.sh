@@ -93,11 +93,23 @@ clone_and_configure() {
 
   upsert_env() {
     local key="$1" val="$2"
-    if grep -q "^${key}=" .env 2>/dev/null; then
-      sed -i "s|^${key}=.*|${key}=${val}|" .env
-    else
-      echo "${key}=${val}" >> .env
-    fi
+    python3 - "$key" "$val" <<'PY'
+import sys
+from pathlib import Path
+key, val = sys.argv[1], sys.argv[2]
+path = Path(".env")
+lines = path.read_text().splitlines() if path.exists() else []
+out, found = [], False
+for line in lines:
+    if line.startswith(f"{key}="):
+        out.append(f"{key}={val}")
+        found = True
+    else:
+        out.append(line)
+if not found:
+    out.append(f"{key}={val}")
+path.write_text("\n".join(out) + "\n")
+PY
   }
 
   upsert_env PORT "$FIRECRAWL_PORT"
@@ -138,7 +150,7 @@ start_firecrawl() {
     -d '{"name":"self-hosted smoke","schedule":{"text":"daily","timezone":"UTC"},"targets":[{"type":"scrape","urls":["https://example.com"]}]}')"
   echo "$monitor_resp" | head -c 400
   echo
-  monitor_id="$(echo "$monitor_resp" | grep -oE '"id"\s*:\s*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')" || true
+  monitor_id="$(echo "$monitor_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('id') or d.get('data',{}).get('id') or '')" 2>/dev/null || true)"
   if [[ -n "$monitor_id" ]]; then
     log "Monitor id=$monitor_id — waiting 90s for first check"
     sleep 90
