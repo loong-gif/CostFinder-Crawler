@@ -101,7 +101,11 @@ def main():
         print("Error: FIRECRAWL_API_KEY not found in .env file.", flush=True)
         sys.exit(1)
 
-    fc = Firecrawl(api_key=api_key)
+    client_kwargs = {"api_key": api_key}
+    api_url = (os.getenv("FIRECRAWL_API_URL") or "").strip()
+    if api_url:
+        client_kwargs["api_url"] = api_url.rstrip("/")
+    fc = Firecrawl(**client_kwargs)
 
     print("Fetching all monitors from Firecrawl...", flush=True)
     monitors = []

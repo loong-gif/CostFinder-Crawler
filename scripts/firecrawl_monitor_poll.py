@@ -68,7 +68,11 @@ def get_firecrawl_client():
     api_key = os.getenv("FIRECRAWL_API_KEY")
     if not api_key:
         raise RuntimeError("Missing FIRECRAWL_API_KEY")
-    return Firecrawl(api_key=api_key)
+    client_kwargs = {"api_key": api_key}
+    api_url = (os.getenv("FIRECRAWL_API_URL") or "").strip()
+    if api_url:
+        client_kwargs["api_url"] = api_url.rstrip("/")
+    return Firecrawl(**client_kwargs)
 
 
 def _obj_to_dict(obj: Any) -> Dict[str, Any]:
@@ -353,6 +357,7 @@ def process_monitor(
     force_reprocess_latest: bool,
     llm_client: Optional[OpenAICompatibleClient] = None,
     skip_apify_on_success: bool = False,
+    min_confidence: str = "low",
 ) -> Dict[str, Any]:
     monitor_id = monitor.get("id") or monitor.get("monitorId") or ""
     monitor_name = monitor.get("name") or monitor_id
@@ -489,6 +494,7 @@ def process_monitor(
                         supabase_client,
                         domain_name or "",
                         dry_run=dry_run,
+                        min_confidence=min_confidence,
                     )
                     check_entry["change_driven"] = change_driven_result
                     if (
@@ -632,6 +638,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip Apify recrawl when change-driven extraction covers all changed pages",
     )
+    parser.add_argument(
+        "--min-confidence",
+        default="low",
+        choices=["low", "medium", "high"],
+        help="Skip LLM extraction for pages below this confidence (default: low = keep all)",
+    )
     return parser.parse_args()
 
 
@@ -690,6 +702,7 @@ def main() -> None:
                 force_reprocess_latest=bool(args.force_latest),
                 llm_client=llm_client,
                 skip_apify_on_success=bool(args.skip_apify_on_success),
+                min_confidence=args.min_confidence,
             )
             reports.append(report)
             if any(item.get("trigger_recrawl") for item in report.get("checks_processed", [])):
