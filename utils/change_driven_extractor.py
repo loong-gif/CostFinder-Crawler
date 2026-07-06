@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timezone
@@ -973,6 +974,121 @@ def build_change_event_payloads(
             match_candidates.append(selected_candidate)
 
     return {"change_events": events, "match_candidates": match_candidates}
+
+
+_CHANGE_EVENT_DB_FIELDS = {
+    "change_event_id",
+    "promo_website_id",
+    "source_url",
+    "source_url_normalized",
+    "business_id",
+    "crawl_run_id",
+    "monitor_event_id",
+    "diff_type",
+    "business_change_type",
+    "affected_segment_ids",
+    "before_text",
+    "after_text",
+    "before_hash",
+    "after_hash",
+    "proposed_action",
+    "target_offer_id",
+    "proposed_field_updates",
+    "proposed_new_offer",
+    "confidence",
+    "confidence_label",
+    "reason",
+    "validator_status",
+    "validator_errors",
+}
+_MATCH_CANDIDATE_DB_FIELDS = {
+    "change_event_id",
+    "segment_id",
+    "candidate_offer_id",
+    "match_score",
+    "match_method",
+    "score_breakdown",
+    "rank",
+    "is_selected",
+}
+
+
+def prepare_change_event_insert_rows(
+    payloads: Dict[str, Any],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Prepare DB-shaped rows for change events and candidate matches."""
+    raw_events = payloads.get("change_events") or []
+    raw_candidates = payloads.get("match_candidates") or []
+
+    event_rows: List[Dict[str, Any]] = []
+    event_id_by_index: Dict[int, str] = {}
+    for fallback_index, event in enumerate(raw_events, start=1):
+        if not isinstance(event, dict):
+            continue
+        event_index = event.get("event_index") or fallback_index
+        try:
+            event_index_int = int(event_index)
+        except (TypeError, ValueError):
+            event_index_int = fallback_index
+        change_event_id = str(event.get("change_event_id") or uuid.uuid4())
+        event_id_by_index[event_index_int] = change_event_id
+        row = {
+            key: value
+            for key, value in event.items()
+            if key in _CHANGE_EVENT_DB_FIELDS and value is not None
+        }
+        row["change_event_id"] = change_event_id
+        event_rows.append(row)
+
+    match_rows: List[Dict[str, Any]] = []
+    for candidate in raw_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        event_index = candidate.get("event_index")
+        try:
+            event_index_int = int(event_index)
+        except (TypeError, ValueError):
+            event_index_int = 1 if len(event_id_by_index) == 1 else 0
+        change_event_id = candidate.get("change_event_id") or event_id_by_index.get(event_index_int)
+        if not change_event_id:
+            continue
+        row = {
+            key: value
+            for key, value in candidate.items()
+            if key in _MATCH_CANDIDATE_DB_FIELDS and value is not None
+        }
+        row["change_event_id"] = str(change_event_id)
+        match_rows.append(row)
+
+    return {"change_event_rows": event_rows, "match_candidate_rows": match_rows}
+
+
+def persist_change_event_payloads(
+    client: Any,
+    payloads: Dict[str, Any],
+    *,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """Persist prepared change-event payloads when explicitly enabled."""
+    prepared = prepare_change_event_insert_rows(payloads)
+    event_rows = prepared["change_event_rows"]
+    match_rows = prepared["match_candidate_rows"]
+    result = {
+        **prepared,
+        "change_events_inserted": 0,
+        "match_candidates_inserted": 0,
+        "dry_run": dry_run,
+    }
+    if dry_run:
+        return result
+
+    if event_rows:
+        client.insert_rows("promo_offer_change_events", event_rows)
+        result["change_events_inserted"] = len(event_rows)
+    if match_rows:
+        client.insert_rows("promo_offer_match_candidates", match_rows)
+        result["match_candidates_inserted"] = len(match_rows)
+    return result
 
 
 def sql_quote(value: Any) -> str:

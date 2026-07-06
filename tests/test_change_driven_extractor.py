@@ -9,6 +9,8 @@ from utils.change_driven_extractor import (
     extract_and_upsert_check_pages,
     extract_diff_payload,
     fetch_candidate_offers,
+    persist_change_event_payloads,
+    prepare_change_event_insert_rows,
     standardize_offer_service_names,
     validate_offer_actions,
 )
@@ -546,6 +548,89 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
         "offer-old",
     ]
     assert all(item["is_selected"] for item in result["match_candidates"])
+
+
+def test_prepare_change_event_insert_rows_links_candidate_rows_without_report_fields():
+    payloads = {
+        "change_events": [
+            {
+                "event_index": 7,
+                "source_name": "example.com",
+                "source_url": "https://example.com/specials",
+                "source_url_normalized": "https://example.com/specials",
+                "business_change_type": "price_changed",
+                "proposed_action": "update_offer",
+                "target_offer_id": "offer-1",
+                "proposed_field_updates": {"discount_price": 11.0},
+                "proposed_new_offer": {},
+                "validator_status": "pending",
+                "validator_errors": [],
+            }
+        ],
+        "match_candidates": [
+            {
+                "event_index": 7,
+                "candidate_offer_id": "offer-1",
+                "match_score": 1.0,
+                "match_method": "llm_selected_candidate",
+                "score_breakdown": {"llm_selected": 1.0},
+                "rank": 1,
+                "is_selected": True,
+            }
+        ],
+    }
+
+    prepared = prepare_change_event_insert_rows(payloads)
+
+    event_row = prepared["change_event_rows"][0]
+    match_row = prepared["match_candidate_rows"][0]
+    assert "change_event_id" in event_row
+    assert event_row["change_event_id"] == match_row["change_event_id"]
+    assert "event_index" not in event_row
+    assert "source_name" not in event_row
+    assert "event_index" not in match_row
+    assert match_row["candidate_offer_id"] == "offer-1"
+
+
+def test_persist_change_event_payloads_dry_run_and_write_modes():
+    payloads = build_change_event_payloads(
+        [
+            {
+                "action": "update",
+                "matched_id": "offer-1",
+                "matched_candidate_index": "1",
+                "service_name": "Botox",
+                "offer_raw_text": "Botox $11/unit",
+                "discount_price": "11",
+            }
+        ],
+        {"status": "changed", "confidence": "medium"},
+        [{"id": "offer-1", "candidate_index": 1}],
+        source_url="https://example.com/specials",
+        source_name="example.com",
+    )
+    dry_client = FakeDbClient()
+
+    dry_result = persist_change_event_payloads(dry_client, payloads, dry_run=True)
+
+    assert dry_result["dry_run"] is True
+    assert dry_result["change_events_inserted"] == 0
+    assert dry_result["match_candidates_inserted"] == 0
+    assert len(dry_result["change_event_rows"]) == 1
+    assert len(dry_result["match_candidate_rows"]) == 1
+    assert dry_client.insert_calls == []
+
+    write_client = FakeDbClient()
+    write_result = persist_change_event_payloads(write_client, payloads, dry_run=False)
+
+    assert write_result["change_events_inserted"] == 1
+    assert write_result["match_candidates_inserted"] == 1
+    assert [call["table"] for call in write_client.insert_calls] == [
+        "promo_offer_change_events",
+        "promo_offer_match_candidates",
+    ]
+    event_id = write_client.insert_calls[0]["rows"][0]["change_event_id"]
+    assert write_client.insert_calls[1]["rows"][0]["change_event_id"] == event_id
 
 
 def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
