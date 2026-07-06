@@ -976,6 +976,114 @@ def build_change_event_payloads(
     return {"change_events": events, "match_candidates": match_candidates}
 
 
+_AUTO_APPLY_CHANGE_TYPES = {"price_changed", "eligibility_changed"}
+_AUTO_APPLY_ACTIONS = {"update_offer"}
+_AUTO_APPLY_UPDATE_FIELDS = set(_MASTER_TEXT_FIELDS + _MASTER_NUMERIC_FIELDS)
+
+
+def validate_change_event_for_auto_apply(
+    event: Dict[str, Any],
+    *,
+    min_confidence: float = 0.9,
+) -> List[str]:
+    """Return rule-gate errors that prevent automatic master-offer updates.
+
+    This gate is deliberately conservative: only clear high-confidence updates
+    to an already matched offer can auto-apply. New offers and missing-offer
+    signals remain review items until identity and absence evidence are stronger.
+    """
+    errors: List[str] = []
+    action = str(event.get("proposed_action") or "").strip()
+    change_type = str(event.get("business_change_type") or "").strip()
+    confidence = event.get("confidence")
+
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+
+    if confidence_value < min_confidence:
+        errors.append("confidence_below_auto_apply_threshold")
+
+    if action not in _AUTO_APPLY_ACTIONS:
+        errors.append(f"action_requires_review:{action or 'unknown'}")
+
+    if change_type not in _AUTO_APPLY_CHANGE_TYPES:
+        errors.append(f"change_type_requires_review:{change_type or 'unknown'}")
+
+    if action == "update_offer" and not event.get("target_offer_id"):
+        errors.append("missing_target_offer_id")
+
+    updates = event.get("proposed_field_updates") or {}
+    if action == "update_offer":
+        if not isinstance(updates, dict) or not updates:
+            errors.append("empty_update_payload")
+        elif any(field not in _AUTO_APPLY_UPDATE_FIELDS for field in updates):
+            errors.append("unsupported_update_field")
+
+    for field in _MASTER_NUMERIC_FIELDS:
+        if isinstance(updates, dict) and field in updates:
+            parsed = _parse_price(updates.get(field))
+            if parsed is None or parsed < 0:
+                errors.append(f"invalid_numeric_field:{field}")
+
+    return errors
+
+
+def build_change_event_decision_plan(
+    payloads: Dict[str, Any],
+    *,
+    min_auto_apply_confidence: float = 0.9,
+) -> Dict[str, Any]:
+    """Apply rule validation to change events and split auto-apply vs review.
+
+    The returned events keep the same DB shape as promo_offer_change_events, but
+    validator_status is no longer pending: high-confidence safe updates become
+    auto_apply; everything else is needs_review with machine-readable reasons.
+    """
+    events: List[Dict[str, Any]] = []
+    auto_apply_events: List[Dict[str, Any]] = []
+    review_events: List[Dict[str, Any]] = []
+
+    for raw_event in payloads.get("change_events") or []:
+        if not isinstance(raw_event, dict):
+            continue
+        event = dict(raw_event)
+        existing_errors = event.get("validator_errors") or []
+        if not isinstance(existing_errors, list):
+            existing_errors = [str(existing_errors)]
+        errors = [
+            *existing_errors,
+            *validate_change_event_for_auto_apply(
+                event,
+                min_confidence=min_auto_apply_confidence,
+            ),
+        ]
+
+        if errors:
+            event["validator_status"] = "needs_review"
+            event["validator_errors"] = errors
+            review_events.append(event)
+        else:
+            event["validator_status"] = "auto_apply"
+            event["validator_errors"] = []
+            auto_apply_events.append(event)
+        events.append(event)
+
+    return {
+        "change_events": events,
+        "match_candidates": payloads.get("match_candidates") or [],
+        "auto_apply_events": auto_apply_events,
+        "review_events": review_events,
+        "decision_summary": {
+            "events": len(events),
+            "auto_apply": len(auto_apply_events),
+            "needs_review": len(review_events),
+            "min_auto_apply_confidence": min_auto_apply_confidence,
+        },
+    }
+
+
 _CHANGE_EVENT_DB_FIELDS = {
     "change_event_id",
     "promo_website_id",
@@ -1341,6 +1449,8 @@ def extract_and_upsert_check_pages(
     total_updated = 0
     total_inserted = 0
     total_ended = 0
+    total_auto_apply_events = 0
+    total_review_events = 0
     candidates_unavailable = False
     page_results: List[Dict[str, Any]] = []
 
@@ -1451,15 +1561,17 @@ def extract_and_upsert_check_pages(
                 **({"offer_actions": extracted_offers} if dry_run else {}),
             }
             if include_change_events:
-                page_result.update(
-                    build_change_event_payloads(
-                        extracted_offers,
-                        payload,
-                        candidate_offers,
-                        source_url=url,
-                        source_name=domain_name,
-                    )
+                change_payloads = build_change_event_payloads(
+                    extracted_offers,
+                    payload,
+                    candidate_offers,
+                    source_url=url,
+                    source_name=domain_name,
                 )
+                decision_plan = build_change_event_decision_plan(change_payloads)
+                total_auto_apply_events += len(decision_plan["auto_apply_events"])
+                total_review_events += len(decision_plan["review_events"])
+                page_result.update(decision_plan)
             page_results.append(page_result)
             log.info(
                 "change_driven: {url} -> {n} offers (updated={u}, inserted={i}, ended={e}, downgraded={d})",
@@ -1495,6 +1607,8 @@ def extract_and_upsert_check_pages(
         "total_updated": total_updated,
         "total_inserted": total_inserted,
         "total_ended": total_ended,
+        "total_auto_apply_events": total_auto_apply_events,
+        "total_review_events": total_review_events,
         "needs_apify_fallback": pages_without_diff > 0,
         "candidates_unavailable": candidates_unavailable,
         "page_results": page_results,

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from utils.change_driven_extractor import (
     apply_offer_actions,
+    build_change_event_decision_plan,
     build_change_event_payloads,
     build_change_extraction_messages,
     enrich_update_actions_with_diff_prices,
@@ -550,6 +551,82 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
     assert all(item["is_selected"] for item in result["match_candidates"])
 
 
+def test_build_change_event_decision_plan_splits_auto_apply_and_review():
+    payloads = build_change_event_payloads(
+        [
+            {
+                "action": "update",
+                "matched_id": "offer-botox",
+                "matched_candidate_index": "1",
+                "service_name": "Botox",
+                "offer_raw_text": "Botox $11/unit",
+                "regular_price": "12",
+                "discount_price": "11",
+            },
+            {
+                "action": "insert",
+                "service_name": "Membership",
+                "offer_raw_text": "Join now for $199/month",
+                "membership_price": "199",
+            },
+            {"action": "mark_ended", "matched_id": "offer-old", "matched_candidate_index": "2"},
+        ],
+        {
+            "url": "https://example.com/specials",
+            "status": "changed",
+            "text_diff": "- Botox $12/unit\n+ Botox $11/unit",
+            "judgment_reason": "Botox price changed",
+            "confidence": "high",
+        },
+        [
+            {"id": "offer-botox", "candidate_index": 1, "service_name": "Botox"},
+            {"id": "offer-old", "candidate_index": 2, "service_name": "Old Offer"},
+        ],
+        source_url="https://example.com/specials",
+        source_name="example.com",
+    )
+
+    plan = build_change_event_decision_plan(payloads)
+
+    assert plan["decision_summary"] == {
+        "events": 3,
+        "auto_apply": 1,
+        "needs_review": 2,
+        "min_auto_apply_confidence": 0.9,
+    }
+    assert plan["auto_apply_events"][0]["target_offer_id"] == "offer-botox"
+    assert plan["auto_apply_events"][0]["validator_status"] == "auto_apply"
+    assert [event["proposed_action"] for event in plan["review_events"]] == [
+        "insert_offer",
+        "mark_missing",
+    ]
+    assert "action_requires_review:insert_offer" in plan["review_events"][0]["validator_errors"]
+    assert "action_requires_review:mark_missing" in plan["review_events"][1]["validator_errors"]
+
+
+def test_build_change_event_decision_plan_blocks_low_confidence_update():
+    payloads = {
+        "change_events": [
+            {
+                "proposed_action": "update_offer",
+                "business_change_type": "price_changed",
+                "target_offer_id": "offer-1",
+                "proposed_field_updates": {"discount_price": 11.0},
+                "confidence": 0.65,
+                "validator_errors": [],
+            }
+        ],
+        "match_candidates": [],
+    }
+
+    plan = build_change_event_decision_plan(payloads)
+
+    assert plan["decision_summary"]["auto_apply"] == 0
+    assert plan["decision_summary"]["needs_review"] == 1
+    assert plan["review_events"][0]["validator_status"] == "needs_review"
+    assert "confidence_below_auto_apply_threshold" in plan["review_events"][0]["validator_errors"]
+
+
 def test_prepare_change_event_insert_rows_links_candidate_rows_without_report_fields():
     payloads = {
         "change_events": [
@@ -702,7 +779,11 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
     assert result["page_results"][0]["downgraded"] == 0
     assert len(result["page_results"][0]["offer_actions"]) == 3
     assert len(result["page_results"][0]["change_events"]) == 3
+    assert result["total_auto_apply_events"] == 1
+    assert result["total_review_events"] == 2
+    assert result["page_results"][0]["decision_summary"]["auto_apply"] == 1
     assert result["page_results"][0]["change_events"][1]["proposed_action"] == "mark_missing"
+    assert result["page_results"][0]["change_events"][1]["validator_status"] == "needs_review"
     assert result["page_results"][0]["offer_actions"][1]["action"] == "mark_ended"
     assert result["page_results"][0]["offer_actions"][0]["matched_id"] == "offer-botox"
     assert db.update_calls == []
