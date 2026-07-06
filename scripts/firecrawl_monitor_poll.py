@@ -342,6 +342,7 @@ def process_monitor(
     llm_client: Optional[OpenAICompatibleClient] = None,
     skip_apify_on_success: bool = False,
     min_confidence: str = "low",
+    include_change_events: bool = False,
 ) -> Dict[str, Any]:
     monitor_id = monitor.get("id") or monitor.get("monitorId") or ""
     monitor_name = monitor.get("name") or monitor_id
@@ -479,6 +480,7 @@ def process_monitor(
                         domain_name or "",
                         dry_run=dry_run,
                         min_confidence=min_confidence,
+                        include_change_events=include_change_events,
                     )
                     check_entry["change_driven"] = change_driven_result
                     if (
@@ -626,6 +628,11 @@ def parse_args() -> argparse.Namespace:
         choices=["low", "medium", "high"],
         help="Skip LLM extraction for pages below this confidence (default: low = keep all)",
     )
+    parser.add_argument(
+        "--include-change-events",
+        action="store_true",
+        help="Include dry-run promo_offer_change_events payloads in the report",
+    )
     return parser.parse_args()
 
 
@@ -684,6 +691,7 @@ def main() -> None:
                 llm_client=llm_client,
                 skip_apify_on_success=bool(args.skip_apify_on_success),
                 min_confidence=args.min_confidence,
+                include_change_events=bool(args.include_change_events),
             )
             reports.append(report)
             if any(item.get("trigger_recrawl") for item in report.get("checks_processed", [])):
