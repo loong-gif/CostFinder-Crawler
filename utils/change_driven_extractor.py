@@ -25,6 +25,7 @@ from utils.offer_extraction_llm import (
     normalize_offer_record,
     parse_json_payload,
 )
+from utils.offer_evidence_segments import normalize_url
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,6 +36,12 @@ _MAX_CANDIDATE_OFFERS = 100
 _MAX_CANDIDATE_TEXT_CHARS = 200
 _CONF_RANK = {"low": 1, "medium": 2, "high": 3}
 _VALID_ACTIONS = {"update", "insert", "mark_ended"}
+_CHANGE_EVENT_ACTIONS = {
+    "update": "update_offer",
+    "insert": "insert_offer",
+    "mark_ended": "mark_missing",
+}
+_CONFIDENCE_NUMERIC = {"low": 0.35, "medium": 0.65, "high": 0.9}
 _CANDIDATE_FETCH_VARIANTS = [
     (
         "id,service_name,offer_raw_text,regular_price,discount_price,original_price,status",
@@ -819,6 +826,155 @@ def build_offer_insert_payload(
     return payload
 
 
+def infer_business_change_type(offer: Dict[str, Any]) -> str:
+    """Classify an LLM action into a business-facing change category."""
+    action = str(offer.get("action") or "").strip().lower()
+    if action == "insert":
+        return "offer_added"
+    if action == "mark_ended":
+        return "offer_missing"
+
+    price_fields = (
+        "regular_price",
+        "discount_price",
+        "discount_amount",
+        "discount_percent",
+        "membership_price",
+    )
+    if any(_parse_price(offer.get(field)) is not None for field in price_fields):
+        return "price_changed"
+
+    eligibility_fields = (
+        "start_date",
+        "end_date",
+        "membership_name",
+        "billing_period",
+        "cancellation_policy",
+        "unit_type",
+    )
+    if any(str(offer.get(field) or "").strip() for field in eligibility_fields):
+        return "eligibility_changed"
+    return "unknown"
+
+
+def _selected_match_candidate_payload(
+    offer: Dict[str, Any],
+    candidate_offers: List[Dict[str, Any]],
+    *,
+    event_index: int,
+) -> Optional[Dict[str, Any]]:
+    matched_id = str(offer.get("matched_id") or "").strip()
+    if not matched_id:
+        return None
+
+    matched_candidate = next(
+        (
+            item
+            for item in candidate_offers
+            if str(item.get("id") or "").strip() == matched_id
+        ),
+        None,
+    )
+    if not matched_candidate:
+        return None
+
+    rank = offer.get("matched_candidate_index") or matched_candidate.get("candidate_index")
+    try:
+        rank_value = int(rank)
+    except (TypeError, ValueError):
+        rank_value = None
+
+    return {
+        "event_index": event_index,
+        "segment_id": None,
+        "candidate_offer_id": matched_id,
+        "match_score": 1.0,
+        "match_method": "llm_selected_candidate",
+        "score_breakdown": {"llm_selected": 1.0},
+        "rank": rank_value,
+        "is_selected": True,
+    }
+
+
+def build_change_event_payloads(
+    offers: List[Dict[str, Any]],
+    diff_payload: Dict[str, Any],
+    candidate_offers: List[Dict[str, Any]],
+    *,
+    source_url: str,
+    source_name: str,
+) -> Dict[str, Any]:
+    """Build auditable change-event payloads without writing to Supabase.
+
+    The event table is intentionally a staging/audit layer. Destructive model
+    actions such as mark_ended become mark_missing here so later validation can
+    require repeated absence before ending a master offer.
+    """
+    source_url_normalized = normalize_url(source_url)
+    confidence_label = str(diff_payload.get("confidence") or "").strip().lower()
+    confidence = _CONFIDENCE_NUMERIC.get(confidence_label)
+    reason = str(diff_payload.get("judgment_reason") or "").strip()
+
+    events: List[Dict[str, Any]] = []
+    match_candidates: List[Dict[str, Any]] = []
+    for index, offer in enumerate(offers, start=1):
+        action = str(offer.get("action") or "insert").strip().lower()
+        proposed_action = _CHANGE_EVENT_ACTIONS.get(action, "insert_offer")
+        matched_id = str(offer.get("matched_id") or "").strip()
+
+        event = {
+            "event_index": index,
+            "promo_website_id": diff_payload.get("promo_website_id"),
+            "source_url": source_url,
+            "source_url_normalized": source_url_normalized,
+            "business_id": diff_payload.get("business_id"),
+            "crawl_run_id": diff_payload.get("crawl_run_id"),
+            "monitor_event_id": diff_payload.get("monitor_event_id"),
+            "diff_type": diff_payload.get("status") or "changed",
+            "business_change_type": infer_business_change_type(offer),
+            "affected_segment_ids": [],
+            "before_text": "",
+            "after_text": diff_payload.get("text_diff") or "",
+            "before_hash": None,
+            "after_hash": None,
+            "proposed_action": proposed_action,
+            "target_offer_id": matched_id if matched_id else None,
+            "proposed_field_updates": {},
+            "proposed_new_offer": {},
+            "confidence": confidence,
+            "confidence_label": confidence_label,
+            "reason": reason,
+            "validator_status": "pending",
+            "validator_errors": [],
+            "source_name": source_name,
+        }
+
+        if action == "update":
+            event["proposed_field_updates"] = build_offer_update_payload(offer)
+        elif action == "insert":
+            event["proposed_new_offer"] = build_offer_insert_payload(
+                offer,
+                source_url=source_url,
+                source_name=source_name,
+            )
+        elif action == "mark_ended":
+            event["proposed_field_updates"] = {
+                "lifecycle_status": "missing_once",
+                "missing_count_increment": 1,
+            }
+
+        events.append(event)
+        selected_candidate = _selected_match_candidate_payload(
+            offer,
+            candidate_offers,
+            event_index=index,
+        )
+        if selected_candidate:
+            match_candidates.append(selected_candidate)
+
+    return {"change_events": events, "match_candidates": match_candidates}
+
+
 def sql_quote(value: Any) -> str:
     """Format a Python value as a Postgres SQL literal.
 
@@ -1060,6 +1216,7 @@ def extract_and_upsert_check_pages(
     *,
     dry_run: bool = False,
     min_confidence: str = "low",
+    include_change_events: bool = False,
 ) -> Dict[str, Any]:
     """Full change-driven pipeline for one check's meaningful changed pages."""
     pages_with_diff = 0
@@ -1165,20 +1322,29 @@ def extract_and_upsert_check_pages(
             total_updated += apply_result["updated"]
             total_inserted += apply_result["inserted"]
             total_ended += apply_result["ended"]
-            page_results.append(
-                {
-                    "url": url,
-                    "action": "extracted",
-                    "offers_extracted": len(extracted_offers),
-                    "ended": apply_result["ended"],
-                    "downgraded": validated["downgraded"],
-                    "candidates_unavailable": page_candidates_unavailable,
-                    "candidate_pool_size": candidate_pool_size,
-                    "candidate_kept": len(candidate_offers),
-                    **apply_result,
-                    **({"offer_actions": extracted_offers} if dry_run else {}),
-                }
-            )
+            page_result = {
+                "url": url,
+                "action": "extracted",
+                "offers_extracted": len(extracted_offers),
+                "ended": apply_result["ended"],
+                "downgraded": validated["downgraded"],
+                "candidates_unavailable": page_candidates_unavailable,
+                "candidate_pool_size": candidate_pool_size,
+                "candidate_kept": len(candidate_offers),
+                **apply_result,
+                **({"offer_actions": extracted_offers} if dry_run else {}),
+            }
+            if include_change_events:
+                page_result.update(
+                    build_change_event_payloads(
+                        extracted_offers,
+                        payload,
+                        candidate_offers,
+                        source_url=url,
+                        source_name=domain_name,
+                    )
+                )
+            page_results.append(page_result)
             log.info(
                 "change_driven: {url} -> {n} offers (updated={u}, inserted={i}, ended={e}, downgraded={d})",
                 url=url,
@@ -1189,20 +1355,21 @@ def extract_and_upsert_check_pages(
                 d=validated["downgraded"],
             )
         else:
-            page_results.append(
-                {
-                    "url": url,
-                    "action": "extracted_empty",
-                    "offers_extracted": 0,
-                    "ended": 0,
-                    "downgraded": validated["downgraded"],
-                    "skipped": validated["skipped"],
-                    "candidates_unavailable": page_candidates_unavailable,
-                    "candidate_pool_size": candidate_pool_size,
-                    "candidate_kept": len(candidate_offers),
-                    **({"offer_actions": []} if dry_run else {}),
-                }
-            )
+            page_result = {
+                "url": url,
+                "action": "extracted_empty",
+                "offers_extracted": 0,
+                "ended": 0,
+                "downgraded": validated["downgraded"],
+                "skipped": validated["skipped"],
+                "candidates_unavailable": page_candidates_unavailable,
+                "candidate_pool_size": candidate_pool_size,
+                "candidate_kept": len(candidate_offers),
+                **({"offer_actions": []} if dry_run else {}),
+            }
+            if include_change_events:
+                page_result.update({"change_events": [], "match_candidates": []})
+            page_results.append(page_result)
             log.info("change_driven: {url} -> 0 offers extracted from diff", url=url)
 
     return {

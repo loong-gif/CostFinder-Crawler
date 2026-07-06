@@ -3,6 +3,7 @@ from pathlib import Path
 
 from utils.change_driven_extractor import (
     apply_offer_actions,
+    build_change_event_payloads,
     build_change_extraction_messages,
     enrich_update_actions_with_diff_prices,
     extract_and_upsert_check_pages,
@@ -479,6 +480,74 @@ def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_respons
     assert "updated_at" not in client.update_calls[1]["payload"]
 
 
+def test_build_change_event_payloads_maps_actions_to_audit_events():
+    diff_payload = {
+        "url": "https://example.com/specials?utm_source=x",
+        "status": "changed",
+        "text_diff": "- Botox $12/unit\n+ Botox $11/unit",
+        "judgment_reason": "Botox price changed",
+        "confidence": "high",
+    }
+    offers = [
+        {
+            "action": "update",
+            "matched_id": "offer-botox",
+            "matched_candidate_index": "1",
+            "service_name": "Botox",
+            "offer_raw_text": "Botox $11/unit",
+            "regular_price": "12",
+            "discount_price": "11",
+        },
+        {
+            "action": "insert",
+            "service_name": "Membership",
+            "offer_raw_text": "Join now for $199/month",
+            "membership_price": "199",
+        },
+        {"action": "mark_ended", "matched_id": "offer-old", "matched_candidate_index": "2"},
+    ]
+    candidates = [
+        {"id": "offer-botox", "candidate_index": 1, "service_name": "Botox"},
+        {"id": "offer-old", "candidate_index": 2, "service_name": "Old Offer"},
+    ]
+
+    result = build_change_event_payloads(
+        offers,
+        diff_payload,
+        candidates,
+        source_url="https://example.com/specials?utm_source=x",
+        source_name="example.com",
+    )
+
+    events = result["change_events"]
+    assert [event["proposed_action"] for event in events] == [
+        "update_offer",
+        "insert_offer",
+        "mark_missing",
+    ]
+    assert events[0]["business_change_type"] == "price_changed"
+    assert events[0]["target_offer_id"] == "offer-botox"
+    assert events[0]["proposed_field_updates"] == {
+        "service_name": "Botox",
+        "offer_raw_text": "Botox $11/unit",
+        "regular_price": 12.0,
+        "discount_price": 11.0,
+    }
+    assert events[0]["source_url_normalized"] == "https://example.com/specials"
+    assert events[0]["confidence"] == 0.9
+    assert events[1]["business_change_type"] == "offer_added"
+    assert events[1]["proposed_new_offer"]["channel"] == "web_change_driven"
+    assert events[1]["proposed_new_offer"]["membership_price"] == 199.0
+    assert events[2]["business_change_type"] == "offer_missing"
+    assert events[2]["proposed_field_updates"]["lifecycle_status"] == "missing_once"
+    assert events[2]["proposed_field_updates"]["missing_count_increment"] == 1
+    assert [item["candidate_offer_id"] for item in result["match_candidates"]] == [
+        "offer-botox",
+        "offer-old",
+    ]
+    assert all(item["is_selected"] for item in result["match_candidates"])
+
+
 def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
     page = json.loads(
         (FIXTURES_DIR / "change_driven_monitor_check_diff.json").read_text(encoding="utf-8")
@@ -535,6 +604,7 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
         db,
         "example.com",
         dry_run=True,
+        include_change_events=True,
     )
 
     assert result["pages_with_diff"] == 1
@@ -546,6 +616,8 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
     assert result["candidates_unavailable"] is False
     assert result["page_results"][0]["downgraded"] == 0
     assert len(result["page_results"][0]["offer_actions"]) == 3
+    assert len(result["page_results"][0]["change_events"]) == 3
+    assert result["page_results"][0]["change_events"][1]["proposed_action"] == "mark_missing"
     assert result["page_results"][0]["offer_actions"][1]["action"] == "mark_ended"
     assert result["page_results"][0]["offer_actions"][0]["matched_id"] == "offer-botox"
     assert db.update_calls == []
