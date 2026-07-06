@@ -3,6 +3,7 @@ Unified page fetch engine interface for site crawling.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Protocol
@@ -10,9 +11,9 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from crawler.jina_reader_client import JinaReaderClient
+from utils.firecrawl_client import get_firecrawl_client
 
-EngineName = Literal["jina"]
+EngineName = Literal["firecrawl"]
 
 _MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
@@ -57,28 +58,49 @@ class BaseFetchEngine:
         return None
 
 
-class JinaFetchEngine(BaseFetchEngine):
-    engine_name: EngineName = "jina"
+def _document_to_fetched_page(request_url: str, doc: Any) -> FetchedPage:
+    metadata = getattr(doc, "metadata", None)
+    final_url = (getattr(metadata, "url", None) or request_url).strip()
+    title = (getattr(metadata, "title", None) or "").strip()
+    content = (getattr(doc, "markdown", None) or "").strip()
+    raw_links = getattr(doc, "links", None) or []
+    links: List[FetchedLink] = []
+    for item in raw_links:
+        if isinstance(item, str) and item.strip():
+            links.append(FetchedLink(href=item.strip(), text=""))
+        elif isinstance(item, dict):
+            href = str(item.get("href") or item.get("url") or "").strip()
+            if href:
+                links.append(FetchedLink(href=href, text=str(item.get("text") or "").strip()))
+    return FetchedPage(
+        request_url=request_url,
+        final_url=final_url,
+        title=title,
+        content=content,
+        source_type="markdown",
+        links=links,
+    )
+
+
+class FirecrawlFetchEngine(BaseFetchEngine):
+    engine_name: EngineName = "firecrawl"
 
     def __init__(self):
-        self.client = JinaReaderClient()
+        self.client = get_firecrawl_client()
 
     async def fetch(self, url: str) -> FetchedPage:
-        page = await self.client.fetch(url)
-        return FetchedPage(
-            request_url=url,
-            final_url=page.final_url,
-            title=page.title,
-            content=page.content,
-            source_type="markdown",
-            links=[FetchedLink(href=item.get("href", ""), text=item.get("text", "")) for item in page.links],
+        doc = await asyncio.to_thread(
+            self.client.scrape,
+            url,
+            formats=["markdown", "links"],
         )
+        return _document_to_fetched_page(url, doc)
 
 
-def create_fetch_engine(engine_name: str = "jina") -> FetchEngine:
-    normalized = (engine_name or "jina").strip().lower()
-    if normalized == "jina":
-        return JinaFetchEngine()
+def create_fetch_engine(engine_name: str = "firecrawl") -> FetchEngine:
+    normalized = (engine_name or "firecrawl").strip().lower()
+    if normalized == "firecrawl":
+        return FirecrawlFetchEngine()
     raise ValueError(f"Unsupported fetch engine: {engine_name}")
 
 

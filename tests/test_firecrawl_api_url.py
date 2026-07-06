@@ -19,9 +19,10 @@ def test_monitor_client_uses_api_url():
 
     with patch.dict(os.environ, {"FIRECRAWL_API_KEY": "k", "FIRECRAWL_API_URL": "http://72.52.161.65:3002/"}, clear=False):
         with patch("firecrawl.Firecrawl", FakeFirecrawl):
-            from scripts.firecrawl_monitor import get_firecrawl_client
+            with patch("utils.firecrawl_client.load_dotenv"):
+                from utils.firecrawl_client import get_firecrawl_client
 
-            get_firecrawl_client()
+                get_firecrawl_client()
     assert captured["api_url"] == "http://72.52.161.65:3002"
     assert captured["api_key"] == "k"
 
@@ -36,9 +37,10 @@ def test_monitor_client_omits_api_url_when_unset():
     env = {k: v for k, v in os.environ.items() if k != "FIRECRAWL_API_URL"}
     with patch.dict(os.environ, {**env, "FIRECRAWL_API_KEY": "k"}, clear=True):
         with patch("firecrawl.Firecrawl", FakeFirecrawl):
-            from scripts.firecrawl_monitor import get_firecrawl_client
+            with patch("utils.firecrawl_client.load_dotenv"):
+                from utils.firecrawl_client import get_firecrawl_client
 
-            get_firecrawl_client()
+                get_firecrawl_client()
     assert "api_url" not in captured
 
 

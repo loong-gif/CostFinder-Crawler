@@ -2,8 +2,8 @@
 """
 Poll Firecrawl monitors and trigger change-gated recrawls.
 
-Only domains with meaningful monitor changes are re-crawled via Apify actor
-(with actor-side cleaning) and synced into promo_website_staging.
+Only domains with meaningful monitor changes are re-crawled via Firecrawl crawl API
+(with page cleaning) and synced into promo_website_staging.
 
 Usage:
     python scripts/firecrawl_monitor_poll.py --dry-run
@@ -36,13 +36,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from crawler.promo_site_crawler import normalize_domain
 from crawler.staging_recrawl import (
-    DEFAULT_ACTOR_ID,
-    DEFAULT_ACTOR_TIMEOUT_SECS,
+    DEFAULT_CRAWL_TIMEOUT_SECS,
     DEFAULT_MAX_CRAWL_PAGES,
     MonitorStateStore,
     load_supabase_client,
     recrawl_and_sync_domain,
 )
+from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
 from utils.observability import init_observability
 from utils.offer_extraction_llm import OpenAICompatibleClient, build_client_from_env
@@ -60,19 +60,6 @@ try:
     from firecrawl.v2.types import PaginationConfig as _PaginationConfig
 except Exception:  # pragma: no cover - SDK 版本差异时退化为依赖默认行为
     _PaginationConfig = None
-
-
-def get_firecrawl_client():
-    from firecrawl import Firecrawl
-
-    api_key = os.getenv("FIRECRAWL_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing FIRECRAWL_API_KEY")
-    client_kwargs = {"api_key": api_key}
-    api_url = (os.getenv("FIRECRAWL_API_URL") or "").strip()
-    if api_url:
-        client_kwargs["api_url"] = api_url.rstrip("/")
-    return Firecrawl(**client_kwargs)
 
 
 def _obj_to_dict(obj: Any) -> Dict[str, Any]:
@@ -317,9 +304,8 @@ def recrawl_domains(
     domains: Iterable[str],
     *,
     client,
-    actor_id: str,
     max_crawl_pages: int,
-    actor_timeout_secs: int,
+    crawl_timeout_secs: int,
 ) -> Dict[str, Any]:
     results: Dict[str, Any] = {}
     for domain in domains:
@@ -328,9 +314,8 @@ def recrawl_domains(
                 domain,
                 client=client,
                 dry_run=False,
-                actor_id=actor_id,
                 max_crawl_pages=max_crawl_pages,
-                actor_timeout_secs=actor_timeout_secs,
+                crawl_timeout_secs=crawl_timeout_secs,
             )
         except Exception as exc:
             results[domain] = {"action": "error", "error": str(exc)}
@@ -350,9 +335,8 @@ def process_monitor(
     supabase_client,
     *,
     dry_run: bool,
-    actor_id: str,
     max_crawl_pages: int,
-    actor_timeout_secs: int,
+    crawl_timeout_secs: int,
     since_check: Optional[str],
     force_reprocess_latest: bool,
     llm_client: Optional[OpenAICompatibleClient] = None,
@@ -532,9 +516,8 @@ def process_monitor(
                 recrawl_results = recrawl_domains(
                     domains_to_recrawl,
                     client=supabase_client,
-                    actor_id=actor_id,
                     max_crawl_pages=max_crawl_pages,
-                    actor_timeout_secs=actor_timeout_secs,
+                    crawl_timeout_secs=crawl_timeout_secs,
                 )
                 for domain, result in recrawl_results.items():
                     entry = {"domain": domain, "dry_run": False, **result}
@@ -608,13 +591,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Reprocess the latest check (even if already recorded in local state)",
     )
-    parser.add_argument("--actor-id", default=DEFAULT_ACTOR_ID, help="Apify actor ID for change-gated recrawl")
-    parser.add_argument("--max-crawl-pages", type=int, default=DEFAULT_MAX_CRAWL_PAGES, help="Max pages per Apify run")
+    parser.add_argument("--max-crawl-pages", type=int, default=DEFAULT_MAX_CRAWL_PAGES, help="Max pages per Firecrawl crawl")
     parser.add_argument(
-        "--actor-timeout-secs",
+        "--crawl-timeout-secs",
         type=int,
-        default=DEFAULT_ACTOR_TIMEOUT_SECS,
-        help="Apify actor timeout in seconds",
+        default=DEFAULT_CRAWL_TIMEOUT_SECS,
+        help="Firecrawl crawl timeout in seconds",
     )
     # Change-driven extraction options
     parser.add_argument(
@@ -695,9 +677,8 @@ def main() -> None:
                 state_store,
                 supabase_client,
                 dry_run=bool(args.dry_run),
-                actor_id=args.actor_id,
                 max_crawl_pages=max(1, args.max_crawl_pages),
-                actor_timeout_secs=max(60, args.actor_timeout_secs),
+                crawl_timeout_secs=max(60, args.crawl_timeout_secs),
                 since_check=args.since_check,
                 force_reprocess_latest=bool(args.force_latest),
                 llm_client=llm_client,

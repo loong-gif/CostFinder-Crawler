@@ -1,5 +1,5 @@
 """
-Change-gated recrawl helpers: re-crawl a domain via Apify actor (with actor-side cleaning)
+Change-gated recrawl helpers: re-crawl a domain via Firecrawl crawl API
 and sync rows into promo_website_staging. Also manages promo_monitor_state with
 Supabase + file fallback.
 """
@@ -15,18 +15,16 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 from dotenv import load_dotenv
+from firecrawl.v2.types import ScrapeOptions
 
+from config.settings import FIRECRAWL_CRAWL_MAX_PAGES, FIRECRAWL_CRAWL_TIMEOUT_SECS
 from crawler.promo_site_crawler import (
     SiteTarget,
     build_start_url,
     is_filtered_process_flag,
     normalize_domain,
 )
-from utils.apify_client import (
-    extract_default_dataset_id,
-    fetch_dataset_items,
-    run_actor as run_apify_actor,
-)
+from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
 from utils.page_content_processor import normalize_raw_page_item
 
@@ -34,9 +32,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMO_MONITOR_STATE_TABLE = "promo_monitor_state"
 MONITOR_STATE_FALLBACK_PATH = PROJECT_ROOT / "output" / "monitor_results" / "monitor_state_fallback.json"
 
-DEFAULT_ACTOR_ID = os.getenv("APIFY_PROMO_ACTOR_ID", "06tTiNomvlvwWR5cm")
-DEFAULT_MAX_CRAWL_PAGES = int(os.getenv("APIFY_MAX_CRAWL_PAGES", "50"))
-DEFAULT_ACTOR_TIMEOUT_SECS = int(os.getenv("APIFY_ACTOR_TIMEOUT_SECS", "1800"))
+DEFAULT_MAX_CRAWL_PAGES = FIRECRAWL_CRAWL_MAX_PAGES
+DEFAULT_CRAWL_TIMEOUT_SECS = FIRECRAWL_CRAWL_TIMEOUT_SECS
 
 
 @dataclass(frozen=True)
@@ -192,19 +189,62 @@ def normalize_seed_url(url: str) -> str:
     return urlunparse(clean)
 
 
-def run_actor(
-    actor_id: str,
-    website_url: str,
-    *,
-    max_crawl_pages: int,
-    actor_timeout_secs: int,
-) -> Dict[str, Any]:
-    actor_input = {
-        "subpage_url": website_url,
-        "website_url": website_url,
-        "maxCrawlPages": max_crawl_pages,
+def _document_to_crawl_item(doc: Any) -> Dict[str, Any]:
+    metadata = getattr(doc, "metadata", None)
+    url = (getattr(metadata, "url", None) or getattr(metadata, "source_url", None) or "").strip()
+    return {
+        "url": url,
+        "markdown": (getattr(doc, "markdown", None) or "").strip(),
+        "title": (getattr(metadata, "title", None) or "").strip() if metadata else "",
     }
-    return run_apify_actor(actor_id, actor_input, timeout_secs=actor_timeout_secs)
+
+
+def _crawl_documents_to_items(documents: Iterable[Any]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for doc in documents:
+        if isinstance(doc, dict):
+            items.append(doc)
+            continue
+        item = _document_to_crawl_item(doc)
+        if item.get("url") and item.get("markdown"):
+            items.append(item)
+    return items
+
+
+def recrawl_domain_via_firecrawl(
+    domain_name: str,
+    *,
+    client: Optional[SupabaseRestClient] = None,
+    max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
+    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS,
+) -> tuple[SyncTarget, List[Dict[str, Any]], Dict[str, Any]]:
+    """Re-crawl a single domain via Firecrawl crawl API."""
+    sb_client = client or load_supabase_client()
+    target = build_sync_target_for_domain(sb_client, domain_name)
+    fc = get_firecrawl_client()
+
+    crawl_job = fc.crawl(
+        target.website_url,
+        limit=max_crawl_pages,
+        scrape_options=ScrapeOptions(formats=["markdown"]),
+        allow_subdomains=True,
+        ignore_query_parameters=True,
+        timeout=crawl_timeout_secs,
+    )
+    documents = getattr(crawl_job, "data", None) or []
+    crawl_rows = normalize_crawl_items(_crawl_documents_to_items(documents), target)
+    log.info(
+        "Firecrawl recrawl finished for {domain}: crawl_rows={rows}, status={status}".format(
+            domain=target.domain_name,
+            rows=len(crawl_rows),
+            status=getattr(crawl_job, "status", "unknown"),
+        )
+    )
+    return target, crawl_rows, {
+        "crawl_status": getattr(crawl_job, "status", None),
+        "crawl_total": getattr(crawl_job, "total", None),
+        "crawl_completed": getattr(crawl_job, "completed", None),
+    }
 
 
 def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -> SiteTarget:
@@ -278,7 +318,7 @@ def build_sync_target_for_domain(client: SupabaseRestClient, domain_name: str) -
     )
 
 
-def normalize_actor_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -> List[Dict[str, Any]]:
+def normalize_crawl_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -> List[Dict[str, Any]]:
     crawl_timestamp = datetime.now(timezone.utc).isoformat()
     normalized: Dict[str, Dict[str, Any]] = {}
     for item in items:
@@ -297,48 +337,14 @@ def normalize_actor_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -
     return list(normalized.values())
 
 
-def recrawl_domain_via_apify(
-    domain_name: str,
-    *,
-    client: Optional[SupabaseRestClient] = None,
-    actor_id: str = DEFAULT_ACTOR_ID,
-    max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
-    actor_timeout_secs: int = DEFAULT_ACTOR_TIMEOUT_SECS,
-) -> tuple[SyncTarget, List[Dict[str, Any]], Dict[str, Any]]:
-    """Re-crawl a single domain via Apify actor (actor-side cleaning)."""
-    sb_client = client or load_supabase_client()
-    target = build_sync_target_for_domain(sb_client, domain_name)
-
-    run_info = run_actor(
-        actor_id,
-        target.website_url,
-        max_crawl_pages=max_crawl_pages,
-        actor_timeout_secs=actor_timeout_secs,
-    )
-    dataset_id = extract_default_dataset_id(run_info)
-    if not dataset_id:
-        raise RuntimeError("Apify actor run missing defaultDatasetId")
-
-    actor_items = fetch_dataset_items(dataset_id)
-    actor_rows = normalize_actor_items(actor_items, target)
-    log.info(
-        "Apify recrawl finished for {domain}: actor_rows={rows}, run_id={run_id}".format(
-            domain=target.domain_name,
-            rows=len(actor_rows),
-            run_id=run_info.get("id"),
-        )
-    )
-    return target, actor_rows, {"actor_run_id": run_info.get("id"), "dataset_id": dataset_id}
-
-
-def sync_apify_rows_to_staging(
+def sync_crawl_rows_to_staging(
     client: SupabaseRestClient,
     target: SyncTarget,
-    actor_rows: List[Dict[str, Any]],
+    crawl_rows: List[Dict[str, Any]],
     *,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """Sync Apify actor rows into promo_website_staging (page_content diff only)."""
+    """Sync Firecrawl crawl rows into promo_website_staging (page_content diff only)."""
     existing_rows = fetch_all_rows(
         client,
         "promo_website_staging",
@@ -359,7 +365,7 @@ def sync_apify_rows_to_staging(
     matched = 0
     unchanged = 0
 
-    for row in actor_rows:
+    for row in crawl_rows:
         existing = existing_by_url.get(canonicalize_page_url(row["subpage_url"]))
         if existing is None:
             # 新行：写入首次爬取时间 crawl_timestamp，并初始化 last_updated_at。
@@ -421,14 +427,14 @@ def sync_apify_rows_to_staging(
         "domain_name": target.domain_name,
         "website_url": target.website_url,
         "existing_rows": len(existing_rows),
-        "actor_rows": len(actor_rows),
+        "crawl_rows": len(crawl_rows),
         "matched_rows": matched,
         "content_changed_rows": len(to_update),
         "timestamp_only_rows": unchanged,
         "insert_rows": len(to_insert),
         "updated_rows": updated_rows if not dry_run else len(to_update),
         "inserted_rows": inserted_rows if not dry_run else len(to_insert),
-        "sample_subpage_urls": [row["subpage_url"] for row in actor_rows[:5]],
+        "sample_subpage_urls": [row["subpage_url"] for row in crawl_rows[:5]],
     }
 
 
@@ -437,24 +443,22 @@ def recrawl_and_sync_domain(
     *,
     client: Optional[SupabaseRestClient] = None,
     dry_run: bool = False,
-    actor_id: str = DEFAULT_ACTOR_ID,
     max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
-    actor_timeout_secs: int = DEFAULT_ACTOR_TIMEOUT_SECS,
+    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS,
 ) -> Dict[str, Any]:
-    """Run Apify recrawl for one domain and sync cleaned rows to promo_website_staging."""
+    """Run Firecrawl recrawl for one domain and sync cleaned rows to promo_website_staging."""
     sb_client = client or load_supabase_client()
-    target, actor_rows, run_meta = recrawl_domain_via_apify(
+    target, crawl_rows, run_meta = recrawl_domain_via_firecrawl(
         domain_name,
         client=sb_client,
-        actor_id=actor_id,
         max_crawl_pages=max_crawl_pages,
-        actor_timeout_secs=actor_timeout_secs,
+        crawl_timeout_secs=crawl_timeout_secs,
     )
-    sync_report = sync_apify_rows_to_staging(sb_client, target, actor_rows, dry_run=dry_run)
+    sync_report = sync_crawl_rows_to_staging(sb_client, target, crawl_rows, dry_run=dry_run)
     return {
         "action": "recrawled",
-        "engine": "apify",
-        "hit_pages": len(actor_rows),
+        "engine": "firecrawl",
+        "hit_pages": len(crawl_rows),
         "run": run_meta,
         "upsert": sync_report,
     }

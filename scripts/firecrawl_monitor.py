@@ -57,6 +57,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from crawler.promo_site_crawler import normalize_domain
 from crawler.staging_recrawl import PROMO_MONITOR_STATE_TABLE, MonitorStateStore, load_supabase_client
+from utils.firecrawl_client import get_firecrawl_client
 from utils.monitor_target_urls import normalize_monitor_url, pick_monitor_urls
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "monitor_results"
@@ -65,28 +66,6 @@ REPORT_PREFIX = "firecrawl_monitor"
 
 def load_env() -> None:
     load_dotenv(PROJECT_ROOT / ".env")
-
-
-def get_firecrawl_client():
-    """Initialize Firecrawl client with API key from env."""
-    from firecrawl import Firecrawl
-
-    api_key = os.getenv("FIRECRAWL_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "Missing FIRECRAWL_API_KEY. Add it to .env or export it.\n"
-            "Get your key at: https://firecrawl.dev/app/api-keys"
-        )
-    timeout = float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS", "120"))
-    client_kwargs: Dict[str, Any] = {
-        "api_key": api_key,
-        "timeout": timeout,
-        "max_retries": 2,
-    }
-    api_url = (os.getenv("FIRECRAWL_API_URL") or "").strip()
-    if api_url:
-        client_kwargs["api_url"] = api_url.rstrip("/")
-    return Firecrawl(**client_kwargs)
 
 
 def get_supabase_client():

@@ -1,0 +1,150 @@
+{
+  "url": "https://zenaestheticsandwellness.com",
+  "status": "changed",
+  "diff": {
+    "text": "",
+    "json": {
+      "services[0].name": {
+        "previous": "Neurotoxins",
+        "current": "Agnes RF"
+      },
+      "services[0].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[1].name": {
+        "previous": "Laser Hair Removal",
+        "current": "Cellenis PRP"
+      },
+      "services[1].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[2].name": {
+        "previous": "Agnes RF",
+        "current": "EXO|E"
+      },
+      "services[2].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[3].name": {
+        "previous": "Cellenis PRP",
+        "current": "DE|RIVE"
+      },
+      "services[3].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[4].name": {
+        "previous": "EXO|E",
+        "current": "Botox"
+      },
+      "services[4].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[5].name": {
+        "previous": "DE|RIVE",
+        "current": "SkinMedica"
+      },
+      "services[5].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[6].name": {
+        "previous": "Botox",
+        "current": "Diamond Glow"
+      },
+      "services[6].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[7].name": {
+        "previous": "SkinMedica",
+        "current": "Juvederm"
+      },
+      "services[7].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[8].name": {
+        "previous": "Diamond Glow",
+        "current": "Vivace RF"
+      },
+      "services[8].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[9].name": {
+        "previous": "Juvederm",
+        "current": "Restylane"
+      },
+      "services[9].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[10].name": {
+        "previous": "Vivace RF",
+        "current": "Dysport"
+      },
+      "services[10].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[11].name": {
+        "previous": "Restylane",
+        "current": "SkinBetter Science"
+      },
+      "services[11].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[12].name": {
+        "previous": "Dysport",
+        "current": "Designs For Health"
+      },
+      "services[12].price": {
+        "previous": "Varies",
+        "current": ""
+      },
+      "services[13]": {
+        "previous": {
+          "name": "SkinBetter Science",
+          "price": "Varies"
+        }
+      },
+      "services[14]": {
+        "previous": {
+          "name": "Designs For Health",
+          "price": "Varies"
+        }
+      }
+    }
+  },
+  "judgment": {
+    "meaningful": true,
+    "confidence": "high",
+    "reason": "Two services, 'Neurotoxins' and 'Laser Hair Removal', were removed from the service list. Additionally, the price for all remaining services changed from 'Varies' to being empty or unspecified, which constitutes a modification of service pricing information.",
+    "meaningfulChanges": [
+      {
+        "type": "removed",
+        "before": "Neurotoxins",
+        "after": null,
+        "reason": "The service 'Neurotoxins' was removed from the list of available services."
+      },
+      {
+        "type": "removed",
+        "before": "Laser Hair Removal",
+        "after": null,
+        "reason": "The service 'Laser Hair Removal' was removed from the list of available services."
+      },
+      {
+        "type": "changed",
+        "before": "Varies",
+        "after": "",
+        "reason": "The price for 'Agnes RF' (and all other listed services) was changed from 'Varies' to an empty value."
+      }
+    ]
+  }
+}

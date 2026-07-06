@@ -33,6 +33,7 @@ from utils.offer_extraction_llm import (
 _MAX_TEXT_DIFF_CHARS = 3000
 _MAX_CANDIDATE_OFFERS = 100
 _MAX_CANDIDATE_TEXT_CHARS = 200
+_CONF_RANK = {"low": 1, "medium": 2, "high": 3}
 _VALID_ACTIONS = {"update", "insert", "mark_ended"}
 _CANDIDATE_FETCH_VARIANTS = [
     (
@@ -84,7 +85,6 @@ _MASTER_TEXT_FIELDS = [
 ]
 _MASTER_NUMERIC_FIELDS = [
     "regular_price",
-    "original_price",
     "discount_price",
     "discount_amount",
     "discount_percent",
@@ -116,6 +116,13 @@ _SERVICE_NAME_DICT_PATH = (
 # Diff payload extraction
 # ---------------------------------------------------------------------------
 
+def _head_tail(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n...[truncated middle]...\n" + text[-half:]
+
+
 def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Parse a Firecrawl check page into a compact diff payload.
 
@@ -144,6 +151,7 @@ def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         meaningful_changes = []
 
     judgment_reason = (judgment.get("reason") or "").strip()
+    confidence = (judgment.get("confidence") or "").strip().lower()
 
     if not text_diff and not json_diff and not meaningful_changes:
         return None
@@ -151,10 +159,11 @@ def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "url": (page.get("url") or "").strip(),
         "status": (page.get("status") or "").strip(),
-        "text_diff": text_diff[:_MAX_TEXT_DIFF_CHARS] if text_diff else "",
+        "text_diff": _head_tail(text_diff, _MAX_TEXT_DIFF_CHARS) if text_diff else "",
         "json_diff": json_diff,
         "meaningful_changes": meaningful_changes,
         "judgment_reason": judgment_reason,
+        "confidence": confidence,
     }
 
 
@@ -266,6 +275,53 @@ def fetch_candidate_offers(
         if candidate["id"]:
             candidates.append(candidate)
     return candidates
+
+
+def _reindex(candidate: Dict[str, Any], new_index: int) -> Dict[str, Any]:
+    out = dict(candidate)
+    out["candidate_index"] = new_index
+    return out
+
+
+def _candidate_diff_score(candidate: Dict[str, Any], diff_tokens: set) -> int:
+    cand_text = _normalize_match_text(
+        str(candidate.get("service_name") or "")
+        + " "
+        + str(candidate.get("offer_raw_text") or "")
+    )
+    if not cand_text or not diff_tokens:
+        return 0
+    cand_tokens = set(cand_text.split())
+    return len(cand_tokens & diff_tokens)
+
+
+def filter_candidates_by_diff_relevance(
+    candidates: List[Dict[str, Any]],
+    meaningful_changes: List[Dict[str, Any]],
+    *,
+    max_keep: int = 10,
+) -> List[Dict[str, Any]]:
+    """Pre-filter candidate offers by relevance to meaningful_changes text."""
+    if not candidates:
+        return []
+    if len(candidates) <= max_keep:
+        return [_reindex(candidate, idx) for idx, candidate in enumerate(candidates, start=1)]
+
+    diff_text = " ".join(
+        str(item.get("before") or "") + " " + str(item.get("after") or "")
+        for item in meaningful_changes
+        if isinstance(item, dict)
+    )
+    diff_tokens = set(_normalize_match_text(diff_text).split())
+
+    scored = [
+        (_candidate_diff_score(candidate, diff_tokens), idx, candidate)
+        for idx, candidate in enumerate(candidates)
+    ]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    kept = [candidate for _, _, candidate in scored[:max_keep]]
+    return [_reindex(candidate, idx) for idx, candidate in enumerate(kept, start=1)]
 
 
 def build_change_extraction_messages(
@@ -763,6 +819,90 @@ def build_offer_insert_payload(
     return payload
 
 
+def sql_quote(value: Any) -> str:
+    """Format a Python value as a Postgres SQL literal.
+
+    Numbers -> bare numeric; None/empty string -> NULL; everything else ->
+    single-quoted string with `'` escaped to `''`.
+    """
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value).strip()
+    if text == "":
+        return "NULL"
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _sql_value_for_field(field: str, value: Any) -> str:
+    if field in _MASTER_NUMERIC_FIELDS:
+        parsed = _parse_price(value)
+        return "NULL" if parsed is None else str(parsed)
+    return sql_quote(value)
+
+
+def build_offer_sql_statements(
+    offers: List[Dict[str, Any]],
+    *,
+    source_url: str,
+    source_name: str,
+    now_iso: str,
+) -> List[str]:
+    """Render the same decisions apply_offer_actions writes via PostgREST as
+    SQL text, for audit/traceability in the monitor report. Not executed."""
+    statements: List[str] = []
+    for offer in offers:
+        action = str(offer.get("action") or "insert").strip().lower()
+
+        if action == "insert":
+            payload = build_offer_insert_payload(
+                offer, source_url=source_url, source_name=source_name
+            )
+            if not payload.get("service_name") and not payload.get("offer_raw_text"):
+                continue
+            cols = list(payload.keys())
+            vals = [_sql_value_for_field(col, payload[col]) for col in cols]
+            col_list = ", ".join(cols)
+            val_list = ", ".join(vals)
+            statements.append(
+                f"INSERT INTO promo_offer_master ({col_list}) VALUES ({val_list});"
+            )
+            continue
+
+        matched_id = str(offer.get("matched_id") or "").strip()
+
+        if action == "mark_ended":
+            if not matched_id:
+                continue
+            statements.append(
+                "UPDATE promo_offer_master SET status='ended', "
+                f"updated_at={sql_quote(now_iso)} WHERE id={sql_quote(matched_id)};"
+            )
+            continue
+
+        if action == "update":
+            if not matched_id:
+                continue
+            payload = build_offer_update_payload(offer)
+            if not payload:
+                continue
+            set_parts = [
+                f"{field}={_sql_value_for_field(field, payload[field])}"
+                for field in payload
+            ]
+            set_parts.append(f"updated_at={sql_quote(now_iso)}")
+            set_clause = ", ".join(set_parts)
+            statements.append(
+                f"UPDATE promo_offer_master SET {set_clause} "
+                f"WHERE id={sql_quote(matched_id)};"
+            )
+            continue
+    return statements
+
+
 def _update_master_row(
     client: Any,
     row_id: str,
@@ -810,7 +950,7 @@ def apply_offer_actions(
 ) -> Dict[str, Any]:
     """Apply validated change-driven actions into promo_offer_master."""
     if not offers:
-        return {"updated": 0, "inserted": 0, "ended": 0, "skipped": 0}
+        return {"updated": 0, "inserted": 0, "ended": 0, "skipped": 0, "sql_statements": []}
 
     now_iso = datetime.now(timezone.utc).isoformat()
     updated = 0
@@ -886,11 +1026,25 @@ def apply_offer_actions(
                 error=exc,
             )
 
+    # SQL audit trail: render the same decisions as SQL text using the same
+    # now_iso used for actual writes, so the audit statements match the writes.
+    try:
+        sql_statements = build_offer_sql_statements(
+            offers,
+            source_url=source_url,
+            source_name=source_name,
+            now_iso=now_iso,
+        )
+    except Exception as exc:
+        sql_statements = []
+        log.error("change_driven: failed to build SQL audit for {url}: {error}", url=source_url, error=exc)
+
     return {
         "updated": updated,
         "inserted": inserted,
         "ended": ended,
         "skipped": skipped,
+        "sql_statements": sql_statements,
     }
 
 
@@ -905,6 +1059,7 @@ def extract_and_upsert_check_pages(
     domain_name: str,
     *,
     dry_run: bool = False,
+    min_confidence: str = "low",
 ) -> Dict[str, Any]:
     """Full change-driven pipeline for one check's meaningful changed pages."""
     pages_with_diff = 0
@@ -926,6 +1081,22 @@ def extract_and_upsert_check_pages(
             log.info("change_driven: {url} -> no diff data, will need Apify fallback", url=url)
             continue
 
+        if _CONF_RANK.get(payload.get("confidence"), 1) < _CONF_RANK.get(min_confidence, 1):
+            pages_without_diff += 1
+            page_results.append(
+                {
+                    "url": url,
+                    "action": "low_confidence_skipped",
+                    "confidence": payload.get("confidence"),
+                }
+            )
+            log.info(
+                "change_driven: {url} -> low confidence ({c}), skipping LLM",
+                url=url,
+                c=payload.get("confidence"),
+            )
+            continue
+
         pages_with_diff += 1
         page_candidates_unavailable = False
         try:
@@ -939,6 +1110,11 @@ def extract_and_upsert_check_pages(
                 url=url,
                 error=exc,
             )
+
+        candidate_pool_size = len(candidate_offers)
+        candidate_offers = filter_candidates_by_diff_relevance(
+            candidate_offers, payload.get("meaningful_changes") or []
+        )
 
         messages = build_change_extraction_messages(payload, domain_name, candidate_offers)
 
@@ -997,6 +1173,8 @@ def extract_and_upsert_check_pages(
                     "ended": apply_result["ended"],
                     "downgraded": validated["downgraded"],
                     "candidates_unavailable": page_candidates_unavailable,
+                    "candidate_pool_size": candidate_pool_size,
+                    "candidate_kept": len(candidate_offers),
                     **apply_result,
                     **({"offer_actions": extracted_offers} if dry_run else {}),
                 }
@@ -1020,6 +1198,8 @@ def extract_and_upsert_check_pages(
                     "downgraded": validated["downgraded"],
                     "skipped": validated["skipped"],
                     "candidates_unavailable": page_candidates_unavailable,
+                    "candidate_pool_size": candidate_pool_size,
+                    "candidate_kept": len(candidate_offers),
                     **({"offer_actions": []} if dry_run else {}),
                 }
             )

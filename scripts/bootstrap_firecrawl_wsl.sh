@@ -114,7 +114,10 @@ PY
 
   upsert_env PORT "$FIRECRAWL_PORT"
   upsert_env HOST "0.0.0.0"
+  # ponytail: monitor needs Postgres tables; scrape auth stays bypassed (no Supabase).
   upsert_env USE_DB_AUTHENTICATION "false"
+  upsert_env DATABASE_URL "postgresql://postgres:postgres@nuq-postgres:5432/postgres"
+  upsert_env DATABASE_REPLICA_URL "postgresql://postgres:postgres@nuq-postgres:5432/postgres"
   upsert_env BULL_AUTH_KEY "$bull_key"
   upsert_env OPENAI_API_KEY "$OPENAI_API_KEY"
 
@@ -126,6 +129,15 @@ start_firecrawl() {
   log "Starting Firecrawl (first run may take several minutes to build images)"
   docker compose up -d --build
   docker compose ps
+
+  local fix_script
+  fix_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fix_firecrawl_selfhosted_monitor.sh"
+  if [[ -f "$fix_script" ]]; then
+    log "Applying self-hosted monitor patches"
+    bash "$fix_script"
+  else
+    log "WARN: $fix_script not found — monitor API may not work until you run it"
+  fi
 
   log "Waiting for API on localhost:$FIRECRAWL_PORT"
   for i in $(seq 1 60); do

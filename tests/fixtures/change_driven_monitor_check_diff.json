@@ -1,0 +1,42 @@
+{
+  "url": "https://example.com/specials",
+  "status": "changed",
+  "diff": {
+    "text": "- Botox 20% off this month\n+ Botox $11/unit limited time\n- Juvederm summer special $100 off\n+ (removed)",
+    "json": {
+      "offers[0]": {
+        "previous": {
+          "name": "Botox",
+          "service_name": "Botox",
+          "offer_raw_text": "Botox 20% off this month",
+          "discount_price": 12
+        },
+        "current": {
+          "name": "Botox",
+          "service_name": "Botox",
+          "offer_raw_text": "Botox $11/unit limited time",
+          "discount_price": 11
+        }
+      }
+    }
+  },
+  "judgment": {
+    "meaningful": true,
+    "confidence": "high",
+    "reason": "Botox pricing changed and Juvederm offer removed",
+    "meaningfulChanges": [
+      {
+        "type": "changed",
+        "before": "Botox 20% off this month",
+        "after": "Botox $11/unit limited time",
+        "reason": "Botox price update"
+      },
+      {
+        "type": "removed",
+        "before": "Juvederm summer special $100 off",
+        "after": null,
+        "reason": "Juvederm offer removed"
+      }
+    ]
+  }
+}

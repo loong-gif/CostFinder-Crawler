@@ -8,7 +8,7 @@ calls are made. Covers:
     failing check
   - process_monitor M2: meaningful change with unresolvable domain is marked
     "unresolved_domain" and does not advance the cursor
-  - sync_apify_rows_to_staging M3: unchanged rows are batched into a single PATCH
+  - sync_crawl_rows_to_staging M3: unchanged rows are batched into a single PATCH
 
 Run:
     python3 -m pytest tests/test_monitor_db_update_flow.py -v
@@ -45,7 +45,7 @@ from crawler.staging_recrawl import (  # noqa: E402
     MonitorStateRow,
     SyncTarget,
     canonicalize_page_url,
-    sync_apify_rows_to_staging,
+    sync_crawl_rows_to_staging,
 )
 
 
@@ -178,9 +178,8 @@ def _run_process_monitor(monitor, store):
         store,
         None,
         dry_run=False,
-        actor_id="actor",
         max_crawl_pages=1,
-        actor_timeout_secs=60,
+        crawl_timeout_secs=60,
         since_check=None,
         force_reprocess_latest=False,
     )
@@ -289,7 +288,7 @@ def test_process_monitor_no_change_advances_cursor(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# sync_apify_rows_to_staging (M3 batching)
+# sync_crawl_rows_to_staging (M3 batching)
 # --------------------------------------------------------------------------- #
 class FakeSupabaseClient:
     def __init__(self, existing_rows):
@@ -314,7 +313,7 @@ class FakeSupabaseClient:
         raise AssertionError("upsert_rows should not be used for partial-column updates")
 
 
-def _actor_row(url, content, *, ts, name="n"):
+def _crawl_row(url, content, *, ts, name="n"):
     return {
         "crawl_timestamp": ts,
         "subpage_url": url,
@@ -344,11 +343,11 @@ def _build_sync_inputs():
         _existing_row(2, "https://ex.com/b", "B"),
         _existing_row(3, "https://ex.com/c", "C"),
     ]
-    actor_rows = [
-        _actor_row("https://ex.com/a", "A", ts=ts),       # unchanged
-        _actor_row("https://ex.com/b", "B", ts=ts),       # unchanged
-        _actor_row("https://ex.com/c", "C2", ts=ts),      # content changed
-        _actor_row("https://ex.com/d", "D", ts=ts),       # new -> insert
+    crawl_rows = [
+        _crawl_row("https://ex.com/a", "A", ts=ts),       # unchanged
+        _crawl_row("https://ex.com/b", "B", ts=ts),       # unchanged
+        _crawl_row("https://ex.com/c", "C2", ts=ts),      # content changed
+        _crawl_row("https://ex.com/d", "D", ts=ts),       # new -> insert
     ]
     target = SyncTarget(
         domain_name="ex.com",
@@ -357,18 +356,18 @@ def _build_sync_inputs():
         master_id=None,
         business_id=None,
     )
-    return existing, actor_rows, target, ts
+    return existing, crawl_rows, target, ts
 
 
 def test_sync_skips_unchanged_and_updates_last_updated_at():
-    existing, actor_rows, target, ts = _build_sync_inputs()
+    existing, crawl_rows, target, ts = _build_sync_inputs()
     client = FakeSupabaseClient(existing)
 
-    report = sync_apify_rows_to_staging(client, target, actor_rows, dry_run=False)
+    report = sync_crawl_rows_to_staging(client, target, crawl_rows, dry_run=False)
 
     # Report fields preserved and semantically correct.
     assert report["existing_rows"] == 3
-    assert report["actor_rows"] == 4
+    assert report["crawl_rows"] == 4
     assert report["matched_rows"] == 3
     assert report["content_changed_rows"] == 1
     assert report["timestamp_only_rows"] == 2  # unchanged rows, now skipped
@@ -397,10 +396,10 @@ def test_sync_skips_unchanged_and_updates_last_updated_at():
 
 
 def test_sync_dry_run_issues_no_writes():
-    existing, actor_rows, target, _ = _build_sync_inputs()
+    existing, crawl_rows, target, _ = _build_sync_inputs()
     client = FakeSupabaseClient(existing)
 
-    report = sync_apify_rows_to_staging(client, target, actor_rows, dry_run=True)
+    report = sync_crawl_rows_to_staging(client, target, crawl_rows, dry_run=True)
 
     assert client.update_calls == []
     assert client.insert_calls == []

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import re
@@ -26,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import OUTPUT_ENCODING  # noqa: E402
+from utils.staging_content_diff import content_hash, has_price_signal, normalize_content  # noqa: E402
 
 
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
@@ -43,12 +43,6 @@ TRACKING_QUERY_KEYS = {
     "gbraid",
     "wbraid",
 }
-
-PRICE_SIGNAL_PATTERNS = [
-    re.compile(r"\$\s*\d+(?:,\d{3})*(?:\.\d{1,2})?", re.IGNORECASE),
-    re.compile(r"\b\d+(?:\.\d+)?\s*%\s*(?:off|discount|savings?)\b", re.IGNORECASE),
-    re.compile(r"\b(?:price|pricing|starts? at|from|per unit|per syringe|membership|specials?|offers?|promo|deal|discount)\b", re.IGNORECASE),
-]
 
 BOILERPLATE_PATTERNS = [
     re.compile(r"\bprivacy policy\b", re.IGNORECASE),
@@ -195,24 +189,6 @@ def domains_match(url_domain: str, row_domain: str) -> bool:
     if not url_domain or not row_domain:
         return False
     return url_domain == row_domain or url_domain.endswith("." + row_domain) or row_domain.endswith("." + url_domain)
-
-
-def normalize_content(value: Any) -> str:
-    text = str(value or "")
-    text = re.sub(r"\[SEGMENT\s+\d+\]\s*", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip().lower()
-    return text
-
-
-def content_hash(value: Any) -> str:
-    normalized = normalize_content(value)
-    if not normalized:
-        return ""
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def has_price_signal(text: str) -> bool:
-    return any(pattern.search(text or "") for pattern in PRICE_SIGNAL_PATTERNS)
 
 
 def is_mostly_boilerplate(text: str) -> bool:

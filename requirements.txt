@@ -4,23 +4,10 @@ lxml>=5.4.0,<6
 pandas==2.2.0
 requests>=2.31.0,<3
 
-# OCR引擎(选择其一或安装多个)
-paddleocr==2.7.3
-paddlepaddle==2.6.2
-# easyocr==1.7.1
-# pytesseract==0.3.10
-
-# 图像处理
-Pillow>=10.4,<12
-opencv-python==4.6.0.66
-
-# 反爬虫 / 请求伪装
-fake-useragent>=2.2.0
-
 # 数据处理
 openpyxl==3.1.2
 
-# Firecrawl monitoring
+# Firecrawl（统一网页抓取 + 变更监测）
 firecrawl-py>=4.28.0
 
 # 工具库
@@ -34,5 +21,3 @@ opentelemetry-api>=1.42.0
 opentelemetry-sdk>=1.42.0
 opentelemetry-exporter-otlp-proto-http>=1.42.0
 opentelemetry-instrumentation-logging>=0.63b0
-
-# 浏览器诊断/补抓依赖已拆分到 requirements_browser_tools.txt

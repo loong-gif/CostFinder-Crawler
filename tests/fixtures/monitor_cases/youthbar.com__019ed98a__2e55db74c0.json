@@ -1,0 +1,62 @@
+{
+  "url": "https://youthbar.com",
+  "status": "changed",
+  "diff": {
+    "text": "",
+    "json": {
+      "services[0].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[1].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[2].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[3].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[4].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[5].name": {
+        "previous": "Laser & Lights Treatments",
+        "current": "Skin Treatments"
+      },
+      "services[5].price": {
+        "previous": "Not specified",
+        "current": "Not Specified"
+      },
+      "services[6]": {
+        "current": {
+          "name": "Holistic Health",
+          "price": "Not Specified"
+        }
+      }
+    }
+  },
+  "judgment": {
+    "meaningful": true,
+    "confidence": "high",
+    "reason": "The service menu was updated with a new category 'Holistic Health' and the renaming of 'Laser & Lights Treatments' to 'Skin Treatments'. While the price values themselves only changed casing ('Not specified' to 'Not Specified'), the addition and modification of service categories are relevant to monitoring the service and pricing structure.",
+    "meaningfulChanges": [
+      {
+        "type": "changed",
+        "before": "Laser & Lights Treatments",
+        "after": "Skin Treatments",
+        "reason": "An existing service category was renamed."
+      },
+      {
+        "type": "added",
+        "before": null,
+        "after": "Holistic Health",
+        "reason": "A new service category was added to the menu."
+      }
+    ]
+  }
+}

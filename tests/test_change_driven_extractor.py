@@ -6,6 +6,7 @@ from utils.change_driven_extractor import (
     build_change_extraction_messages,
     enrich_update_actions_with_diff_prices,
     extract_and_upsert_check_pages,
+    extract_diff_payload,
     fetch_candidate_offers,
     standardize_offer_service_names,
     validate_offer_actions,
@@ -378,7 +379,13 @@ def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
         source_name="example.com",
     )
 
-    assert result == {"updated": 1, "inserted": 1, "ended": 1, "skipped": 0}
+    assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
+        "updated": 1,
+        "inserted": 1,
+        "ended": 1,
+        "skipped": 0,
+    }
+    assert isinstance(result.get("sql_statements"), list)
     assert len(client.update_calls) == 3
     assert len(client.insert_calls) == 2
     assert client.update_calls[0]["payload"]["regular_price"] == 12.0
@@ -415,7 +422,13 @@ def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
         source_name="example.com",
     )
 
-    assert result == {"updated": 1, "inserted": 0, "ended": 1, "skipped": 0}
+    assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
+        "updated": 1,
+        "inserted": 0,
+        "ended": 1,
+        "skipped": 0,
+    }
+    assert isinstance(result.get("sql_statements"), list)
     assert len(client.update_calls) == 4
     assert "updated_at" in client.update_calls[0]["payload"]
     assert "updated_at" not in client.update_calls[1]["payload"]
@@ -454,7 +467,13 @@ def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_respons
         source_name="example.com",
     )
 
-    assert result == {"updated": 1, "inserted": 0, "ended": 0, "skipped": 0}
+    assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
+        "updated": 1,
+        "inserted": 0,
+        "ended": 0,
+        "skipped": 0,
+    }
+    assert isinstance(result.get("sql_statements"), list)
     assert len(client.update_calls) == 2
     assert "updated_at" in client.update_calls[0]["payload"]
     assert "updated_at" not in client.update_calls[1]["payload"]
@@ -600,3 +619,201 @@ def test_extract_and_upsert_check_pages_invalid_llm_payload_requests_fallback():
     assert result["needs_apify_fallback"] is True
     assert result["total_offers_extracted"] == 0
     assert result["page_results"][0]["action"] == "invalid_llm_payload"
+
+
+def test_extract_offer_price_fields_reads_new_schema_number_fields():
+    from utils.change_driven_extractor import _extract_offer_price_fields
+
+    node = {
+        "regular_price": 200,
+        "discount_price": 150,
+        "name": "Botox",
+        "unit_type": "unit",
+    }
+    result = _extract_offer_price_fields(node)
+    assert result["regular_price"] == 200.0
+    assert result["discount_price"] == 150.0
+
+
+def test_extract_offer_price_fields_falls_back_when_new_fields_missing():
+    from utils.change_driven_extractor import _extract_offer_price_fields
+
+    node = {"name": "Botox", "price": "$10", "offer_raw_text": "Botox $11/unit"}
+    result = _extract_offer_price_fields(node)
+    assert result["regular_price"] is None
+    assert result["discount_price"] == 11.0
+
+
+def test_filter_candidates_by_diff_relevance_ranks_by_overlap_and_reindexes():
+    from utils.change_driven_extractor import filter_candidates_by_diff_relevance
+
+    candidates = [
+        {"id": "1", "candidate_index": 1, "service_name": "Botox", "offer_raw_text": "$10/unit"},
+        {"id": "2", "candidate_index": 2, "service_name": "Filler", "offer_raw_text": "$650/syringe"},
+        {"id": "3", "candidate_index": 3, "service_name": "Facial", "offer_raw_text": "$150"},
+    ]
+    meaningful = [
+        {"type": "changed", "before": "Botox $10/unit", "after": "Botox $11/unit", "reason": "price"}
+    ]
+
+    kept = filter_candidates_by_diff_relevance(candidates, meaningful, max_keep=2)
+    assert len(kept) == 2
+    assert kept[0]["id"] == "1"
+    assert kept[0]["candidate_index"] == 1
+    assert kept[1]["candidate_index"] == 2
+
+
+def test_filter_candidates_returns_fallback_when_no_overlap():
+    from utils.change_driven_extractor import filter_candidates_by_diff_relevance
+
+    candidates = [
+        {"id": "1", "candidate_index": 1, "service_name": "Botox", "offer_raw_text": "$10"},
+        {"id": "2", "candidate_index": 2, "service_name": "Filler", "offer_raw_text": "$650"},
+    ]
+    meaningful = [
+        {"type": "changed", "before": "Laser $300", "after": "Laser $250", "reason": "price"}
+    ]
+
+    kept = filter_candidates_by_diff_relevance(candidates, meaningful, max_keep=2)
+    assert len(kept) == 2
+    assert kept[0]["candidate_index"] == 1
+
+
+def test_filter_candidates_empty_meaningful_keeps_first_n():
+    from utils.change_driven_extractor import filter_candidates_by_diff_relevance
+
+    candidates = [
+        {"id": str(i), "candidate_index": i, "service_name": f"S{i}", "offer_raw_text": ""}
+        for i in range(1, 6)
+    ]
+    kept = filter_candidates_by_diff_relevance(candidates, [], max_keep=3)
+    assert len(kept) == 3
+    assert [item["candidate_index"] for item in kept] == [1, 2, 3]
+
+
+def test_head_tail_keeps_head_and_tail_with_marker():
+    from utils.change_driven_extractor import _head_tail
+
+    text = "A" * 2000 + "MIDDLE" + "B" * 2000
+    out = _head_tail(text, 3000)
+    assert len(out) < len(text)
+    assert out.startswith("A")
+    assert out.endswith("B")
+    assert "truncated" in out.lower()
+    assert out.count("A") >= 1400
+    assert out.count("B") >= 1400
+    assert "MIDDLE" not in out
+
+
+def test_head_tail_short_text_unchanged():
+    from utils.change_driven_extractor import _head_tail
+
+    text = "short diff"
+    assert _head_tail(text, 3000) == text
+
+
+def test_extract_diff_payload_includes_confidence():
+    from utils.change_driven_extractor import extract_diff_payload
+
+    page = {
+        "url": "https://x.com/s",
+        "status": "changed",
+        "diff": {"text": "x"},
+        "judgment": {"meaningful": True, "confidence": "low", "reason": "r"},
+    }
+    payload = extract_diff_payload(page)
+    assert payload["confidence"] == "low"
+
+
+def test_extract_and_upsert_filters_candidates_and_records_pool_size():
+    page = {
+        "url": "https://example.com/specials",
+        "status": "changed",
+        "diff": {"text": "- Botox $10/unit\n+ Botox $11/unit"},
+        "judgment": {
+            "meaningful": True,
+            "confidence": "high",
+            "reason": "Botox price changed",
+            "meaningfulChanges": [
+                {
+                    "type": "changed",
+                    "before": "Botox $10/unit",
+                    "after": "Botox $11/unit",
+                    "reason": "price",
+                }
+            ],
+        },
+    }
+    rows = [
+        {
+            "id": f"id-{idx}",
+            "service_name": "Botox" if idx == 0 else f"Service {idx}",
+            "offer_raw_text": "Botox $10/unit" if idx == 0 else f"Other {idx}",
+            "discount_price": 10 + idx,
+            "status": "active",
+        }
+        for idx in range(15)
+    ]
+    db = FakeDbClient(rows=rows)
+    llm = FakeLlmClient({"offers": []})
+
+    result = extract_and_upsert_check_pages(
+        [page],
+        llm,
+        db,
+        "example.com",
+        dry_run=True,
+    )
+
+    assert result["page_results"][0]["candidate_pool_size"] == 15
+    assert result["page_results"][0]["candidate_kept"] <= 10
+    assert len(llm.calls) == 1
+
+
+def test_extract_and_upsert_skips_low_confidence_and_triggers_fallback():
+    page = {
+        "url": "https://example.com/specials",
+        "status": "changed",
+        "diff": {"text": "price changed"},
+        "judgment": {
+            "meaningful": True,
+            "confidence": "low",
+            "reason": "unclear change",
+            "meaningfulChanges": [{"type": "changed", "before": "a", "after": "b", "reason": "x"}],
+        },
+    }
+    db = FakeDbClient(rows=[])
+    llm = FakeLlmClient({"offers": []})
+
+    result = extract_and_upsert_check_pages(
+        [page],
+        llm,
+        db,
+        "example.com",
+        dry_run=True,
+        min_confidence="medium",
+    )
+
+    assert result["page_results"][0]["action"] == "low_confidence_skipped"
+    assert result["needs_apify_fallback"] is True
+    assert len(llm.calls) == 0
+
+
+def test_extract_diff_payload_on_harvested_cases():
+    cases_dir = FIXTURES_DIR / "monitor_cases"
+    if not cases_dir.exists():
+        return
+
+    checked = 0
+    for path in sorted(cases_dir.glob("*.json")):
+        if path.name == "manifest.json" or path.name.endswith(".dry_run.json"):
+            continue
+        page = json.loads(path.read_text(encoding="utf-8"))
+        payload = extract_diff_payload(page)
+        assert payload is not None, path.name
+        assert payload.get("meaningful_changes"), path.name
+        checked += 1
+
+    if checked == 0 and (cases_dir / "manifest.json").exists():
+        manifest = json.loads((cases_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest.get("count", 0) == 0

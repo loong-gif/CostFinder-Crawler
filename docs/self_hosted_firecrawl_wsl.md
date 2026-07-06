@@ -43,6 +43,24 @@ python scripts/firecrawl_monitor.py list
 python scripts/firecrawl_monitor.py create --domain example.com --max-urls 1
 ```
 
+## Monitor API 说明（v2.11.9 自部署）
+
+官方 `USE_DB_AUTHENTICATION=false` 时 monitor 无法连库；设为 `true` 又需要完整 Supabase schema。
+
+当前方案（`scripts/fix_firecrawl_selfhosted_monitor.sh`）：
+
+- 保持 `USE_DB_AUTHENTICATION=false`（scrape 免鉴权）
+- 通过 `DATABASE_URL` + 挂载补丁 JS，让 monitor 使用 `nuq-postgres` 里的表
+- 在 Postgres 里建 monitor 相关表 + 最小 `monitoring_claim_due_monitors` RPC
+
+若 API 升级或 `docker compose build api` 后 monitor 失效，在 WSL 重跑：
+
+```bash
+bash scripts/fix_firecrawl_selfhosted_monitor.sh
+```
+
+**还需**：在 `~/firecrawl/.env` 写入 `OPENAI_API_KEY`（judging 用），然后 `docker compose restart api`。
+
 ## 运维
 
 ```bash
@@ -64,3 +82,4 @@ ALLOWED_CLIENT_IP='58.44.21.62' bash scripts/bootstrap_firecrawl_wsl.sh
 - [scripts/bootstrap_firecrawl_wsl.sh](../scripts/bootstrap_firecrawl_wsl.sh) — WSL 主部署
 - [scripts/setup_firecrawl_windows.ps1](../scripts/setup_firecrawl_windows.ps1) — 仅 Windows 网络
 - [scripts/add_thinkbook_ssh_key.ps1](../scripts/add_thinkbook_ssh_key.ps1) — 添加 thinkbook SSH 公钥
+- [scripts/fix_firecrawl_selfhosted_monitor.sh](../scripts/fix_firecrawl_selfhosted_monitor.sh) — monitor 补丁 + DB schema

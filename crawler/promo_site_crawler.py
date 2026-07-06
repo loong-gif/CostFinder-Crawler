@@ -1050,7 +1050,7 @@ def build_target_sites(
 
 
 class PromoSiteCrawler:
-    """站内发现价格/促销页的 Jina Reader 爬虫"""
+    """站内发现价格/促销页的 Firecrawl 爬虫"""
 
     def __init__(
         self,

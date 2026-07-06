@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from crawler.jina_reader_client import JinaReaderClient
+from crawler.fetch_engine import FirecrawlFetchEngine
 
 
 def parse_args() -> argparse.Namespace:
@@ -859,7 +859,7 @@ def _build_strict_offer_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def fetch_markdown(url: str) -> Dict[str, Any]:
-    page = await JinaReaderClient().fetch(url)
+    page = await FirecrawlFetchEngine().fetch(url)
     return {"url": page.final_url, "title": page.title, "content": page.content}
 
 

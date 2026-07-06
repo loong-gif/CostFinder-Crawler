@@ -1,0 +1,28 @@
+{
+  "harvested_at": "2026-07-02T16:19:24.578054+00:00",
+  "dry_run": false,
+  "count": 2,
+  "min_confidence": "low",
+  "entries": [
+    {
+      "filename": "zenaestheticsandwellness.com__019ed988__37ee5155f8.json",
+      "monitor_id": "019ed8a3-a8a5-76dc-99d2-db0467162aa1",
+      "monitor_name": "Zen Medical Spa",
+      "check_id": "019ed988-98d2-74ed-be9d-e2b7465d4dc8",
+      "url": "https://zenaestheticsandwellness.com",
+      "confidence": "high",
+      "has_json_diff": true,
+      "harvested_at": "2026-07-02T16:19:24.578054+00:00"
+    },
+    {
+      "filename": "youthbar.com__019ed98a__2e55db74c0.json",
+      "monitor_id": "019ed8a2-b025-75e4-b512-b7a837080f92",
+      "monitor_name": "Youthbar",
+      "check_id": "019ed98a-f69f-70a1-a387-ff080e3ac456",
+      "url": "https://youthbar.com",
+      "confidence": "high",
+      "has_json_diff": true,
+      "harvested_at": "2026-07-02T16:19:24.578054+00:00"
+    }
+  ]
+}

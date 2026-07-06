@@ -125,7 +125,7 @@ async def run_crawl(args: argparse.Namespace) -> tuple[List[Dict[str, Any]], Dic
         targets = targets[: args.limit]
 
     log.info(f"目标站点数: {len(targets)}")
-    log.info("抓取引擎: jina")
+    log.info("抓取引擎: firecrawl")
     crawler = PromoSiteCrawler(concurrency=max(1, args.concurrency))
     await crawler.start()
     try:

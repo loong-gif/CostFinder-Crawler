@@ -1,7 +1,6 @@
 """
 配置文件 - 所有可调参数
 """
-import json
 import os
 from pathlib import Path
 
@@ -94,54 +93,9 @@ PROXY_POOL = [
     # "http://proxy2.example.com:8080",
 ]
 
-# ==================== Jina Reader 配置 ====================
-JINA_READER_BASE_URL = os.getenv("JINA_READER_BASE_URL", "https://r.jina.ai")
-JINA_READER_TIMEOUT = int(os.getenv("JINA_READER_TIMEOUT", "45"))  # 秒
-JINA_READER_USE_JSON_MODE = os.getenv("JINA_READER_USE_JSON_MODE", "true").lower() in {"1", "true", "yes"}
-JINA_READER_NO_CACHE = os.getenv("JINA_READER_NO_CACHE", "false").lower() in {"1", "true", "yes"}
-JINA_READER_WITH_GENERATED_ALT = (
-    os.getenv("JINA_READER_WITH_GENERATED_ALT", "false").lower() in {"1", "true", "yes"}
-)
-def _load_jina_api_key() -> str:
-    env_key = os.getenv("JINA_READER_API_KEY", "").strip()
-    if env_key:
-        return env_key
-
-    key_file = BASE_DIR / "jina_api_key.txt"
-    if not key_file.exists():
-        return ""
-
-    raw = key_file.read_text(encoding="utf-8").strip()
-    if not raw:
-        return ""
-    if "=" in raw:
-        _, raw = raw.split("=", 1)
-    return raw.strip()
-
-
-JINA_READER_API_KEY = _load_jina_api_key()
-JINA_READER_RESPOND_WITH = os.getenv("JINA_READER_RESPOND_WITH", "").strip()
-
-
-def _load_jina_json_schema() -> str:
-    env_schema = os.getenv("JINA_READER_JSON_SCHEMA", "").strip()
-    if env_schema:
-        return env_schema
-
-    default_schema_file = BASE_DIR / "config" / "readerlm_offer_schema.json"
-    schema_file = Path(os.getenv("JINA_READER_JSON_SCHEMA_FILE", str(default_schema_file))).expanduser()
-    if not schema_file.exists():
-        return ""
-
-    try:
-        parsed = json.loads(schema_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return ""
-    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-
-
-JINA_READER_JSON_SCHEMA = _load_jina_json_schema()
-JINA_READER_INSTRUCTION = os.getenv("JINA_READER_INSTRUCTION", "").strip()
+# ==================== Firecrawl 配置 ====================
+FIRECRAWL_CRAWL_MAX_PAGES = int(os.getenv("FIRECRAWL_CRAWL_MAX_PAGES", "50"))
+FIRECRAWL_CRAWL_TIMEOUT_SECS = int(os.getenv("FIRECRAWL_CRAWL_TIMEOUT_SECS", "1800"))
 
 # ==================== 智能策略配置 ====================
 # 解析策略优先级

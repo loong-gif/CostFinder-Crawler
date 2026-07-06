@@ -193,18 +193,21 @@ class OpenAICompatibleClient:
     timeout: int = 90
 
     def create_json_response(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        # ponytail: reasoning 模型（gpt-5*/o1*/o3*）不支持 temperature=0，只允许默认 1。
+        body: Dict[str, Any] = {
+            "model": self.model,
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+        }
+        if not self._is_reasoning_model():
+            body["temperature"] = 0
         response = requests.post(
             self.api_url,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": self.model,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": messages,
-            },
+            json=body,
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -217,6 +220,10 @@ class OpenAICompatibleClient:
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
         return parse_json_payload(content, {})
+
+    def _is_reasoning_model(self) -> bool:
+        name = (self.model or "").lower()
+        return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 def build_llm_ready_row(row: Dict[str, Any]) -> Dict[str, Any]:
