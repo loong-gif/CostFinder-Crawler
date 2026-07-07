@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
@@ -41,7 +42,10 @@ MASTER_SELECT = (
     "regular_price,discount_price,membership_price,unit_type,membership_name,"
     "created_at,business_id,moderation_status,status"
 )
-STAGING_SELECT = "promo_website_id,subpage_url,domain_name,page_content,crawl_timestamp,last_updated_at,processed_status,business_id"
+STAGING_SELECT = (
+    "promo_website_id,subpage_url,domain_name,page_content,crawl_timestamp,"
+    "last_updated_at,processed_status,business_id,needs_ocr"
+)
 
 UNVERIFIABLE_PAGE_PATTERNS = [
     re.compile(r"checking the site connection security", re.IGNORECASE),
@@ -51,6 +55,17 @@ UNVERIFIABLE_PAGE_PATTERNS = [
     re.compile(r"forbidden", re.IGNORECASE),
     re.compile(r"captcha", re.IGNORECASE),
 ]
+
+NO_ACTIVE_OFFER_PATTERNS = [
+    re.compile(r"\bcoming soon\b", re.IGNORECASE),
+    re.compile(r"\bno current (?:specials|promotions|offers)\b", re.IGNORECASE),
+    re.compile(r"\bcheck back soon\b", re.IGNORECASE),
+]
+
+PROMO_PAGE_TERMS = re.compile(
+    r"\b(specials?|promos?|promotions?|offers?|deals?|limited-time|savings?)\b",
+    re.IGNORECASE,
+)
 
 
 class SupabaseRestClient:
@@ -89,6 +104,43 @@ class SupabaseRestClient:
         return response.json()
 
 
+class LivePageProbe:
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.cache: Dict[str, str] = {}
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+                )
+            }
+        )
+
+    def fetch_text(self, url: str) -> str:
+        if not self.enabled or not url:
+            return ""
+        normalized = normalize_url(url)
+        if normalized in self.cache:
+            return self.cache[normalized]
+        text = ""
+        try:
+            response = self.session.get(url, timeout=20)
+            if response.ok:
+                body = re.sub(
+                    r"<(script|style)\b[^>]*>.*?</\1>",
+                    " ",
+                    response.text,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                text = clean_text(html.unescape(re.sub(r"<[^>]+>", " ", body)))
+        except requests.RequestException:
+            text = ""
+        self.cache[normalized] = text
+        return self.cache[normalized]
+
+
 @dataclass
 class PageSnapshot:
     promo_website_id: Any
@@ -101,6 +153,7 @@ class PageSnapshot:
     crawl_timestamp: str
     last_updated_at: str
     processed_status: str
+    needs_ocr: bool
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +161,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=None, help="Only audit first N master rows")
     parser.add_argument("--domain", default=None, help="Filter source_url/source_name by domain substring")
     parser.add_argument("--include-ended", action="store_true", help="Also audit rows whose status is not active")
+    parser.add_argument("--live-probe", action="store_true", help="Fetch current source pages to catch no-offer messages absent from staging")
     parser.add_argument("--output-dir", default=str(OUTPUT_DIR), help="Structured output directory")
     parser.add_argument("--report-dir", default=str(REPORT_DIR), help="Markdown report directory")
     return parser.parse_args()
@@ -265,6 +319,7 @@ def build_page_snapshots(rows: Iterable[Dict[str, Any]]) -> Dict[str, PageSnapsh
             crawl_timestamp=clean_text(row.get("crawl_timestamp")),
             last_updated_at=clean_text(row.get("last_updated_at")),
             processed_status=clean_text(row.get("processed_status")),
+            needs_ocr=bool(row.get("needs_ocr", False)),
         )
         existing = snapshots.get(normalized_url)
         if not existing or snapshot.last_updated_at > existing.last_updated_at:
@@ -285,6 +340,21 @@ def is_unverifiable_snapshot(snapshot: PageSnapshot) -> bool:
         )
     )
     return len(snapshot.content_normalized) < 500 and price_hits == 0 and service_hits <= 2
+
+
+def has_no_active_offer_message(snapshot: PageSnapshot) -> bool:
+    return any(pattern.search(snapshot.content) for pattern in NO_ACTIVE_OFFER_PATTERNS)
+
+
+def likely_needs_ocr_verification(snapshot: PageSnapshot) -> bool:
+    if snapshot.needs_ocr:
+        return True
+    dollar_hits = len(re.findall(r"\$\s*\d", snapshot.content))
+    price_hits = dollar_hits + len(re.findall(r"\b\d+(?:\.\d+)?\s*%\s*off\b", snapshot.content, flags=re.IGNORECASE))
+    promo_terms = len(PROMO_PAGE_TERMS.findall(snapshot.content))
+    url_hint = bool(re.search(r"/(?:specials?|promos?|promotions?|offers?)(?:/|$)", snapshot.source_url, re.IGNORECASE))
+    # Image-based promo pages often expose headings and included service names but omit the image text/prices.
+    return url_hint and promo_terms >= 2 and (price_hits == 0 or dollar_hits == 0) and not has_no_active_offer_message(snapshot)
 
 
 def offer_text_candidates(offer: Dict[str, Any]) -> List[str]:
@@ -392,7 +462,7 @@ def best_segment_match(offer: Dict[str, Any], snapshot: PageSnapshot) -> Dict[st
     return best
 
 
-def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot]) -> Dict[str, Any]:
+def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live_probe: Optional[LivePageProbe] = None) -> Dict[str, Any]:
     source_url = clean_text(offer.get("source_url"))
     normalized_url = normalize_url(source_url)
     end_date = parse_date(offer.get("end_date"))
@@ -419,6 +489,76 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot]) -> D
             "page_last_updated_at": "",
             "page_crawl_timestamp": "",
             "page_verification_quality": "missing_staging_page",
+        }
+
+    live_text = live_probe.fetch_text(source_url) if live_probe else ""
+    if live_text and any(pattern.search(live_text) for pattern in NO_ACTIVE_OFFER_PATTERNS):
+        return {
+            "offer_id": offer.get("id"),
+            "source_url": source_url,
+            "source_url_normalized": normalized_url,
+            "matched_promo_website_id": snapshot.promo_website_id,
+            "source_name": clean_text(offer.get("source_name")),
+            "service_name": clean_text(offer.get("service_name")),
+            "offer_raw_text": clean_text(offer.get("offer_raw_text")),
+            "status": clean_text(offer.get("status")),
+            "end_date": clean_text(offer.get("end_date")),
+            "verdict": "current_page_no_active_offer",
+            "confidence": 0.88,
+            "score": 0,
+            "reasons": "live source page contains coming-soon/no-current-offer language",
+            "matched_prices": "",
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "matched_segment": live_text[:500],
+            "page_last_updated_at": snapshot.last_updated_at,
+            "page_crawl_timestamp": snapshot.crawl_timestamp,
+            "page_verification_quality": "live_current_page_no_active_offer",
+        }
+
+    if has_no_active_offer_message(snapshot):
+        return {
+            "offer_id": offer.get("id"),
+            "source_url": source_url,
+            "source_url_normalized": normalized_url,
+            "matched_promo_website_id": snapshot.promo_website_id,
+            "source_name": clean_text(offer.get("source_name")),
+            "service_name": clean_text(offer.get("service_name")),
+            "offer_raw_text": clean_text(offer.get("offer_raw_text")),
+            "status": clean_text(offer.get("status")),
+            "end_date": clean_text(offer.get("end_date")),
+            "verdict": "current_page_no_active_offer",
+            "confidence": 0.82,
+            "score": 0,
+            "reasons": "current source page contains coming-soon/no-current-offer language",
+            "matched_prices": "",
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "matched_segment": snapshot.content[:500],
+            "page_last_updated_at": snapshot.last_updated_at,
+            "page_crawl_timestamp": snapshot.crawl_timestamp,
+            "page_verification_quality": "current_page_no_active_offer",
+        }
+
+    if likely_needs_ocr_verification(snapshot):
+        return {
+            "offer_id": offer.get("id"),
+            "source_url": source_url,
+            "source_url_normalized": normalized_url,
+            "matched_promo_website_id": snapshot.promo_website_id,
+            "source_name": clean_text(offer.get("source_name")),
+            "service_name": clean_text(offer.get("service_name")),
+            "offer_raw_text": clean_text(offer.get("offer_raw_text")),
+            "status": clean_text(offer.get("status")),
+            "end_date": clean_text(offer.get("end_date")),
+            "verdict": "needs_ocr_verification",
+            "confidence": 0.45,
+            "score": 0,
+            "reasons": "promo page likely carries offer details in images or OCR-only content",
+            "matched_prices": "",
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "matched_segment": snapshot.content[:500],
+            "page_last_updated_at": snapshot.last_updated_at,
+            "page_crawl_timestamp": snapshot.crawl_timestamp,
+            "page_verification_quality": "needs_ocr",
         }
 
     if is_unverifiable_snapshot(snapshot):
@@ -523,7 +663,14 @@ def write_outputs(output_dir: Path, report_dir: Path, rows: List[Dict[str, Any]]
         writer.writerows(rows)
 
     counts = Counter(row["verdict"] for row in rows)
-    missing = [row for row in rows if row["verdict"] in {"likely_missing_from_source", "expired_by_date_and_missing_from_source"}]
+    missing = [
+        row for row in rows
+        if row["verdict"] in {
+            "likely_missing_from_source",
+            "expired_by_date_and_missing_from_source",
+            "current_page_no_active_offer",
+        }
+    ]
     payload = {
         "summary": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -581,8 +728,9 @@ def main() -> None:
         ]
     staging_rows = fetch_all_rows(client, STAGING_TABLE, STAGING_SELECT, order="promo_website_id.asc")
     snapshots = build_page_snapshots(staging_rows)
+    live_probe = LivePageProbe(enabled=bool(args.live_probe))
     audited = [
-        classify_offer(row, snapshots.get(normalize_url(row.get("source_url"))))
+        classify_offer(row, snapshots.get(normalize_url(row.get("source_url"))), live_probe=live_probe)
         for row in master_rows
     ]
     paths = write_outputs(Path(args.output_dir), Path(args.report_dir), audited)
@@ -595,7 +743,11 @@ def main() -> None:
                 "verdict_counts": dict(counts),
                 "likely_expired_or_missing": sum(
                     counts[item]
-                    for item in ("likely_missing_from_source", "expired_by_date_and_missing_from_source")
+                    for item in (
+                        "likely_missing_from_source",
+                        "expired_by_date_and_missing_from_source",
+                        "current_page_no_active_offer",
+                    )
                 ),
                 "paths": paths,
             },
