@@ -19,6 +19,8 @@ spec = importlib.util.spec_from_file_location("build_initial_offer_load_plan", S
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+from utils.offer_extraction_llm import normalize_offer_payload
+
 
 class FakeLlmClient:
     pass
@@ -117,6 +119,45 @@ def test_build_page_plan_can_use_chunking_extractor_without_losing_segments():
     assert len(page["offers"]) == 2
     assert page["plan"]["summary"]["master_rows"] == 2
     assert {item["canonical_service_name"] for item in page["plan"]["master_rows"]} == {"Botox", "Dysport"}
+
+
+def test_offer_extraction_normalizes_service_enum_and_preserves_display():
+    payload = {
+        "offers": [
+            {
+                "service_name": "Restylane Kysse",
+                "display_service_name": "Restylane Kysse",
+                "canonical_service_name": "Restylane Kysse",
+                "offer_raw_text": "Restylane Kysse $650/syringe",
+                "evidence_segments": [10],
+            },
+            {
+                "service_name": "Botox",
+                "display_service_name": "Botox",
+                "canonical_service_name": "Botox",
+                "offer_raw_text": "Botox $11 Per Unit",
+                "evidence_segments": [11],
+            },
+            {
+                "service_name": "Mystery Glow",
+                "display_service_name": "Mystery Glow",
+                "offer_raw_text": "Mystery Glow $199",
+                "evidence_segments": [12],
+            },
+        ]
+    }
+
+    offers = normalize_offer_payload(payload, allowed_indexes={10, 11, 12})["offers"]
+
+    assert offers[0]["display_service_name"] == "Restylane Kysse"
+    assert offers[0]["service_name"] == "Dermal Filler"
+    assert offers[0]["canonical_service_name"] == "Dermal Filler"
+    assert offers[1]["display_service_name"] == "Botox"
+    assert offers[1]["service_name"] == "Botox"
+    assert offers[1]["canonical_service_name"] == "Botox"
+    assert offers[2]["display_service_name"] == "Mystery Glow"
+    assert offers[2]["service_name"] == "Others"
+    assert offers[2]["canonical_service_name"] == "Others"
 
 
 if __name__ == "__main__":

@@ -107,6 +107,74 @@ def get_display_service_names() -> List[str]:
     return sorted(set(names + aliases))
 
 
+def _clean_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _normalize_lookup_text(value: Any) -> str:
+    return normalize_segment_text(_clean_text(value)).lower()
+
+
+def _service_dictionary_indexes() -> Dict[str, Any]:
+    dictionary = load_service_name_dictionary()
+    canonical_by_normalized: Dict[str, str] = {}
+    for name in dictionary.get("standardized_names", []):
+        cleaned = _clean_text(name)
+        if cleaned:
+            canonical_by_normalized[_normalize_lookup_text(cleaned)] = cleaned
+
+    alias_by_normalized: Dict[str, str] = {}
+    for alias, canonical in dictionary.get("aliases", {}).items():
+        alias_key = _normalize_lookup_text(alias)
+        canonical_key = _normalize_lookup_text(canonical)
+        if alias_key and canonical_key in canonical_by_normalized:
+            alias_by_normalized[alias_key] = canonical_by_normalized[canonical_key]
+
+    return {
+        "canonical_by_normalized": canonical_by_normalized,
+        "alias_by_normalized": alias_by_normalized,
+    }
+
+
+def canonicalize_service_name(*values: Any) -> str:
+    indexes = _service_dictionary_indexes()
+    canonical_by_normalized = indexes["canonical_by_normalized"]
+    alias_by_normalized = indexes["alias_by_normalized"]
+
+    normalized_values = [_normalize_lookup_text(value) for value in values if _clean_text(value)]
+    for text in normalized_values:
+        if text in canonical_by_normalized:
+            return canonical_by_normalized[text]
+        if text in alias_by_normalized:
+            return alias_by_normalized[text]
+
+    for text in normalized_values:
+        for alias, canonical in alias_by_normalized.items():
+            if re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text):
+                return canonical
+
+    return canonical_by_normalized.get("others", "Others")
+
+
+def normalize_service_identity(record: Dict[str, Any]) -> None:
+    display = _clean_text(
+        record.get("display_service_name")
+        or record.get("raw_service_name")
+        or record.get("service_name")
+        or record.get("canonical_service_name")
+    )
+    canonical = canonicalize_service_name(
+        record.get("canonical_service_name"),
+        record.get("service_name"),
+        display,
+        record.get("offer_raw_text"),
+        record.get("offer_content"),
+    )
+    record["display_service_name"] = display
+    record["canonical_service_name"] = canonical
+    record["service_name"] = canonical
+
+
 def chunk_segments(segments: List[Dict[str, Any]], chunk_size: int) -> List[List[Dict[str, Any]]]:
     if chunk_size <= 0:
         return [segments]
@@ -236,6 +304,7 @@ def normalize_offer_record(record: Dict[str, Any], allowed_indexes: set[int]) ->
     if not isinstance(evidence, list):
         evidence = [evidence] if evidence != "" else []
     normalized["evidence_segments"] = [int(item) for item in evidence if str(item).isdigit() and int(item) in allowed_indexes]
+    normalize_service_identity(normalized)
     return normalized
 
 
