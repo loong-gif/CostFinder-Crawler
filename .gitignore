@@ -41,6 +41,7 @@ screenshots/
 
 # 配置文件
 .env
+.env.backup*
 *.local
 
 # OCR缓存
@@ -57,3 +58,4 @@ screenshots/
 frontend/
 !tests/fixtures/
 !tests/fixtures/**/*.json
+!CF_Extrator_Agent/data/service_name_dict.json

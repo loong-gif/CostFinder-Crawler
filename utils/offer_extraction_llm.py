@@ -7,14 +7,24 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
 from crawler.promo_site_crawler import build_llm_ready_content, filter_page_segments, normalize_segment_text
 
+SERVICE_NAME_DICT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "CF_Extrator_Agent"
+    / "data"
+    / "service_name_dict.json"
+)
+
 OFFER_OUTPUT_FIELDS = [
     "service_name",
+    "display_service_name",
+    "canonical_service_name",
     "service_category",
     "template_type",
     "offer_content",
@@ -47,13 +57,19 @@ def parse_json_payload(value: Any, default: Any) -> Any:
 
 def build_text_segments(page_content: str) -> List[Dict[str, Any]]:
     blocks = []
-    for idx, part in enumerate(re.split(r"(?:===|\n{2,})", page_content or "")):
+    seen_indexes: set[int] = set()
+    for fallback_idx, part in enumerate(re.split(r"(?:===|\n{2,})", page_content or "")):
         text = normalize_segment_text(part)
         if not text:
             continue
+        match = re.match(r"^\[SEGMENT\s+(\d+)\]", text, flags=re.IGNORECASE)
+        index = int(match.group(1)) if match else fallback_idx
+        while index in seen_indexes:
+            index += 1
+        seen_indexes.add(index)
         blocks.append(
             {
-                "index": idx,
+                "index": index,
                 "tag": "text_block",
                 "text": text,
                 "text_length": len(text),
@@ -64,6 +80,46 @@ def build_text_segments(page_content: str) -> List[Dict[str, Any]]:
         if text:
             blocks.append({"index": 0, "tag": "text_block", "text": text, "text_length": len(text)})
     return blocks
+
+
+def load_service_name_dictionary() -> Dict[str, Any]:
+    try:
+        payload = json.loads(SERVICE_NAME_DICT_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"standardized_names": ["Others"], "aliases": {}, "display_service_names": []}
+    names = payload.get("standardized_names") or []
+    if "Others" not in names:
+        names.append("Others")
+    payload["standardized_names"] = names
+    payload.setdefault("aliases", {})
+    payload.setdefault("display_service_names", [])
+    return payload
+
+
+def get_standardized_service_names() -> List[str]:
+    return [str(item).strip() for item in load_service_name_dictionary().get("standardized_names", []) if str(item).strip()]
+
+
+def get_display_service_names() -> List[str]:
+    dictionary = load_service_name_dictionary()
+    names = [str(item).strip() for item in dictionary.get("display_service_names", []) if str(item).strip()]
+    aliases = [str(item).strip() for item in dictionary.get("aliases", {}).keys() if str(item).strip()]
+    return sorted(set(names + aliases))
+
+
+def chunk_segments(segments: List[Dict[str, Any]], chunk_size: int) -> List[List[Dict[str, Any]]]:
+    if chunk_size <= 0:
+        return [segments]
+    return [segments[index:index + chunk_size] for index in range(0, len(segments), chunk_size)]
+
+
+def merge_offer_payloads(payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    offers: List[Dict[str, Any]] = []
+    for payload in payloads:
+        items = payload.get("offers", []) if isinstance(payload, dict) else []
+        if isinstance(items, list):
+            offers.extend(item for item in items if isinstance(item, dict))
+    return {"offers": offers}
 
 
 def load_filtered_segments(row: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -100,7 +156,7 @@ def build_candidate_block_selection_messages(row: Dict[str, Any], segments: List
         {
             "role": "user",
             "content": (
-                "Choose the smallest useful evidence set for extracting structured offers.\n"
+                "Choose all useful evidence blocks for extracting structured offers. Do not cap selection when many rows are prices.\n"
                 "Return JSON in this shape:\n"
                 '{"selected_segments":[{"index":0,"reason":"contains Botox unit price"}],'
                 '"excluded_segments":[{"index":3,"reason":"navigation or CTA"}],"summary":"..."}\n'
@@ -116,6 +172,8 @@ def build_offer_extraction_messages(
 ) -> List[Dict[str, str]]:
     segment_lines = [f"[{item['index']}] {item['text']}" for item in selected_segments]
     schema_lines = ", ".join(OFFER_OUTPUT_FIELDS)
+    standardized_names = json.dumps(get_standardized_service_names(), ensure_ascii=False)
+    display_names = json.dumps(get_display_service_names()[:500], ensure_ascii=False)
     return [
         {
             "role": "system",
@@ -123,8 +181,10 @@ def build_offer_extraction_messages(
                 "You extract aesthetic offers into strict JSON. "
                 "Use only the supplied evidence segments. "
                 "Do not infer missing values. "
-                "Do not treat navigation, CTA, or commerce labels as service_name. "
+                "Do not treat navigation, CTA, or commerce labels as service names. "
                 "If a pricing block contains multiple offers, split them into separate records. "
+                "service_name and canonical_service_name must be canonical categories from the allowed enum. "
+                "display_service_name must preserve the exact visible treatment/product name from the page. "
                 "Return JSON with a single top-level key offers."
             ),
         },
@@ -133,6 +193,10 @@ def build_offer_extraction_messages(
             "content": (
                 f"Extract offers for {row.get('domain_name', '')} {row.get('subpage_url', '')}.\n"
                 f"Each offer must include these keys: {schema_lines}.\n"
+                f"Allowed canonical service_name/canonical_service_name enum: {standardized_names}.\n"
+                f"Known display service names/aliases, when applicable: {display_names}.\n"
+                "For service_name use the best canonical enum value. For display_service_name use the visible page wording such as Restylane Kysse or Lip Filler. "
+                "For canonical_service_name use the same canonical enum as service_name. "
                 "For missing scalar fields use an empty string. For evidence_segments use a list of segment indexes.\n"
                 f"Evidence:\n{json.dumps(segment_lines, ensure_ascii=False, indent=2)}"
             ),
@@ -140,10 +204,14 @@ def build_offer_extraction_messages(
     ]
 
 
-def rule_based_candidate_block_selection(segments: List[Dict[str, Any]], max_segments: int = 8) -> Dict[str, Any]:
+def rule_based_candidate_block_selection(segments: List[Dict[str, Any]], max_segments: int = 0) -> Dict[str, Any]:
     ranked = sorted(segments, key=lambda item: (-int(item.get("score", 0)), item.get("index", 0)))
-    selected = [{"index": item["index"], "reason": "high heuristic relevance"} for item in ranked[:max_segments] if item.get("score", 0) > 0]
-    excluded = [{"index": item["index"], "reason": "not selected by heuristic"} for item in ranked[max_segments:]]
+    kept = [item for item in ranked if item.get("score", 0) > 0]
+    if max_segments and max_segments > 0:
+        kept = kept[:max_segments]
+    selected = [{"index": item["index"], "reason": "high heuristic relevance"} for item in kept]
+    selected_ids = {item["index"] for item in kept}
+    excluded = [{"index": item["index"], "reason": "not selected by heuristic"} for item in ranked if item.get("index") not in selected_ids]
     return {
         "selected_segments": selected,
         "excluded_segments": excluded,
@@ -244,7 +312,8 @@ def build_llm_ready_row(row: Dict[str, Any]) -> Dict[str, Any]:
 def extract_offers_for_row(
     row: Dict[str, Any],
     client: Optional[OpenAICompatibleClient] = None,
-    selection_limit: int = 8,
+    selection_limit: int = 0,
+    extraction_chunk_size: int = 12,
 ) -> Dict[str, Any]:
     prepared = build_llm_ready_row(row)
     filtered_segments = prepared["page_segments_filtered"]
@@ -259,10 +328,32 @@ def extract_offers_for_row(
         for item in selection_payload.get("selected_segments", [])
         if isinstance(item, dict) and str(item.get("index", "")).isdigit()
     }
+    rule_selection = rule_based_candidate_block_selection(filtered_segments, max_segments=selection_limit)
+    rule_indexes = {
+        int(item["index"])
+        for item in rule_selection.get("selected_segments", [])
+        if isinstance(item, dict) and str(item.get("index", "")).isdigit()
+    }
+    # Use the union so model selection cannot silently drop price rows from long tables.
+    selected_indexes |= rule_indexes
+    selection_payload = {
+        **selection_payload,
+        "selected_segments": [
+            {"index": index, "reason": "llm_or_rule_selected"}
+            for index in sorted(selected_indexes)
+        ],
+        "rule_selected_count": len(rule_indexes),
+        "llm_selected_count": len(selection_payload.get("selected_segments", []) or []),
+        "selection_strategy": "llm_union_rule_high_signal",
+    }
+
     selected_segments = [item for item in filtered_segments if item.get("index") in selected_indexes]
     offer_messages = build_offer_extraction_messages(prepared, selected_segments)
+    chunk_payloads: List[Dict[str, Any]] = []
     if client and selected_segments:
-        offers_payload = client.create_json_response(offer_messages)
+        for segment_chunk in chunk_segments(selected_segments, extraction_chunk_size):
+            chunk_payloads.append(client.create_json_response(build_offer_extraction_messages(prepared, segment_chunk)))
+        offers_payload = merge_offer_payloads(chunk_payloads)
     else:
         offers_payload = {"offers": []}
 
@@ -274,6 +365,7 @@ def extract_offers_for_row(
         "selected_segments": selected_segments,
         "candidate_block_selection_prompt": candidate_messages,
         "offer_extraction_prompt": offer_messages,
+        "offer_extraction_chunks": len(chunk_payloads),
         "offers": normalize_offer_payload(offers_payload, allowed_indexes=selected_indexes)["offers"],
     }
 

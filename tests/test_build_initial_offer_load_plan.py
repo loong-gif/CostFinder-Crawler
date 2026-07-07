@@ -76,6 +76,49 @@ def test_build_page_plan_with_llm_builds_master_and_evidence_rows():
     assert page["plan"]["evidence_rows"][0]["offer_fingerprint"] == master["offer_fingerprint"]
 
 
+def test_build_page_plan_can_use_chunking_extractor_without_losing_segments():
+    row = {
+        "promo_website_id": 1,
+        "business_id": 2,
+        "domain_name": "revivemedspaokc.com",
+        "subpage_url": "https://revivemedspaokc.com/pricing",
+        "page_content": "[SEGMENT 6]Botox $11 Per Unit\n[SEGMENT 7]Dysport $3.70 Per Unit",
+    }
+
+    def extractor(row, client):
+        return {
+            "selected_segments": [{"index": 6}, {"index": 7}],
+            "candidate_block_selection": {"summary": "all selected"},
+            "offer_extraction_chunks": 2,
+            "offers": [
+                {
+                    "service_name": "Botox",
+                    "display_service_name": "Botox",
+                    "canonical_service_name": "Botox",
+                    "offer_raw_text": "Botox $11 Per Unit",
+                    "original_price": "11",
+                    "unit_type": "unit",
+                    "evidence_segments": [6],
+                },
+                {
+                    "service_name": "Dysport",
+                    "display_service_name": "Dysport",
+                    "canonical_service_name": "Dysport",
+                    "offer_raw_text": "Dysport $3.70 Per Unit",
+                    "original_price": "3.70",
+                    "unit_type": "unit",
+                    "evidence_segments": [7],
+                },
+            ],
+        }
+
+    page = module.build_page_plan(row, FakeLlmClient(), extractor=extractor)
+
+    assert len(page["offers"]) == 2
+    assert page["plan"]["summary"]["master_rows"] == 2
+    assert {item["canonical_service_name"] for item in page["plan"]["master_rows"]} == {"Botox", "Dysport"}
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -108,6 +108,28 @@ def test_display_service_can_differ_from_canonical_for_lip_flip():
     assert "discount_price:99" in master["price_signature"]
 
 
+def test_master_row_prefers_display_and_canonical_service_fields():
+    page = _page("[SEGMENT 10]Restylane Kysse $650/syringe")
+    segments = build_segment_records(page)
+    offer = {
+        "service_name": "Dermal Filler",
+        "display_service_name": "Restylane Kysse",
+        "canonical_service_name": "Dermal Filler",
+        "offer_raw_text": "Restylane Kysse $650/syringe",
+        "original_price": "650",
+        "unit_type": "syringe",
+        "evidence_segments": [10],
+    }
+
+    master = build_master_offer_row(offer, page, segments)
+
+    assert master["raw_service_name"] == "Dermal Filler"
+    assert master["display_service_name"] == "Restylane Kysse"
+    assert master["canonical_service_name"] == "Dermal Filler"
+    assert master["service_name"] == "Dermal Filler"
+    assert master["price_model"] == "per_syringe"
+
+
 def test_inference_helpers_are_stable():
     assert infer_canonical_service_name("Lip Flip") == "Neurotoxin"
     assert infer_offer_type({"membership_price": "199", "offer_raw_text": "$199/month"}) == "membership"

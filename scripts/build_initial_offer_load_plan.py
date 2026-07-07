@@ -141,7 +141,21 @@ def build_page_plan(row: Dict[str, Any], llm_client: Any, extractor: Optional[An
                 from utils.offer_extraction_llm import extract_offers_for_row
 
                 extractor = extract_offers_for_row
-            extraction = extractor(row, client=llm_client)
+            llm_row = {
+                **row,
+                "page_segments_filtered": [
+                    {
+                        "index": item.get("segment_index"),
+                        "tag": item.get("segment_type") or "text_block",
+                        "text": item.get("text") or "",
+                        "text_length": len(item.get("text") or ""),
+                        "score": item.get("content_quality_score") or 0,
+                    }
+                    for item in segment_records
+                    if item.get("is_offer_signal")
+                ],
+            }
+            extraction = extractor(llm_row, client=llm_client)
         except Exception as exc:  # noqa: BLE001
             extract_error = str(exc)
     plan = plan_initial_offer_load(row, extraction.get("offers") or [], segment_records)
