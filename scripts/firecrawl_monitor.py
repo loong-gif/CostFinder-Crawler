@@ -59,6 +59,7 @@ from crawler.promo_site_crawler import normalize_domain
 from crawler.staging_recrawl import PROMO_MONITOR_STATE_TABLE, MonitorStateStore, load_supabase_client
 from utils.firecrawl_client import get_firecrawl_client
 from utils.monitor_target_urls import normalize_monitor_url, pick_monitor_urls
+from utils.service_category_lookup import MASTER_CATEGORY_PROMPT
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "monitor_results"
 REPORT_PREFIX = "firecrawl_monitor"
@@ -128,7 +129,6 @@ EXTRACTION_SCHEMA = {
                     "discount_price": {"type": "number"},
                     "unit_type": {"type": "string"},
                     "template_type": {"type": "string"},
-                    "billing_period": {"type": "string"},
                     "valid_from": {"type": "string"},
                     "valid_through": {"type": "string"},
                     "description": {"type": "string"},
@@ -139,12 +139,16 @@ EXTRACTION_SCHEMA = {
 }
 
 EXTRACTION_PROMPT = (
-    "Extract each service, offer, special, and membership as a separate item in the offers array. "
+    "Extract each service offer, special, and promotion as a separate item in the offers array. "
     "For per-unit pricing (Botox, fillers, neurotoxins), capture the numeric price AND unit_type "
     "(unit, syringe, area, vial). For promotions with was/now pricing, capture both regular_price "
-    "(the original/was price) and discount_price (the sale/now price). For memberships, capture "
-    "billing_period (monthly, annual, weekly). Set service_category to Injectables, Fillers, "
-    "Memberships, Skincare, Body, or Other. Return one item per distinct price point, not one per category."
+    "(the original/was price) and discount_price (the sale/now price). "
+    "Membership plan tiers (monthly fee, tier name, benefits) are tracked separately — do not "
+    "include them in offers. Do not extract free consultations or consultation-only bookings. "
+    "Do not extract retail skincare/catalog shop SKUs from /collections or /shop pages as treatment offers. "
+    "encode plan billing_period on individual service items. "
+    f"Set service_category to one of: {MASTER_CATEGORY_PROMPT}. "
+    "Return one item per distinct price point, not one per category."
 )
 
 

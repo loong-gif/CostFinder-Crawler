@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import SupabaseRestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -43,65 +44,6 @@ PAGE_SIZE = 1000
 STAGING_SELECT = (
     "promo_website_id,subpage_url,domain_name,page_content,crawl_timestamp,processed_status,name"
 )
-
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.raw_base_url = base_url.rstrip("/")
-        self.base_url = self.raw_base_url + "/rest/v1"
-        self.service_role_key = service_role_key
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        last_err: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=90)
-                response.raise_for_status()
-                return response.json()
-            except requests.RequestException as exc:
-                last_err = exc
-                if attempt < 2:
-                    import time
-                    time.sleep(2 * (attempt + 1))
-        raise last_err  # type: ignore[misc]
-
-    def update_row(self, table: str, filters: Dict[str, str], payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        response = self.session.patch(
-            f"{self.base_url}/{table}",
-            params=filters,
-            headers={"Prefer": "return=representation"},
-            json=payload,
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()
 
 
 def load_supabase_client() -> SupabaseRestClient:
@@ -434,17 +376,7 @@ def apply_updates(client: SupabaseRestClient, results: List[Dict[str, Any]]) -> 
             "crawl_timestamp": now_iso,
             "processed_status": False,
         }
-        if processed:
-            payload["page_content_llm"] = processed.get("page_content_llm") or ""
-            payload["page_segments_raw"] = json.dumps(
-                processed.get("page_segments_raw") or [], ensure_ascii=False, separators=(",", ":")
-            )
-            payload["page_segments_filtered"] = json.dumps(
-                processed.get("page_segments_filtered") or [], ensure_ascii=False, separators=(",", ":")
-            )
-            payload["content_quality_flags"] = json.dumps(
-                processed.get("content_quality_flags") or [], ensure_ascii=False, separators=(",", ":")
-            )
+        # ponytail: staging 表只有 page_content/crawl_timestamp/processed_status
         client.update_row(TABLE, {"promo_website_id": f"eq.{row_id}"}, payload)
         updated += 1
     return updated

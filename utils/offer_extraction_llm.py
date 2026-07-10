@@ -13,6 +13,13 @@ from typing import Any, Dict, Iterable, List, Optional
 import requests
 
 from crawler.promo_site_crawler import build_llm_ready_content, filter_page_segments, normalize_segment_text
+from utils.membership_plans import (
+    extract_membership_plans_for_row,
+    normalize_membership_plan_refs,
+)
+from utils.membership_paths import is_membership_page_url
+from utils.offer_scope_filter import filter_service_offers
+from utils.service_category_lookup import resolve_service_category
 
 SERVICE_NAME_DICT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -32,7 +39,6 @@ OFFER_OUTPUT_FIELDS = [
     "discount_price",
     "discount_amount",
     "discount_percent",
-    "membership_price",
     "unit_type",
     "offer_raw_text",
     "evidence_segments",
@@ -250,6 +256,9 @@ def build_offer_extraction_messages(
                 "Use only the supplied evidence segments. "
                 "Do not infer missing values. "
                 "Do not treat navigation, CTA, or commerce labels as service names. "
+                "Do not extract free consultations, consultation-only bookings, membership plan tier fees, "
+                "or retail skincare/catalog shop products as offers. "
+                "Membership plan structure is stored separately; retail SKUs belong in promo_products_master. "
                 "If a pricing block contains multiple offers, split them into separate records. "
                 "service_name and canonical_service_name must be canonical categories from the allowed enum. "
                 "display_service_name must preserve the exact visible treatment/product name from the page. "
@@ -305,6 +314,13 @@ def normalize_offer_record(record: Dict[str, Any], allowed_indexes: set[int]) ->
         evidence = [evidence] if evidence != "" else []
     normalized["evidence_segments"] = [int(item) for item in evidence if str(item).isdigit() and int(item) in allowed_indexes]
     normalize_service_identity(normalized)
+    category, _, confidence = resolve_service_category(
+        normalized.get("service_name", ""),
+        normalized.get("service_category", ""),
+        min_confidence="medium",
+    )
+    if category and confidence in {"high", "medium"}:
+        normalized["service_category"] = category
     return normalized
 
 
@@ -314,11 +330,13 @@ def normalize_offer_payload(payload: Any, allowed_indexes: set[int]) -> Dict[str
     if not isinstance(offers, list):
         offers = []
     return {
-        "offers": [
-            normalize_offer_record(item, allowed_indexes)
-            for item in offers
-            if isinstance(item, dict)
-        ]
+        "offers": filter_service_offers(
+            [
+                normalize_offer_record(item, allowed_indexes)
+                for item in offers
+                if isinstance(item, dict)
+            ]
+        )
     }
 
 
@@ -426,6 +444,16 @@ def extract_offers_for_row(
     else:
         offers_payload = {"offers": []}
 
+    normalized_offers = normalize_offer_payload(offers_payload, allowed_indexes=selected_indexes)["offers"]
+    membership_plans: List[Dict[str, Any]] = []
+    if client and is_membership_page_url(str(prepared.get("subpage_url") or "")):
+        page_text = prepared.get("page_content_llm") or prepared.get("page_content") or ""
+        membership_plans = extract_membership_plans_for_row(
+            prepared,
+            client=client,
+            page_content=page_text,
+        )
+
     return {
         "domain_name": prepared.get("domain_name", ""),
         "subpage_url": prepared.get("subpage_url", ""),
@@ -435,7 +463,8 @@ def extract_offers_for_row(
         "candidate_block_selection_prompt": candidate_messages,
         "offer_extraction_prompt": offer_messages,
         "offer_extraction_chunks": len(chunk_payloads),
-        "offers": normalize_offer_payload(offers_payload, allowed_indexes=selected_indexes)["offers"],
+        "offers": normalized_offers,
+        "membership_plans": normalize_membership_plan_refs(membership_plans),
     }
 
 

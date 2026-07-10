@@ -22,7 +22,7 @@ def test_offer_item_fields_align_master():
     item_props = EXTRACTION_SCHEMA["properties"]["offers"]["items"]["properties"]
     assert item_props["regular_price"]["type"] == "number"
     assert item_props["discount_price"]["type"] == "number"
-    for field in ("unit_type", "billing_period", "service_category", "template_type"):
+    for field in ("unit_type", "service_category", "template_type"):
         assert field in item_props
         assert item_props[field]["type"] == "string"
 

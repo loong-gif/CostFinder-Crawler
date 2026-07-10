@@ -23,11 +23,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from align_service_names import infer_alignment  # noqa: E402
+from utils.align_service_names import infer_alignment  # noqa: E402
+from utils.membership_plan_lookup import resolve_plan_fields  # noqa: E402
 from config.settings import OUTPUT_ENCODING  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
 
 
-TABLE_NAME = "promo_offer_master"
+TABLE_NAME = "promo_offer_master_enriched"
+FALLBACK_TABLE_NAME = "promo_offer_master"
+FALLBACK_SELECT = (
+    "*,promo_membership_plans(tier_name,plan_name,monthly_fee,annual_fee,billing_period,benefits)"
+)
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
 DEFAULT_RESULT_DIR = PROJECT_ROOT / "output" / "results"
 PAGE_SIZE = 1000
@@ -40,14 +46,10 @@ EXACT_DUPLICATE_FIELDS = [
     "template_type",
     "offer_raw_text",
     "offer_content",
-    "original_price",
+    "regular_price",
     "discount_price",
     "discount_amount",
     "discount_percent",
-    "membership_name",
-    "membership_price",
-    "billing_period",
-    "minimum_term",
     "unit_type",
     "min_unit",
     "delivered_unit",
@@ -63,43 +65,6 @@ BY_UNIT_PATTERNS = [
     ("syringe", re.compile(r"(?:\$?\s*\d+(?:\.\d+)?\s*(?:/|per)\s*(?:syringe|half syringe)\b|\bhalf syringe\b|\bsyringe\b)", re.IGNORECASE)),
     ("area", re.compile(r"(?:\$?\s*\d+(?:\.\d+)?\s*(?:/|per)\s*area\b|\b\d+\s+areas?\b)", re.IGNORECASE)),
 ]
-
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
 
 
 @dataclass
@@ -143,9 +108,20 @@ def fetch_all_rows(client: SupabaseRestClient, *, limit: Optional[int]) -> List[
     rows: List[Dict[str, Any]] = []
     offset = 0
     remaining = limit
+    table = TABLE_NAME
+    select = "*"
     while True:
         page_limit = PAGE_SIZE if remaining is None else min(PAGE_SIZE, remaining)
-        batch = client.fetch_rows(TABLE_NAME, "*", limit=page_limit, offset=offset, order="id.asc")
+        try:
+            batch = client.fetch_rows(table, select, limit=page_limit, offset=offset, order="id.asc")
+        except Exception:
+            if table != FALLBACK_TABLE_NAME:
+                table = FALLBACK_TABLE_NAME
+                select = FALLBACK_SELECT
+                offset = 0
+                rows = []
+                continue
+            raise
         if not batch:
             break
         rows.extend(batch)
@@ -334,6 +310,7 @@ def audit_rows(rows: Sequence[Dict[str, Any]]) -> Tuple[List[Issue], List[Dict[s
     alignment_rows: List[Dict[str, Any]] = []
 
     for row in rows:
+        row = resolve_plan_fields(row)
         promo_offer_id = row.get("id")
         source_name = str(row.get("source_name") or "").strip()
         service_name = str(row.get("service_name") or "").strip()
@@ -342,14 +319,14 @@ def audit_rows(rows: Sequence[Dict[str, Any]]) -> Tuple[List[Issue], List[Dict[s
         offer_content = row.get("offer_content")
         template_type = normalize_text(row.get("template_type"))
         unit_type = normalize_text(row.get("unit_type"))
-        original_price = parse_float(row.get("original_price"))
+        original_price = parse_float(row.get("regular_price") or row.get("original_price"))
         discount_price = parse_float(row.get("discount_price"))
-        membership_price = parse_float(row.get("membership_price"))
         discount_amount = parse_float(row.get("discount_amount"))
         discount_percent = parse_float(row.get("discount_percent"))
         min_unit = parse_float(row.get("min_unit"))
         delivered_unit = parse_float(row.get("delivered_unit"))
-        membership_name = str(row.get("membership_name") or "").strip()
+        membership_plan_id = row.get("membership_plan_id")
+        membership_display_name = str(row.get("membership_display_name") or "").strip()
         is_membership_required = parse_bool(row.get("is_membership_required"))
 
         alignment = infer_alignment(service_name, service_category)
@@ -433,20 +410,36 @@ def audit_rows(rows: Sequence[Dict[str, Any]]) -> Tuple[List[Issue], List[Dict[s
         if unit_type == "unit" and min_unit is None and delivered_unit is None:
             issues.append(Issue(promo_offer_id, source_name, service_name, "unit_type_unit_missing_quantity", "medium", "unit_type=unit，但 min_unit / delivered_unit 都为空"))
 
-        if template_type == "membership" and not membership_name:
-            issues.append(Issue(promo_offer_id, source_name, service_name, "membership_missing_name", "medium", "template_type=MEMBERSHIP，但 membership_name 为空"))
-        if template_type == "membership" and membership_price is None and not is_membership_required:
-            issues.append(Issue(promo_offer_id, source_name, service_name, "membership_missing_price", "medium", "membership 模板没有 membership_price，且未标记 membership required"))
+        if membership_plan_id and not membership_display_name:
+            issues.append(
+                Issue(
+                    promo_offer_id,
+                    source_name,
+                    service_name,
+                    "membership_plan_missing_tier",
+                    "medium",
+                    "membership_plan_id 存在但 JOIN 不到 plan tier/plan_name",
+                )
+            )
+        if is_membership_required and not membership_plan_id and discount_price is None:
+            issues.append(
+                Issue(
+                    promo_offer_id,
+                    source_name,
+                    service_name,
+                    "membership_required_missing_price",
+                    "medium",
+                    "is_membership_required 但 discount_price 为空",
+                )
+            )
         if template_type == "discount" and discount_price is None and discount_amount is None and discount_percent is None:
             issues.append(Issue(promo_offer_id, source_name, service_name, "discount_missing_discount_fields", "high", "template_type=DISCOUNT，但 discount 相关字段全空"))
         if original_price is not None and discount_price is not None and discount_price > original_price:
-            issues.append(Issue(promo_offer_id, source_name, service_name, "discount_price_gt_original_price", "high", f"discount_price={discount_price} 大于 original_price={original_price}"))
-        if any(value is not None and value < 0 for value in [original_price, discount_price, membership_price, discount_amount, discount_percent]):
+            issues.append(Issue(promo_offer_id, source_name, service_name, "discount_price_gt_regular_price", "high", f"discount_price={discount_price} 大于 regular_price={original_price}"))
+        if any(value is not None and value < 0 for value in [original_price, discount_price, discount_amount, discount_percent]):
             issues.append(Issue(promo_offer_id, source_name, service_name, "negative_price_field", "high", "存在负数价格/折扣字段"))
         if discount_percent is not None and discount_percent > 100:
             issues.append(Issue(promo_offer_id, source_name, service_name, "discount_percent_gt_100", "high", f"discount_percent={discount_percent}"))
-        if membership_price is not None and membership_price == 0:
-            issues.append(Issue(promo_offer_id, source_name, service_name, "membership_price_zero", "medium", "membership_price = 0"))
 
     return issues, alignment_rows
 

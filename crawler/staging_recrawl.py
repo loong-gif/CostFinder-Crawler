@@ -22,11 +22,11 @@ from crawler.promo_site_crawler import (
     SiteTarget,
     build_start_url,
     is_filtered_process_flag,
-    normalize_domain,
-)
+    normalize_domain)
 from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
 from utils.page_content_processor import normalize_raw_page_item
+from utils.membership_paths import is_membership_page_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMO_MONITOR_STATE_TABLE = "promo_monitor_state"
@@ -34,7 +34,6 @@ MONITOR_STATE_FALLBACK_PATH = PROJECT_ROOT / "output" / "monitor_results" / "mon
 
 DEFAULT_MAX_CRAWL_PAGES = FIRECRAWL_CRAWL_MAX_PAGES
 DEFAULT_CRAWL_TIMEOUT_SECS = FIRECRAWL_CRAWL_TIMEOUT_SECS
-
 
 @dataclass(frozen=True)
 class MonitorStateRow:
@@ -44,7 +43,6 @@ class MonitorStateRow:
     last_change_at: Optional[str] = None
     last_processed_at: Optional[str] = None
 
-
 @dataclass(frozen=True)
 class SyncTarget:
     domain_name: str
@@ -52,7 +50,6 @@ class SyncTarget:
     name: str
     master_id: Optional[int]
     business_id: Optional[int]
-
 
 class SupabaseRestClient:
     """Minimal Supabase PostgREST client for staging recrawl workflows."""
@@ -78,8 +75,7 @@ class SupabaseRestClient:
         filters: Optional[Dict[str, str]] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        order: Optional[str] = None) -> List[Dict[str, Any]]:
         params: Dict[str, str] = {"select": select}
         if filters:
             params.update(filters)
@@ -99,8 +95,7 @@ class SupabaseRestClient:
             params=filters,
             headers={"Prefer": "return=representation"},
             json=payload,
-            timeout=60,
-        )
+            timeout=60)
         response.raise_for_status()
         return response.json()
 
@@ -109,8 +104,7 @@ class SupabaseRestClient:
             f"{self.base_url}/{table}",
             headers={"Prefer": "return=representation"},
             json=rows,
-            timeout=60,
-        )
+            timeout=60)
         response.raise_for_status()
         return response.json()
 
@@ -120,11 +114,9 @@ class SupabaseRestClient:
             params={"on_conflict": on_conflict},
             headers={"Prefer": "resolution=merge-duplicates,return=representation"},
             json=rows,
-            timeout=60,
-        )
+            timeout=60)
         response.raise_for_status()
         return response.json()
-
 
 def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestClient:
     root = project_root or Path(__file__).resolve().parents[1]
@@ -134,7 +126,6 @@ def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestCli
     if not base_url or not service_role_key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)
-
 
 def canonicalize_page_url(url: str) -> str:
     raw = (url or "").strip()
@@ -149,7 +140,6 @@ def canonicalize_page_url(url: str) -> str:
     clean = parsed._replace(netloc=host, path=path, query="", fragment="")
     return urlunparse(clean)
 
-
 def fetch_all_rows(
     client: SupabaseRestClient,
     table: str,
@@ -157,8 +147,7 @@ def fetch_all_rows(
     *,
     filters: Optional[Dict[str, str]] = None,
     page_size: int = 500,
-    order: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    order: Optional[str] = None) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     offset = 0
     while True:
@@ -168,8 +157,7 @@ def fetch_all_rows(
             filters=filters,
             limit=page_size,
             offset=offset,
-            order=order,
-        )
+            order=order)
         if not batch:
             break
         rows.extend(batch)
@@ -177,7 +165,6 @@ def fetch_all_rows(
             break
         offset += page_size
     return rows
-
 
 def normalize_seed_url(url: str) -> str:
     raw = (url or "").strip()
@@ -188,7 +175,6 @@ def normalize_seed_url(url: str) -> str:
     clean = parsed._replace(query="", fragment="")
     return urlunparse(clean)
 
-
 def _document_to_crawl_item(doc: Any) -> Dict[str, Any]:
     metadata = getattr(doc, "metadata", None)
     url = (getattr(metadata, "url", None) or getattr(metadata, "source_url", None) or "").strip()
@@ -197,7 +183,6 @@ def _document_to_crawl_item(doc: Any) -> Dict[str, Any]:
         "markdown": (getattr(doc, "markdown", None) or "").strip(),
         "title": (getattr(metadata, "title", None) or "").strip() if metadata else "",
     }
-
 
 def _crawl_documents_to_items(documents: Iterable[Any]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
@@ -210,14 +195,12 @@ def _crawl_documents_to_items(documents: Iterable[Any]) -> List[Dict[str, Any]]:
             items.append(item)
     return items
 
-
 def recrawl_domain_via_firecrawl(
     domain_name: str,
     *,
     client: Optional[SupabaseRestClient] = None,
     max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
-    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS,
-) -> tuple[SyncTarget, List[Dict[str, Any]], Dict[str, Any]]:
+    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS) -> tuple[SyncTarget, List[Dict[str, Any]], Dict[str, Any]]:
     """Re-crawl a single domain via Firecrawl crawl API."""
     sb_client = client or load_supabase_client()
     target = build_sync_target_for_domain(sb_client, domain_name)
@@ -229,23 +212,20 @@ def recrawl_domain_via_firecrawl(
         scrape_options=ScrapeOptions(formats=["markdown"]),
         allow_subdomains=True,
         ignore_query_parameters=True,
-        timeout=crawl_timeout_secs,
-    )
+        timeout=crawl_timeout_secs)
     documents = getattr(crawl_job, "data", None) or []
     crawl_rows = normalize_crawl_items(_crawl_documents_to_items(documents), target)
     log.info(
         "Firecrawl recrawl finished for {domain}: crawl_rows={rows}, status={status}".format(
             domain=target.domain_name,
             rows=len(crawl_rows),
-            status=getattr(crawl_job, "status", "unknown"),
-        )
+            status=getattr(crawl_job, "status", "unknown"))
     )
     return target, crawl_rows, {
         "crawl_status": getattr(crawl_job, "status", None),
         "crawl_total": getattr(crawl_job, "total", None),
         "crawl_completed": getattr(crawl_job, "completed", None),
     }
-
 
 def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -> SiteTarget:
     normalized_domain = normalize_domain(domain_name)
@@ -256,15 +236,13 @@ def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -
         client,
         "master_business_info",
         "id,business_id,name,website,website_clean,process_flag",
-        order="id.asc",
-    )
+        order="id.asc")
     promo_rows = fetch_all_rows(
         client,
         "promo_website_staging",
         "domain_name,name",
         filters={"domain_name": f"eq.{normalized_domain}"},
-        order="domain_name.asc",
-    )
+        order="domain_name.asc")
 
     master_row: Optional[Dict[str, Any]] = None
     for row in master_rows:
@@ -290,8 +268,7 @@ def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -
             website=(master_row.get("website") or "").strip(),
             website_clean=(master_row.get("website_clean") or "").strip(),
             process_flag=(master_row.get("process_flag") or "").strip(),
-            domain_name=normalized_domain,
-        )
+            domain_name=normalized_domain)
 
     return SiteTarget(
         master_id=None,
@@ -300,9 +277,7 @@ def build_site_target_for_domain(client: SupabaseRestClient, domain_name: str) -
         website=f"https://{normalized_domain}",
         website_clean=normalized_domain,
         process_flag="",
-        domain_name=normalized_domain,
-    )
-
+        domain_name=normalized_domain)
 
 def build_sync_target_for_domain(client: SupabaseRestClient, domain_name: str) -> SyncTarget:
     site = build_site_target_for_domain(client, domain_name)
@@ -314,9 +289,7 @@ def build_sync_target_for_domain(client: SupabaseRestClient, domain_name: str) -
         website_url=website_url,
         name=site.name,
         master_id=site.master_id,
-        business_id=site.business_id,
-    )
-
+        business_id=site.business_id)
 
 def normalize_crawl_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -> List[Dict[str, Any]]:
     crawl_timestamp = datetime.now(timezone.utc).isoformat()
@@ -327,32 +300,28 @@ def normalize_crawl_items(items: Iterable[Dict[str, Any]], target: SyncTarget) -
             crawl_timestamp=crawl_timestamp,
             default_domain_name=target.domain_name,
             default_name=target.name,
-            default_source_type="markdown",
-        )
+            default_source_type="markdown")
         if not staging_row:
             continue
         staging_row["domain_name"] = normalize_domain(staging_row.get("domain_name") or target.domain_name) or target.domain_name
+        staging_row["is_membership_page"] = is_membership_page_url(staging_row.get("subpage_url") or "")
         canonical_url = canonicalize_page_url(staging_row["subpage_url"])
         normalized[canonical_url or staging_row["subpage_url"]] = staging_row
     return list(normalized.values())
-
 
 def sync_crawl_rows_to_staging(
     client: SupabaseRestClient,
     target: SyncTarget,
     crawl_rows: List[Dict[str, Any]],
     *,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
+    dry_run: bool = False) -> Dict[str, Any]:
     """Sync Firecrawl crawl rows into promo_website_staging (page_content diff only)."""
     existing_rows = fetch_all_rows(
         client,
         "promo_website_staging",
-        "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name,"
-        "page_segments_raw,page_segments_filtered,page_content_llm,content_quality_flags",
+        "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name",
         filters={"domain_name": f"eq.{target.domain_name}"},
-        order="promo_website_id.asc",
-    )
+        order="promo_website_id.asc")
     existing_by_url = {
         canonicalize_page_url(row.get("subpage_url") or ""): row
         for row in existing_rows
@@ -375,10 +344,6 @@ def sync_crawl_rows_to_staging(
         matched += 1
         changed = (
             (existing.get("page_content") or "") != row["page_content"]
-            or (existing.get("page_segments_raw") or "") != (row.get("page_segments_raw") or "")
-            or (existing.get("page_segments_filtered") or "") != (row.get("page_segments_filtered") or "")
-            or (existing.get("page_content_llm") or "") != (row.get("page_content_llm") or "")
-            or (existing.get("content_quality_flags") or "") != (row.get("content_quality_flags") or "")
             or (existing.get("name") or None) != row["name"]
         )
         if not changed:
@@ -393,13 +358,10 @@ def sync_crawl_rows_to_staging(
                 "promo_website_id": existing["promo_website_id"],
                 "payload": {
                     "page_content": row["page_content"],
-                    "page_segments_raw": row.get("page_segments_raw") or "[]",
-                    "page_segments_filtered": row.get("page_segments_filtered") or "[]",
-                    "page_content_llm": row.get("page_content_llm") or "",
-                    "content_quality_flags": row.get("content_quality_flags") or "[]",
                     "name": row["name"],
                     "processed_status": False,
                     "last_updated_at": now_iso,
+                    "is_membership_page": row.get("is_membership_page", False),
                 },
                 "subpage_url": row["subpage_url"],
             }
@@ -413,14 +375,12 @@ def sync_crawl_rows_to_staging(
             client.update_row(
                 "promo_website_staging",
                 {"promo_website_id": f"eq.{item['promo_website_id']}"},
-                item["payload"],
-            )
+                item["payload"])
             updated_rows += 1
         if to_insert:
             client.insert_rows(
                 "promo_website_staging",
-                [{**row, "last_updated_at": now_iso} for row in to_insert],
-            )
+                [{**row, "last_updated_at": now_iso} for row in to_insert])
             inserted_rows = len(to_insert)
 
     return {
@@ -437,23 +397,20 @@ def sync_crawl_rows_to_staging(
         "sample_subpage_urls": [row["subpage_url"] for row in crawl_rows[:5]],
     }
 
-
 def recrawl_and_sync_domain(
     domain_name: str,
     *,
     client: Optional[SupabaseRestClient] = None,
     dry_run: bool = False,
     max_crawl_pages: int = DEFAULT_MAX_CRAWL_PAGES,
-    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS,
-) -> Dict[str, Any]:
+    crawl_timeout_secs: int = DEFAULT_CRAWL_TIMEOUT_SECS) -> Dict[str, Any]:
     """Run Firecrawl recrawl for one domain and sync cleaned rows to promo_website_staging."""
     sb_client = client or load_supabase_client()
     target, crawl_rows, run_meta = recrawl_domain_via_firecrawl(
         domain_name,
         client=sb_client,
         max_crawl_pages=max_crawl_pages,
-        crawl_timeout_secs=crawl_timeout_secs,
-    )
+        crawl_timeout_secs=crawl_timeout_secs)
     sync_report = sync_crawl_rows_to_staging(sb_client, target, crawl_rows, dry_run=dry_run)
     return {
         "action": "recrawled",
@@ -463,13 +420,47 @@ def recrawl_and_sync_domain(
         "upsert": sync_report,
     }
 
+def scrape_subpages_for_domain(
+    domain_name: str,
+    *,
+    client: SupabaseRestClient,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    domain = normalize_domain(domain_name)
+    rows = fetch_all_rows(
+        client,
+        "promo_website_staging",
+        "subpage_url,domain_name",
+        filters={"domain_name": f"eq.{domain}"},
+        order="promo_website_id.asc",
+    )
+    urls = [r["subpage_url"] for r in rows if r.get("subpage_url")]
+    if not urls:
+        return recrawl_domain_via_firecrawl(domain_name, client=client, max_crawl_pages=20)
+
+    target = build_sync_target_for_domain(client, domain)
+    fc = get_firecrawl_client()
+    items = []
+    for url in urls:
+        try:
+            result = fc.scrape_url(url)
+            doc = getattr(result, "data", result)
+            item = _document_to_crawl_item(doc) if not isinstance(doc, dict) else doc
+            if item.get("url") and item.get("markdown"):
+                items.append(item)
+        except Exception as exc:
+            log.warning("scrape failed for {u}: {e}", u=url, e=str(exc))
+
+    crawl_rows = normalize_crawl_items(items, target)
+    sync_report = sync_crawl_rows_to_staging(client, target, crawl_rows, dry_run=dry_run)
+    return {"hit_pages": len(crawl_rows), "run": {}, "upsert": sync_report}
+
 
 def upsert_hits_to_staging(
     client: SupabaseRestClient,
     hits: Iterable[Dict[str, Any]],
     *,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
+    dry_run: bool = False) -> Dict[str, Any]:
     """Upsert crawl hits into promo_website_staging with processed_status reset on content change."""
     hit_list = list(hits)
     if not hit_list:
@@ -487,11 +478,9 @@ def upsert_hits_to_staging(
         existing_rows = fetch_all_rows(
             client,
             "promo_website_staging",
-            "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name,"
-            "page_segments_raw,page_segments_filtered,page_content_llm,content_quality_flags",
+            "promo_website_id,domain_name,subpage_url,page_content,crawl_timestamp,processed_status,name",
             filters={"domain_name": f"eq.{domain}"},
-            order="promo_website_id.asc",
-        )
+            order="promo_website_id.asc")
         for row in existing_rows:
             key = canonicalize_page_url(row.get("subpage_url") or "")
             if key:
@@ -513,12 +502,9 @@ def upsert_hits_to_staging(
             "crawl_timestamp": row.get("crawl_timestamp") or datetime.now(timezone.utc).isoformat(),
             "subpage_url": subpage_url,
             "page_content": row.get("page_content") or "",
-            "page_segments_raw": row.get("page_segments_raw") or "[]",
-            "page_segments_filtered": row.get("page_segments_filtered") or "[]",
-            "page_content_llm": row.get("page_content_llm") or "",
-            "content_quality_flags": row.get("content_quality_flags") or "[]",
             "domain_name": normalize_domain(row.get("domain_name")) or row.get("domain_name"),
             "name": row.get("name") or None,
+            "is_membership_page": is_membership_page_url(subpage_url),
         }
 
         if existing is None:
@@ -527,10 +513,6 @@ def upsert_hits_to_staging(
 
         changed = (
             (existing.get("page_content") or "") != payload["page_content"]
-            or (existing.get("page_content_llm") or "") != payload["page_content_llm"]
-            or (existing.get("page_segments_raw") or "") != payload["page_segments_raw"]
-            or (existing.get("page_segments_filtered") or "") != payload["page_segments_filtered"]
-            or (existing.get("content_quality_flags") or "") != payload["content_quality_flags"]
             or (existing.get("name") or None) != payload["name"]
         )
         update_payload = dict(payload)
@@ -555,8 +537,7 @@ def upsert_hits_to_staging(
             client.update_row(
                 "promo_website_staging",
                 {"promo_website_id": f"eq.{item['promo_website_id']}"},
-                item["payload"],
-            )
+                item["payload"])
             updated_rows += 1
         if to_insert:
             client.insert_rows("promo_website_staging", to_insert)
@@ -572,7 +553,6 @@ def upsert_hits_to_staging(
         "would_insert_rows": len(to_insert),
     }
 
-
 class MonitorStateStore:
     """Persist monitor polling state in Supabase, with local JSON fallback if table is missing."""
 
@@ -580,8 +560,7 @@ class MonitorStateStore:
         self,
         client: Optional[SupabaseRestClient] = None,
         *,
-        fallback_path: Path = MONITOR_STATE_FALLBACK_PATH,
-    ):
+        fallback_path: Path = MONITOR_STATE_FALLBACK_PATH):
         self.client = client
         self.fallback_path = fallback_path
         self.use_supabase = client is not None
@@ -603,8 +582,7 @@ class MonitorStateStore:
             log.error(
                 "promo_monitor_state table unavailable ({error}); using local fallback at {path}".format(
                     error=exc,
-                    path=self.fallback_path,
-                )
+                    path=self.fallback_path)
             )
 
     def _load_fallback(self) -> None:
@@ -626,8 +604,7 @@ class MonitorStateStore:
         self.fallback_path.parent.mkdir(parents=True, exist_ok=True)
         self.fallback_path.write_text(
             json.dumps({"rows": self._fallback}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+            encoding="utf-8")
 
     def get_state(self, monitor_id: str) -> Optional[MonitorStateRow]:
         if self.use_supabase and self.client:
@@ -635,8 +612,7 @@ class MonitorStateStore:
                 PROMO_MONITOR_STATE_TABLE,
                 "monitor_id,domain_name,last_check_id,last_change_at,last_processed_at",
                 filters={"monitor_id": f"eq.{monitor_id}"},
-                limit=1,
-            )
+                limit=1)
             if rows:
                 row = rows[0]
                 return MonitorStateRow(
@@ -644,8 +620,7 @@ class MonitorStateStore:
                     domain_name=row.get("domain_name") or "",
                     last_check_id=row.get("last_check_id"),
                     last_change_at=row.get("last_change_at"),
-                    last_processed_at=row.get("last_processed_at"),
-                )
+                    last_processed_at=row.get("last_processed_at"))
             return None
 
         raw = self._fallback.get(monitor_id)
@@ -656,8 +631,7 @@ class MonitorStateStore:
             domain_name=raw.get("domain_name") or "",
             last_check_id=raw.get("last_check_id"),
             last_change_at=raw.get("last_change_at"),
-            last_processed_at=raw.get("last_processed_at"),
-        )
+            last_processed_at=raw.get("last_processed_at"))
 
     def upsert_mapping(self, monitor_id: str, domain_name: str) -> None:
         """Ensure monitor_id -> domain_name mapping exists without overwriting check cursor."""
@@ -669,8 +643,7 @@ class MonitorStateStore:
             domain_name=domain_name,
             last_check_id=existing.last_check_id if existing else None,
             last_change_at=existing.last_change_at if existing else None,
-            last_processed_at=existing.last_processed_at if existing else None,
-        )
+            last_processed_at=existing.last_processed_at if existing else None)
 
     def save_state(
         self,
@@ -679,8 +652,7 @@ class MonitorStateStore:
         domain_name: str,
         last_check_id: Optional[str],
         last_change_at: Optional[str] = None,
-        last_processed_at: Optional[str] = None,
-    ) -> None:
+        last_processed_at: Optional[str] = None) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
         payload = {
             "monitor_id": monitor_id,
@@ -696,8 +668,7 @@ class MonitorStateStore:
                 self.client.upsert_rows(
                     PROMO_MONITOR_STATE_TABLE,
                     [payload],
-                    on_conflict="monitor_id",
-                )
+                    on_conflict="monitor_id")
                 return
             except Exception as exc:
                 log.error("Failed to upsert monitor state to Supabase ({error}); falling back to file.", error=exc)

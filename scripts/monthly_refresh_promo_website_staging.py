@@ -23,7 +23,7 @@ from crawler.staging_recrawl import (
     SupabaseRestClient,
     fetch_all_rows,
     load_supabase_client,
-    recrawl_and_sync_domain,
+    scrape_subpages_for_domain,
 )
 
 REPORT_PREFIX = "monthly_promo_website_refresh"
@@ -122,12 +122,10 @@ def main() -> None:
 
     for index, domain in enumerate(domains, start=1):
         try:
-            result = recrawl_and_sync_domain(
+            result = scrape_subpages_for_domain(
                 domain,
                 client=client,
                 dry_run=bool(args.dry_run),
-                max_crawl_pages=args.max_crawl_pages,
-                crawl_timeout_secs=args.crawl_timeout_secs,
             )
             upsert = result.get("upsert") or {}
             total_crawl_rows += int(upsert.get("crawl_rows") or result.get("hit_pages") or 0)

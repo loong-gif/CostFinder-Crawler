@@ -27,20 +27,31 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.membership_plan_lookup import plan_display_name, resolve_plan_fields
 from utils.offer_evidence_segments import normalize_segment_text, normalize_url, split_page_content
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "results"
 REPORT_DIR = PROJECT_ROOT / "reports"
 PAGE_SIZE = 1000
 
-MASTER_TABLE = "promo_offer_master"
+MASTER_TABLE = "promo_offer_master_enriched"
+MASTER_TABLE_FALLBACK = "promo_offer_master"
 STAGING_TABLE = "promo_website_staging"
 
 MASTER_SELECT = (
     "id,channel,source_url,source_name,template_type,service_category,service_name,"
     "offer_raw_text,end_date,discount_percent,discount_amount,offer_content,"
-    "regular_price,discount_price,membership_price,unit_type,membership_name,"
-    "created_at,business_id,moderation_status,status"
+    "regular_price,discount_price,unit_type,membership_plan_id,is_membership_required,"
+    "plan_tier_name,plan_display_name,plan_monthly_fee,plan_billing_period,"
+    "created_at,business_id,status"
+)
+MASTER_SELECT_FALLBACK = (
+    "id,channel,source_url,source_name,template_type,service_category,service_name,"
+    "offer_raw_text,end_date,discount_percent,discount_amount,offer_content,"
+    "regular_price,discount_price,unit_type,membership_plan_id,is_membership_required,"
+    "created_at,business_id,status,"
+    "promo_membership_plans(tier_name,plan_name,monthly_fee,annual_fee,billing_period)"
 )
 STAGING_SELECT = (
     "promo_website_id,subpage_url,domain_name,page_content,crawl_timestamp,"
@@ -66,43 +77,6 @@ PROMO_PAGE_TERMS = re.compile(
     r"\b(specials?|promos?|promotions?|offers?|deals?|limited-time|savings?)\b",
     re.IGNORECASE,
 )
-
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=90)
-        response.raise_for_status()
-        return response.json()
-
 
 class LivePageProbe:
     def __init__(self, enabled: bool):
@@ -140,7 +114,6 @@ class LivePageProbe:
         self.cache[normalized] = text
         return self.cache[normalized]
 
-
 @dataclass
 class PageSnapshot:
     promo_website_id: Any
@@ -155,7 +128,6 @@ class PageSnapshot:
     processed_status: str
     needs_ocr: bool
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Audit active Website offers missing from their source URL")
     parser.add_argument("--limit", type=int, default=None, help="Only audit first N master rows")
@@ -166,7 +138,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report-dir", default=str(REPORT_DIR), help="Markdown report directory")
     return parser.parse_args()
 
-
 def load_client() -> SupabaseRestClient:
     load_dotenv(PROJECT_ROOT / ".env")
     base_url = os.getenv("SUPABASE_URL")
@@ -174,7 +145,6 @@ def load_client() -> SupabaseRestClient:
     if not base_url or not service_role_key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)
-
 
 def fetch_all_rows(
     client: SupabaseRestClient,
@@ -210,14 +180,11 @@ def fetch_all_rows(
         offset += len(batch)
     return rows
 
-
 def clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
-
 def compact_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", normalize_segment_text(value))
-
 
 def extract_numbers(*values: Any) -> List[str]:
     numbers: List[str] = []
@@ -241,13 +208,11 @@ def extract_numbers(*values: Any) -> List[str]:
                 numbers.append(normalized)
     return numbers
 
-
 def format_decimal(decimal: Decimal) -> str:
     text = format(decimal.normalize(), "f")
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
-
 
 def number_variants(value: str) -> set[str]:
     try:
@@ -262,7 +227,6 @@ def number_variants(value: str) -> set[str]:
         variants.add(f"{decimal:.2f}")
     return {item.rstrip("0").rstrip(".") if "." in item else item for item in variants} | variants
 
-
 def parse_date(value: Any) -> Optional[date]:
     text = clean_text(value)
     if not text:
@@ -276,7 +240,6 @@ def parse_date(value: Any) -> Optional[date]:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
     except ValueError:
         return None
-
 
 def token_set(value: Any) -> set[str]:
     normalized = normalize_segment_text(value)
@@ -299,7 +262,6 @@ def token_set(value: Any) -> set[str]:
         "off",
     }
     return {token for token in tokens if token not in stop and not token.isdigit()}
-
 
 def build_page_snapshots(rows: Iterable[Dict[str, Any]]) -> Dict[str, PageSnapshot]:
     snapshots: Dict[str, PageSnapshot] = {}
@@ -326,7 +288,6 @@ def build_page_snapshots(rows: Iterable[Dict[str, Any]]) -> Dict[str, PageSnapsh
             snapshots[normalized_url] = snapshot
     return snapshots
 
-
 def is_unverifiable_snapshot(snapshot: PageSnapshot) -> bool:
     if not snapshot.content_normalized:
         return True
@@ -341,10 +302,8 @@ def is_unverifiable_snapshot(snapshot: PageSnapshot) -> bool:
     )
     return len(snapshot.content_normalized) < 500 and price_hits == 0 and service_hits <= 2
 
-
 def has_no_active_offer_message(snapshot: PageSnapshot) -> bool:
     return any(pattern.search(snapshot.content) for pattern in NO_ACTIVE_OFFER_PATTERNS)
-
 
 def likely_needs_ocr_verification(snapshot: PageSnapshot) -> bool:
     if snapshot.needs_ocr:
@@ -356,12 +315,12 @@ def likely_needs_ocr_verification(snapshot: PageSnapshot) -> bool:
     # Image-based promo pages often expose headings and included service names but omit the image text/prices.
     return url_hint and promo_terms >= 2 and (price_hits == 0 or dollar_hits == 0) and not has_no_active_offer_message(snapshot)
 
-
 def offer_text_candidates(offer: Dict[str, Any]) -> List[str]:
+    enriched = resolve_plan_fields(offer)
     candidates = [
         offer.get("offer_raw_text"),
         offer.get("service_name"),
-        offer.get("membership_name"),
+        enriched.get("membership_display_name"),
         offer.get("template_type"),
     ]
     content = offer.get("offer_content")
@@ -373,7 +332,6 @@ def offer_text_candidates(offer: Dict[str, Any]) -> List[str]:
         candidates.append(content)
     return [clean_text(item) for item in candidates if clean_text(item)]
 
-
 def best_segment_match(offer: Dict[str, Any], snapshot: PageSnapshot) -> Dict[str, Any]:
     raw = clean_text(offer.get("offer_raw_text"))
     service = clean_text(offer.get("service_name"))
@@ -382,7 +340,6 @@ def best_segment_match(offer: Dict[str, Any], snapshot: PageSnapshot) -> Dict[st
     price_numbers = extract_numbers(
         offer.get("regular_price"),
         offer.get("discount_price"),
-        offer.get("membership_price"),
         offer.get("discount_amount"),
         offer.get("discount_percent"),
         raw,
@@ -392,7 +349,6 @@ def best_segment_match(offer: Dict[str, Any], snapshot: PageSnapshot) -> Dict[st
         for value in extract_numbers(
             offer.get("regular_price"),
             offer.get("discount_price"),
-            offer.get("membership_price"),
             offer.get("discount_amount"),
         )
         if value != "0"
@@ -461,7 +417,6 @@ def best_segment_match(offer: Dict[str, Any], snapshot: PageSnapshot) -> Dict[st
 
     return best
 
-
 def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live_probe: Optional[LivePageProbe] = None) -> Dict[str, Any]:
     source_url = clean_text(offer.get("source_url"))
     normalized_url = normalize_url(source_url)
@@ -484,7 +439,7 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
             "score": 0,
             "reasons": "source_url has no matching promo_website_staging row",
             "matched_prices": "",
-            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"))),
             "matched_segment": "",
             "page_last_updated_at": "",
             "page_crawl_timestamp": "",
@@ -508,7 +463,7 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
             "score": 0,
             "reasons": "live source page contains coming-soon/no-current-offer language",
             "matched_prices": "",
-            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"))),
             "matched_segment": live_text[:500],
             "page_last_updated_at": snapshot.last_updated_at,
             "page_crawl_timestamp": snapshot.crawl_timestamp,
@@ -531,7 +486,7 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
             "score": 0,
             "reasons": "current source page contains coming-soon/no-current-offer language",
             "matched_prices": "",
-            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"))),
             "matched_segment": snapshot.content[:500],
             "page_last_updated_at": snapshot.last_updated_at,
             "page_crawl_timestamp": snapshot.crawl_timestamp,
@@ -554,7 +509,7 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
             "score": 0,
             "reasons": "promo page likely carries offer details in images or OCR-only content",
             "matched_prices": "",
-            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"))),
             "matched_segment": snapshot.content[:500],
             "page_last_updated_at": snapshot.last_updated_at,
             "page_crawl_timestamp": snapshot.crawl_timestamp,
@@ -577,7 +532,7 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
             "score": 0,
             "reasons": "current staging content is blocked, empty, or degraded",
             "matched_prices": "",
-            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"), offer.get("membership_price"))),
+            "missing_prices": ",".join(extract_numbers(offer.get("regular_price"), offer.get("discount_price"))),
             "matched_segment": snapshot.content[:500],
             "page_last_updated_at": snapshot.last_updated_at,
             "page_crawl_timestamp": snapshot.crawl_timestamp,
@@ -590,12 +545,21 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
     if end_date_expired:
         reasons.append("end_date_in_past")
 
+    token_overlap = float(match.get("token_overlap") or 0)
+    service = clean_text(offer.get("service_name"))
+    service_in_segment = bool(
+        service
+        and normalize_segment_text(service)
+        in normalize_segment_text(match.get("segment") or snapshot.content)
+    )
     if score >= 0.82:
         verdict = "present_on_source"
         confidence = 0.9
-    elif score >= 0.55:
+    elif score >= 0.55 or (token_overlap >= 0.45 and service_in_segment):
         verdict = "likely_present_on_source"
         confidence = 0.65
+        if token_overlap >= 0.45 and service_in_segment and score < 0.55:
+            reasons.append("token_overlap_service_present")
     elif end_date_expired:
         verdict = "expired_by_date_and_missing_from_source"
         confidence = 0.9
@@ -627,7 +591,6 @@ def classify_offer(offer: Dict[str, Any], snapshot: Optional[PageSnapshot], live
         "page_crawl_timestamp": snapshot.crawl_timestamp,
         "page_verification_quality": "verifiable_content",
     }
-
 
 def write_outputs(output_dir: Path, report_dir: Path, rows: List[Dict[str, Any]]) -> Dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -705,21 +668,31 @@ def write_outputs(output_dir: Path, report_dir: Path, rows: List[Dict[str, Any]]
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"csv": str(csv_path), "json": str(json_path), "report": str(report_path)}
 
-
 def main() -> None:
     args = parse_args()
     client = load_client()
     master_filters = {"channel": "eq.Website"}
     if not args.include_ended:
         master_filters["status"] = "eq.active"
-    master_rows = fetch_all_rows(
-        client,
-        MASTER_TABLE,
-        MASTER_SELECT,
-        filters=master_filters,
-        limit=args.limit,
-        order="id.asc",
-    )
+    try:
+        master_rows = fetch_all_rows(
+            client,
+            MASTER_TABLE,
+            MASTER_SELECT,
+            filters=master_filters,
+            limit=args.limit,
+            order="id.asc",
+        )
+    except Exception:
+        master_rows = fetch_all_rows(
+            client,
+            MASTER_TABLE_FALLBACK,
+            MASTER_SELECT_FALLBACK,
+            filters=master_filters,
+            limit=args.limit,
+            order="id.asc",
+        )
+        master_rows = [resolve_plan_fields(row) for row in master_rows]
     if args.domain:
         needle = args.domain.lower()
         master_rows = [
@@ -754,7 +727,6 @@ def main() -> None:
             ensure_ascii=False,
         )
     )
-
 
 if __name__ == "__main__":
     main()

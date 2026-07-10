@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.settings import OUTPUT_ENCODING  # noqa: E402
 from utils.staging_content_diff import content_hash, has_price_signal, normalize_content  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
 
 
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
@@ -50,40 +51,6 @@ BOILERPLATE_PATTERNS = [
     re.compile(r"\bcookie policy\b", re.IGNORECASE),
     re.compile(r"\ball rights reserved\b", re.IGNORECASE),
 ]
-
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
-
 
 @dataclass
 class Issue:

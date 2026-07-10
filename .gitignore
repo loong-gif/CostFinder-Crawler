@@ -33,6 +33,7 @@ wheels/
 
 # 输出文件
 output/
+reports/
 *.log
 *.csv
 *.json
@@ -59,3 +60,4 @@ frontend/
 !tests/fixtures/
 !tests/fixtures/**/*.json
 !CF_Extrator_Agent/data/service_name_dict.json
+.hermes/

@@ -117,16 +117,15 @@ def test_none_and_empty_become_null() -> None:
         "matched_id": "id-1",
         "service_name": "",        # -> excluded
         "regular_price": None,     # -> excluded (build_offer_update_payload drops None)
-        "discount_price": "",      # -> excluded
-        "membership_name": "VIP",
+        "discount_price": "8.5",
     }
     sqls = build_offer_sql_statements(
         [offer], source_url=URL, source_name=DOMAIN, now_iso=NOW
     )
     assert len(sqls) == 1, sqls
-    assert "membership_name='VIP'" in sqls[0], sqls[0]
+    assert "discount_price=8.5" in sqls[0], sqls[0]
     assert "regular_price" not in sqls[0], sqls[0]
-    assert "discount_price" not in sqls[0], sqls[0]
+    assert "membership_name" not in sqls[0], sqls[0]
 
 
 def test_update_without_matched_id_skipped() -> None:

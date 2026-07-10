@@ -11,6 +11,7 @@ from crawler.promo_site_crawler import (
     score_candidate_link,
     should_exclude_candidate,
 )
+from utils.membership_paths import is_membership_page_url
 
 _MIN_STRONG_SCORE = 4
 
@@ -74,7 +75,7 @@ def pick_monitor_urls(
     scored: List[tuple[int, bool, str]] = []
     for raw in subpage_urls:
         url = (raw or "").strip()
-        if not url or should_exclude_candidate(url):
+        if not url or should_exclude_candidate(url) or is_membership_page_url(url):
             continue
         score = score_candidate_link(url)
         haystack = url.lower()

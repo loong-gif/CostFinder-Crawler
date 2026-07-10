@@ -200,7 +200,8 @@ def dedupe_preserve_order(items: List[str]) -> List[str]:
     return ordered
 
 
-def infer_alignment(name: str, source_category: str = "") -> Dict[str, str]:
+def infer_alignment(name: str, source_category: str | None = "") -> Dict[str, str]:
+    source_category = source_category or ""
     normalized_name = standardize_specific_name(name)
     if not normalized_name:
         return {

@@ -31,7 +31,17 @@ class FakeDbClient:
 
     def fetch_rows(self, table, select, **kwargs):
         self.fetch_calls.append({"table": table, "select": select, **kwargs})
-        return list(self.rows)
+        rows = list(self.rows)
+        filters = kwargs.get("filters") or {}
+        for key, expr in filters.items():
+            if not isinstance(expr, str) or not expr.startswith("eq."):
+                continue
+            value = expr[3:]
+            if any(key in row for row in rows):
+                rows = [row for row in rows if str(row.get(key, "")) == value]
+            elif key == "offer_fingerprint":
+                rows = []
+        return rows
 
     def update_row(self, table, filters, payload):
         self.update_calls.append({"table": table, "filters": filters, "payload": payload})
@@ -202,7 +212,7 @@ def test_standardize_offer_service_names_uses_dictionary_values():
 
     standardized = standardize_offer_service_names(offers, candidate_offers)
 
-    assert standardized[0]["service_name"] == "Membership"
+    assert standardized[0]["service_name"] == "Others"
     assert standardized[0]["raw_service_name"] == "Glow Membership"
     assert standardized[1]["service_name"] == "Botox"
     assert standardized[1]["raw_service_name"] == "Validation Botox Update"
@@ -395,6 +405,50 @@ def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
     assert client.update_calls[0]["payload"]["regular_price"] == 12.0
     assert client.update_calls[0]["payload"]["discount_price"] == 11.0
     assert client.insert_calls[0]["rows"][0]["status"] == "active"
+    assert "offer_fingerprint" in client.insert_calls[0]["rows"][0]
+
+
+def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
+    from utils.offer_fingerprint import compute_offer_fingerprint
+
+    source_url = "https://example.com/specials"
+    fingerprint = compute_offer_fingerprint(
+        source_url=source_url,
+        service_name="Laser Hair Removal",
+        unit_type="unit",
+    )
+    client = FakeDbClient(
+        rows=[
+            {
+                "id": "existing-laser",
+                "source_url": source_url,
+                "status": "active",
+                "offer_fingerprint": fingerprint,
+                "service_name": "Laser Hair Removal",
+            }
+        ]
+    )
+    result = apply_offer_actions(
+        client,
+        [
+            {
+                "action": "insert",
+                "service_name": "Laser Hair Removal",
+                "offer_raw_text": "Laser Hair Removal $199",
+                "discount_price": "199",
+                "unit_type": "units",
+            }
+        ],
+        source_url=source_url,
+        source_name="example.com",
+    )
+
+    assert result["updated"] == 1
+    assert result["inserted"] == 0
+    assert len(client.insert_calls) == 0
+    assert client.update_calls[-1]["filters"] == {"id": "eq.existing-laser"}
+    assert client.update_calls[-1]["payload"]["discount_price"] == 199.0
+    assert client.update_calls[-1]["payload"]["unit_type"] == "unit"
 
 
 def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
@@ -505,7 +559,7 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
             "action": "insert",
             "service_name": "Membership",
             "offer_raw_text": "Join now for $199/month",
-            "membership_price": "199",
+            "discount_price": "199",
         },
         {"action": "mark_ended", "matched_id": "offer-old", "matched_candidate_index": "2"},
     ]
@@ -535,12 +589,15 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
         "offer_raw_text": "Botox $11/unit",
         "regular_price": 12.0,
         "discount_price": 11.0,
+        "discount_amount": 1.0,
+        "discount_percent": 8.33,
+        "service_category": "Neurotoxins",
     }
     assert events[0]["source_url_normalized"] == "https://example.com/specials"
     assert events[0]["confidence"] == 0.9
     assert events[1]["business_change_type"] == "offer_added"
     assert events[1]["proposed_new_offer"]["channel"] == "web_change_driven"
-    assert events[1]["proposed_new_offer"]["membership_price"] == 199.0
+    assert events[1]["proposed_new_offer"]["discount_price"] == 199.0
     assert events[2]["business_change_type"] == "offer_missing"
     assert events[2]["proposed_field_updates"]["lifecycle_status"] == "missing_once"
     assert events[2]["proposed_field_updates"]["missing_count_increment"] == 1
@@ -567,7 +624,7 @@ def test_build_change_event_decision_plan_splits_auto_apply_and_review():
                 "action": "insert",
                 "service_name": "Membership",
                 "offer_raw_text": "Join now for $199/month",
-                "membership_price": "199",
+                "discount_price": "199",
             },
             {"action": "mark_ended", "matched_id": "offer-old", "matched_candidate_index": "2"},
         ],
@@ -752,9 +809,9 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
                 {
                     "action": "insert",
                     "matched_candidate_index": "",
-                    "service_name": "Membership",
-                    "offer_raw_text": "Join now for $199/month",
-                    "membership_price": "199",
+                    "service_name": "Laser Peel",
+                    "offer_raw_text": "Laser Peel $299 limited time",
+                    "discount_price": "299",
                 },
             ]
         }

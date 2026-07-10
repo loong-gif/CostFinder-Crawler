@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import SupabaseRestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -46,64 +47,11 @@ DEFAULT_LOOKBACK_DAYS = 1
 TIMESTAMP_COLUMN_CANDIDATES = ["local_post_date", "published_at", "posted_at", "timestamp", "crawl_timestamp", "created_at"]
 POST_URL_COLUMN_CANDIDATES = ["post_url", "url", "postUrl", "source_url"]
 
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        # Automation shells may export local proxy env vars that are unreachable
-        # in sandboxed runs; bypass them so requests go directly to Supabase.
-        self.session.trust_env = False
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
-
-    def insert_rows(self, table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        response = self.session.post(
-            f"{self.base_url}/{table}",
-            headers={"Prefer": "return=representation"},
-            json=rows,
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-@dataclass(frozen=True)
 class InstagramTarget:
     master_id: Optional[int]
     business_id: Optional[int]
     name: str
     instagram_url: str
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="按日抓取 Instagram 促销内容并写入 promo_social_staging")
@@ -121,7 +69,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture-direct-urls-json", default=None, help="离线调试：读取本地 actor 输入 JSON，提取 directUrls")
     return parser.parse_args()
 
-
 def load_supabase_client() -> SupabaseRestClient:
     load_dotenv(PROJECT_ROOT / ".env")
     base_url = os.getenv("SUPABASE_URL")
@@ -129,7 +76,6 @@ def load_supabase_client() -> SupabaseRestClient:
     if not base_url or not service_role_key:
         raise RuntimeError("缺少 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)
-
 
 def fetch_all_rows(
     client: SupabaseRestClient,
@@ -159,17 +105,14 @@ def fetch_all_rows(
         offset += page_size
     return rows
 
-
 def resolve_target_date(local_date_arg: Optional[str], timezone_name: str) -> date:
     if local_date_arg:
         return date.fromisoformat(local_date_arg)
     return datetime.now(ZoneInfo(timezone_name)).date()
 
-
 def resolve_target_date_window(target_date: date, lookback_days: int) -> Tuple[date, date]:
     days = max(1, int(lookback_days or 1))
     return target_date - timedelta(days=days - 1), target_date
-
 
 def resolve_only_posts_newer_than(args: argparse.Namespace) -> str:
     if args.only_posts_newer_than:
@@ -178,17 +121,14 @@ def resolve_only_posts_newer_than(args: argparse.Namespace) -> str:
         return DEFAULT_ONLY_POSTS_NEWER_THAN
     return f"{int(args.lookback_days)} days"
 
-
 def resolve_report_path(now: datetime, lookback_days: int) -> Path:
     timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
     mode = "weekly" if int(lookback_days or 1) > 1 else "daily"
     return OUTPUT_DIR / f"instagram_promo_{mode}_ingestion_{timestamp}.json"
 
-
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 def run_cli_json(command: Sequence[str]) -> Dict[str, Any]:
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -201,7 +141,6 @@ def run_cli_json(command: Sequence[str]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("命令输出格式异常，预期为 JSON 对象")
     return payload
-
 
 def run_actor(
     actor_id: str,
@@ -238,7 +177,6 @@ def run_actor(
             ]
         )
 
-
 def fetch_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
     result = subprocess.run(
         ["apify", "datasets", "get-items", dataset_id, "--format", "json"],
@@ -256,11 +194,9 @@ def fetch_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
         raise RuntimeError("dataset 输出格式异常，预期为 JSON 数组")
     return [item for item in payload if isinstance(item, dict)]
 
-
 def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
     for start in range(0, len(items), max(1, size)):
         yield list(items[start : start + max(1, size)])
-
 
 def load_fixture_posts(path_str: str) -> List[Dict[str, Any]]:
     path = Path(path_str).expanduser().resolve()
@@ -268,7 +204,6 @@ def load_fixture_posts(path_str: str) -> List[Dict[str, Any]]:
     if not isinstance(payload, list):
         raise RuntimeError("fixture posts JSON 必须是数组")
     return [item for item in payload if isinstance(item, dict)]
-
 
 def load_fixture_direct_urls(path_str: str) -> List[str]:
     path = Path(path_str).expanduser().resolve()
@@ -279,7 +214,6 @@ def load_fixture_direct_urls(path_str: str) -> List[str]:
     if not isinstance(raw_urls, list):
         raise RuntimeError("fixture direct URLs JSON 的 directUrls 必须是数组")
     return [normalize_instagram_profile_url(value) for value in raw_urls if normalize_instagram_profile_url(value)]
-
 
 def build_fixture_targets(posts: Sequence[Dict[str, Any]], fixture_direct_urls_json: Optional[str]) -> List[InstagramTarget]:
     urls: List[str] = []
@@ -299,7 +233,6 @@ def build_fixture_targets(posts: Sequence[Dict[str, Any]], fixture_direct_urls_j
         seen.add(url)
         deduped.append(InstagramTarget(master_id=None, business_id=None, name="", instagram_url=url))
     return deduped
-
 
 def enrich_targets_with_master_business_ids(
     client: SupabaseRestClient,
@@ -337,7 +270,6 @@ def enrich_targets_with_master_business_ids(
         )
     return enriched
 
-
 def fetch_instagram_targets(client: SupabaseRestClient) -> List[InstagramTarget]:
     rows = fetch_all_rows(
         client,
@@ -365,7 +297,6 @@ def fetch_instagram_targets(client: SupabaseRestClient) -> List[InstagramTarget]
         )
     return targets
 
-
 def detect_table_columns(client: SupabaseRestClient, table: str) -> Set[str]:
     rows = client.fetch_rows(table, "*", limit=1)
     if not rows:
@@ -384,10 +315,8 @@ def detect_table_columns(client: SupabaseRestClient, table: str) -> Set[str]:
         return set(properties.keys())
     return set(rows[0].keys())
 
-
 def build_target_lookup(targets: Sequence[InstagramTarget]) -> Dict[str, InstagramTarget]:
     return {target.instagram_url: target for target in targets}
-
 
 def local_day_bounds_utc(target_date: date, timezone_name: str) -> Tuple[datetime, datetime]:
     zone = ZoneInfo(timezone_name)
@@ -395,13 +324,11 @@ def local_day_bounds_utc(target_date: date, timezone_name: str) -> Tuple[datetim
     local_end = local_start + timedelta(days=1)
     return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
-
 def local_date_window_bounds_utc(start_date: date, end_date: date, timezone_name: str) -> Tuple[datetime, datetime]:
     zone = ZoneInfo(timezone_name)
     local_start = datetime.combine(start_date, time.min, tzinfo=zone)
     local_end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=zone)
     return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
-
 
 def stringify_timestamp(value: Any) -> str:
     if value is None:
@@ -409,7 +336,6 @@ def stringify_timestamp(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value)
-
 
 def resolve_existing_row_local_date(row: Dict[str, Any], timezone_name: str) -> str:
     explicit_local_date = (row.get("local_post_date") or "").strip()
@@ -421,14 +347,12 @@ def resolve_existing_row_local_date(row: Dict[str, Any], timezone_name: str) -> 
             return local_value.isoformat()
     return ""
 
-
 def resolve_existing_row_post_url(row: Dict[str, Any]) -> str:
     for key in POST_URL_COLUMN_CANDIDATES:
         normalized = normalize_instagram_post_url(row.get(key) or "")
         if normalized:
             return normalized
     return ""
-
 
 def fetch_existing_post_keys(
     client: SupabaseRestClient,
@@ -467,7 +391,6 @@ def fetch_existing_post_keys(
         if post_url and local_post_date:
             keys.add((post_url, local_post_date))
     return keys
-
 
 def build_base_insert_payload(post: Dict[str, Any], target: Optional[InstagramTarget], run_timestamp: str) -> Dict[str, Any]:
     published_at = stringify_timestamp(post.get("timestamp"))
@@ -523,7 +446,6 @@ def build_base_insert_payload(post: Dict[str, Any], target: Optional[InstagramTa
         "processed_status": False,
     }
 
-
 def build_insert_payload_variants(
     post: Dict[str, Any],
     *,
@@ -578,7 +500,6 @@ def build_insert_payload_variants(
         "processed_status": False,
     }
     return [snake_case, camel_case]
-
 
 def insert_rows_with_fallback(
     client: SupabaseRestClient,
@@ -640,7 +561,6 @@ def insert_rows_with_fallback(
             )
     return inserted_rows, insert_errors, inserted_rows_with_business_id
 
-
 def dedupe_posts(posts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     deduped: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for post in posts:
@@ -652,7 +572,6 @@ def dedupe_posts(posts: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             continue
         deduped[key] = post
     return list(deduped.values())
-
 
 def collect_posts_in_window(
     raw_posts: Sequence[Dict[str, Any]],
@@ -671,7 +590,6 @@ def collect_posts_in_window(
         and start_date.isoformat() <= summarized["local_post_date"] <= end_date.isoformat()
     ]
     return dedupe_posts(window_posts)
-
 
 def fetch_posts_from_actor(
     args: argparse.Namespace,
@@ -705,7 +623,6 @@ def fetch_posts_from_actor(
         )
         posts.extend(batch_posts)
     return posts, actor_runs
-
 
 def build_summary(
     *,
@@ -748,7 +665,6 @@ def build_summary(
     if error:
         summary["error"] = error
     return summary
-
 
 def main() -> None:
     args = parse_args()
@@ -896,7 +812,6 @@ def main() -> None:
 
     write_json(report_path, report)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-
 
 if __name__ == "__main__":
     main()

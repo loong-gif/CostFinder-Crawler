@@ -14,8 +14,6 @@
     "Laser Hair Removal",
     "Facial",
     "Chemical Peel",
-    "Skincare Product",
-    "Membership",
     "Package",
     "Others"
   ],
@@ -44,12 +42,7 @@
     "lip filler": "Dermal Filler",
     "filler": "Dermal Filler",
     "fillers": "Dermal Filler",
-    "skinbetter": "Skincare Product",
-    "skinbetter alpharet clearing serum": "Skincare Product",
-    "skinbetter trio rebalancing": "Skincare Product",
-    "skinbetter even tone serum": "Skincare Product",
-    "skinbetter interfuse face & neck": "Skincare Product",
-    "skinbetter interfuse intensive lines": "Skincare Product",
+    "laser peel": "Chemical Peel",
     "skinvive": "Skinvive",
     "sculptra": "Sculptra",
     "kybella": "Kybella"

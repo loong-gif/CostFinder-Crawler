@@ -20,13 +20,19 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from utils.logger import log
+from utils.offer_scope_filter import should_exclude_from_offer_master
+from utils.service_category_lookup import MASTER_CATEGORY_PROMPT, resolve_service_category
 from utils.offer_extraction_llm import (
     OFFER_OUTPUT_FIELDS,
     OpenAICompatibleClient,
+    canonicalize_service_name,
     normalize_offer_record,
     parse_json_payload,
 )
 from utils.offer_evidence_segments import normalize_url
+from utils.offer_fingerprint import compute_offer_fingerprint
+from utils.offer_field_normalize import normalize_offer_field_values
+from utils.offer_price_normalize import normalize_offer_prices, parse_price
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -68,12 +74,20 @@ CHANGE_EXTRACTION_SYSTEM_PROMPT = (
     "plus existing active offers already stored for this exact page. "
     "Extract ONLY offers affected by this change. "
     "Return one of three actions per offer: update, insert, or mark_ended. "
+    "Service and member pricing use discount_price (and regular_price when applicable); "
+    "do not output membership_name, membership_price, or billing_period — membership plan "
+    "structure is stored separately in promo_membership_plans. "
+    "Do not insert membership tier plan fees as service_name=Membership offers in master. "
+    "Do not extract free consultations or consultation-only bookings as offers. "
+    "Do not extract retail skincare/catalog shop products (/collections, /shop) as treatment offers. "
     "Use update when the diff changes an existing stored offer and matched_candidate_index must point to one provided candidate. "
     "Use insert when the diff adds a brand-new offer that does not match any candidate. "
     "Use mark_ended when the diff shows an existing stored offer was removed or ended; matched_candidate_index is required and all other fields may be empty strings. "
     "Do not generate database ids. Only select from the provided candidate indexes. "
     "When pricing, dates, membership terms, or unit details are reasonably supported by the diff or candidate context, fill the structured fields instead of leaving them blank. "
     "If a pricing block contains multiple offers, split them into separate records. "
+    "Always set service_category to one of: "
+    f"{MASTER_CATEGORY_PROMPT}. "
     "Return strict JSON with a single top-level key 'offers'."
 )
 
@@ -87,16 +101,12 @@ _MASTER_TEXT_FIELDS = [
     "unit_type",
     "start_date",
     "end_date",
-    "membership_name",
-    "billing_period",
-    "cancellation_policy",
 ]
 _MASTER_NUMERIC_FIELDS = [
     "regular_price",
     "discount_price",
     "discount_amount",
     "discount_percent",
-    "membership_price",
 ]
 _CHANGE_EXTRACTION_EXTRA_FIELDS = [
     field
@@ -206,27 +216,7 @@ def _get_standardized_service_names() -> List[str]:
 
 
 def _normalize_service_name_from_dictionary(*candidates: Any) -> str:
-    dictionary = _load_service_name_dictionary()
-    standardized_names = set(_get_standardized_service_names())
-    aliases = {
-        str(key).strip().lower(): str(value).strip()
-        for key, value in (dictionary.get("aliases") or {}).items()
-        if str(key).strip() and str(value).strip()
-    }
-
-    for candidate in candidates:
-        text = str(candidate or "").strip()
-        if not text:
-            continue
-        lowered = text.lower()
-        if text in standardized_names:
-            return text
-        if lowered in aliases:
-            return aliases[lowered]
-        for alias_key, standardized in aliases.items():
-            if alias_key in lowered or lowered in alias_key:
-                return standardized
-    return "Others"
+    return canonicalize_service_name(*candidates)
 
 
 def fetch_candidate_offers(
@@ -637,7 +627,6 @@ def standardize_offer_service_names(
         standardized_offer["service_name"] = _normalize_service_name_from_dictionary(
             offer.get("service_name"),
             raw_service_name,
-            offer.get("membership_name"),
             offer.get("offer_raw_text"),
             offer.get("offer_content"),
             candidate.get("service_name"),
@@ -702,6 +691,11 @@ def validate_offer_actions(
         if not isinstance(raw_offer, dict):
             skipped += 1
             continue
+
+        raw_has_content = any(
+            str(raw_offer.get(field) or "").strip()
+            for field in ("service_name", "raw_service_name", "offer_raw_text", "offer_content")
+        )
 
         offer = normalize_change_offer_record(raw_offer)
         action = offer["action"]
@@ -773,7 +767,7 @@ def validate_offer_actions(
         if action == "insert":
             matched_id = ""
             matched_candidate_index = ""
-            if not offer.get("service_name") and not offer.get("offer_raw_text"):
+            if not raw_has_content:
                 skipped += 1
                 continue
 
@@ -801,10 +795,29 @@ def build_offer_update_payload(offer: Dict[str, Any]) -> Dict[str, Any]:
         if value:
             payload[field] = value
 
+    prices = normalize_offer_prices(
+        regular_price=offer.get("regular_price"),
+        discount_price=offer.get("discount_price"),
+        discount_amount=offer.get("discount_amount"),
+        discount_percent=offer.get("discount_percent"),
+        original_price=offer.get("original_price"),
+        offer_raw_text=offer.get("offer_raw_text") or payload.get("offer_raw_text"),
+    )
     for field in _MASTER_NUMERIC_FIELDS:
-        value = _parse_price(offer.get(field))
+        value = prices.get(field)
         if value is not None:
             payload[field] = value
+
+    payload = normalize_offer_field_values(payload, offer=offer)
+
+    if payload.get("service_name"):
+        category, _, confidence = resolve_service_category(
+            payload["service_name"],
+            offer.get("service_category") or payload.get("service_category"),
+            min_confidence="medium",
+        )
+        if category and confidence in {"high", "medium"}:
+            payload["service_category"] = category
 
     return payload
 
@@ -824,7 +837,50 @@ def build_offer_insert_payload(
             "source_name": source_name,
         }
     )
+    fingerprint = compute_offer_fingerprint(
+        source_url=source_url,
+        service_name=str(payload.get("service_name") or offer.get("service_name") or ""),
+        unit_type=payload.get("unit_type") or offer.get("unit_type"),
+    )
+    payload["offer_fingerprint"] = fingerprint
     return payload
+
+
+def find_active_offer_by_fingerprint(
+    client: Any,
+    *,
+    source_url: str,
+    offer_fingerprint: str,
+) -> Optional[str]:
+    if not source_url or not offer_fingerprint:
+        return None
+    try:
+        rows = client.fetch_rows(
+            "promo_offer_master",
+            "id",
+            filters={
+                "source_url": f"eq.{source_url}",
+                "status": "eq.active",
+                "offer_fingerprint": f"eq.{offer_fingerprint}",
+            },
+            limit=1,
+        )
+    except Exception as exc:
+        response_text = getattr(getattr(exc, "response", None), "text", "")
+        error_text = f"{exc} {response_text}".strip()
+        if "offer_fingerprint" in error_text and (
+            "does not exist" in error_text or "schema cache" in error_text
+        ):
+            return None
+        log.warning(
+            "change_driven: fingerprint lookup failed for {url}: {error}",
+            url=source_url,
+            error=exc,
+        )
+        return None
+    if not rows:
+        return None
+    return str(rows[0].get("id") or "").strip() or None
 
 
 def infer_business_change_type(offer: Dict[str, Any]) -> str:
@@ -840,7 +896,6 @@ def infer_business_change_type(offer: Dict[str, Any]) -> str:
         "discount_price",
         "discount_amount",
         "discount_percent",
-        "membership_price",
     )
     if any(_parse_price(offer.get(field)) is not None for field in price_fields):
         return "price_changed"
@@ -848,8 +903,6 @@ def infer_business_change_type(offer: Dict[str, Any]) -> str:
     eligibility_fields = (
         "start_date",
         "end_date",
-        "membership_name",
-        "billing_period",
         "cancellation_policy",
         "unit_type",
     )
@@ -1393,6 +1446,35 @@ def apply_offer_actions(
         if not payload.get("service_name") and not payload.get("offer_raw_text"):
             skipped += 1
             continue
+        if should_exclude_from_offer_master(payload):
+            log.warning(
+                "change_driven: skip non-service offer for {url} service={service}",
+                url=source_url,
+                service=payload.get("service_name"),
+            )
+            skipped += 1
+            continue
+        existing_id = find_active_offer_by_fingerprint(
+            client,
+            source_url=source_url,
+            offer_fingerprint=str(payload.get("offer_fingerprint") or ""),
+        )
+        if existing_id:
+            if dry_run:
+                updated += 1
+                continue
+            try:
+                _update_master_row(client, existing_id, payload, now_iso=now_iso)
+                updated += 1
+            except Exception as exc:
+                log.error(
+                    "Failed to fingerprint-update master offer id={id} for {url}: {error}",
+                    id=existing_id,
+                    url=source_url,
+                    error=exc,
+                )
+            continue
+
         if dry_run:
             inserted += 1
             continue

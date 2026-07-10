@@ -253,7 +253,7 @@ sudo chown -R $USER:$USER /mnt/data
 
 1. `scripts/firecrawl_monitor_poll.py:71`：`Firecrawl(api_key=api_key, api_url=os.getenv("FIRECRAWL_API_URL", "https://api.firecrawl.dev"))`
 2. `scripts/firecrawl_monitor.py:81`：同上
-3. `scripts/analyze_all_monitors.py:104`：同上
+3. `scripts/archive/analyze_all_monitors.py:104`：同上
 
 详见 [firecrawl 自部署迁移 checklist](../.cursor/plans/firecrawl_自部署迁移_checklist_254fb34b.plan.md) 阶段 4。
 

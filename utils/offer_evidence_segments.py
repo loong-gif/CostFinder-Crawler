@@ -16,7 +16,10 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 _SEGMENT_PATTERN = re.compile(r"\[SEGMENT\s+(\d+)\]", re.IGNORECASE)
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _PRICE_PATTERN = re.compile(r"\$\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)", re.IGNORECASE)
-_PERCENT_PATTERN = re.compile(r"\b\d+(?:\.\d+)?\s*%\s*(?:off|discount|savings?)\b", re.IGNORECASE)
+_PERCENT_PATTERN = re.compile(
+    r"\b\d+(?:\.\d+)?\s*%\s*(?:off|discount|savings?|sale)\b|\b\d+(?:\.\d+)?\s*%\b",
+    re.IGNORECASE,
+)
 
 TRACKING_QUERY_KEYS = {
     "fbclid",

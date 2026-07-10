@@ -15,7 +15,7 @@
 
 ```bash
 cd /path/to/CostFinder-Crawler
-OPENAI_API_KEY='sk-你的key' ALLOWED_CLIENT_IP='58.44.21.62' bash scripts/bootstrap_firecrawl_wsl.sh
+OPENAI_API_KEY='sk-你的key' ALLOWED_CLIENT_IP='58.44.21.62' bash scripts/archive/bootstrap_firecrawl_wsl.sh
 ```
 
 脚本会自动：
@@ -47,7 +47,7 @@ python scripts/firecrawl_monitor.py create --domain example.com --max-urls 1
 
 官方 `USE_DB_AUTHENTICATION=false` 时 monitor 无法连库；设为 `true` 又需要完整 Supabase schema。
 
-当前方案（`scripts/fix_firecrawl_selfhosted_monitor.sh`）：
+当前方案（`scripts/archive/fix_firecrawl_selfhosted_monitor.sh`）：
 
 - 保持 `USE_DB_AUTHENTICATION=false`（scrape 免鉴权）
 - 通过 `DATABASE_URL` + 挂载补丁 JS，让 monitor 使用 `nuq-postgres` 里的表
@@ -56,7 +56,7 @@ python scripts/firecrawl_monitor.py create --domain example.com --max-urls 1
 若 API 升级或 `docker compose build api` 后 monitor 失效，在 WSL 重跑：
 
 ```bash
-bash scripts/fix_firecrawl_selfhosted_monitor.sh
+bash scripts/archive/fix_firecrawl_selfhosted_monitor.sh
 ```
 
 **还需**：在 `~/firecrawl/.env` 写入 `OPENAI_API_KEY`（judging 用），然后 `docker compose restart api`。
@@ -72,14 +72,14 @@ docker compose logs -f --tail=100 api
 WSL 重启后 WSL IP 会变，重新跑：
 
 ```bash
-ALLOWED_CLIENT_IP='58.44.21.62' bash scripts/bootstrap_firecrawl_wsl.sh
+ALLOWED_CLIENT_IP='58.44.21.62' bash scripts/archive/bootstrap_firecrawl_wsl.sh
 ```
 
 （已装 Docker/Firecrawl 时会跳过安装，只更新 portproxy。）
 
 ## 相关脚本
 
-- [scripts/bootstrap_firecrawl_wsl.sh](../scripts/bootstrap_firecrawl_wsl.sh) — WSL 主部署
-- [scripts/setup_firecrawl_windows.ps1](../scripts/setup_firecrawl_windows.ps1) — 仅 Windows 网络
-- [scripts/add_thinkbook_ssh_key.ps1](../scripts/add_thinkbook_ssh_key.ps1) — 添加 thinkbook SSH 公钥
-- [scripts/fix_firecrawl_selfhosted_monitor.sh](../scripts/fix_firecrawl_selfhosted_monitor.sh) — monitor 补丁 + DB schema
+- [scripts/archive/bootstrap_firecrawl_wsl.sh](../scripts/archive/bootstrap_firecrawl_wsl.sh) — WSL 主部署
+- [scripts/archive/setup_firecrawl_windows.ps1](../scripts/archive/setup_firecrawl_windows.ps1) — 仅 Windows 网络
+- [scripts/archive/add_thinkbook_ssh_key.ps1](../scripts/archive/add_thinkbook_ssh_key.ps1) — 添加 thinkbook SSH 公钥
+- [scripts/archive/fix_firecrawl_selfhosted_monitor.sh](../scripts/archive/fix_firecrawl_selfhosted_monitor.sh) — monitor 补丁 + DB schema

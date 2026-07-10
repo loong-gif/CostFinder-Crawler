@@ -22,6 +22,7 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import SupabaseRestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -45,56 +46,6 @@ DEFAULT_ACTOR_TIMEOUT_SECS = 1800
 DEFAULT_ONLY_POSTS_NEWER_THAN = "7 days"
 TIMESTAMP_COLUMN_CANDIDATES = ["local_post_date", "published_at", "posted_at", "timestamp", "crawl_timestamp", "created_at"]
 POST_URL_COLUMN_CANDIDATES = ["post_url", "url", "postUrl", "source_url"]
-
-
-class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        # Ignore shell proxy variables so Supabase calls do not get hijacked by
-        # an unavailable local proxy in automation environments.
-        self.session.trust_env = False
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
-
-    def insert_rows(self, table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        response = self.session.post(
-            f"{self.base_url}/{table}",
-            headers={"Prefer": "return=representation"},
-            json=rows,
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()
 
 
 @dataclass(frozen=True)

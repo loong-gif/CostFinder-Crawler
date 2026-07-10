@@ -19,7 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from crawler.staging_recrawl import SupabaseRestClient
 from utils.change_driven_extractor import build_offer_update_payload
-from utils.vision_promo_ocr import DEFAULT_GEMINI_MODEL, discover_promo_images, vision_extract_offers_from_image
+from utils.vision_promo_ocr import (
+    DEFAULT_GEMINI_MODEL,
+    discover_promo_images,
+    extract_offers_from_page,
+    screenshot_extract_offers,
+    vision_extract_offers_from_image,
+)
 
 OFFER_TABLE = "promo_offer_master"
 OUTPUT_DIR = PROJECT_ROOT / "output" / "results"
@@ -36,6 +42,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default=DEFAULT_GEMINI_MODEL, help="Gemma 4 model id on Gemini API")
     p.add_argument("--dry-run", action="store_true", help="Extract only, do not insert")
     p.add_argument("--output-dir", default=str(OUTPUT_DIR))
+    p.add_argument("--prefer-screenshot", action="store_true", help="Skip image-URL discovery; go straight to full-page screenshot OCR")
+    p.add_argument("--screenshot-only", action="store_true", help="Force full-page screenshot mode (no image-URL fallback)")
     return p.parse_args()
 
 
@@ -63,7 +71,6 @@ def build_insert_payload(offer: Dict[str, Any], *, source_url: str, source_name:
             "status": "active",
             "source_url": source_url,
             "source_name": source_name,
-            "moderation_status": "approved",
         }
     )
     return payload
@@ -97,6 +104,7 @@ def process_one(
     model: str,
     dry_run: bool,
     image_url_override: Optional[str] = None,
+    screenshot_mode: str = "auto",  # "auto" | "prefer" | "force"
 ) -> Dict[str, Any]:
     url = str(row.get("subpage_url") or "").strip()
     domain = str(row.get("domain_name") or _domain_from_url(url))
@@ -109,27 +117,46 @@ def process_one(
         "inserted": 0,
         "insert_errors": [],
         "offers_preview": [],
+        "screenshot_mode": screenshot_mode,
     }
-    if image_url_override:
+
+    if screenshot_mode == "force":
+        try:
+            vision = screenshot_extract_offers(url, model=model, project_root=PROJECT_ROOT)
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = f"screenshot_ocr: {exc}"
+            return result
+        all_offers = vision.get("offers") or []
+        result["screenshot_size"] = vision.get("screenshot_size")
+        if vision.get("screenshot_engine"):
+            result["screenshot_engine"] = vision.get("screenshot_engine")
+        if vision.get("firecrawl_error"):
+            result["firecrawl_error"] = vision.get("firecrawl_error")
+        if vision.get("error") and not result.get("error"):
+            result["error"] = vision.get("error")
+    elif image_url_override:
         images = [image_url_override.strip()]
+        result["image_urls"] = images
+        all_offers = []
+        for img_url in images:
+            try:
+                vision = vision_extract_offers_from_image(img_url, page_url=url, model=model)
+                all_offers.extend(vision.get("offers") or [])
+            except Exception as exc:  # noqa: BLE001
+                result.setdefault("vision_errors", []).append(f"{img_url}: {exc}")
     else:
         try:
-            images = discover_promo_images(url, project_root=PROJECT_ROOT)
+            combined = extract_offers_from_page(
+                url, model=model, project_root=PROJECT_ROOT,
+                prefer_screenshot=(screenshot_mode == "prefer"),
+            )
         except Exception as exc:  # noqa: BLE001
-            result["error"] = f"discover_images: {exc}"
+            result["error"] = f"extract_offers_from_page: {exc}"
             return result
-    result["image_urls"] = images
-    if not images:
-        result["error"] = "no_promo_images_found"
-        return result
-
-    all_offers: List[Dict[str, Any]] = []
-    for img_url in images:
-        try:
-            vision = vision_extract_offers_from_image(img_url, page_url=url, model=model)
-            all_offers.extend(vision.get("offers") or [])
-        except Exception as exc:  # noqa: BLE001
-            result.setdefault("vision_errors", []).append(f"{img_url}: {exc}")
+        all_offers = combined.get("offers") or []
+        result["image_urls"] = combined.get("image_urls", []) or []
+        if "screenshot_size" in combined:
+            result["screenshot_size"] = combined["screenshot_size"]
 
     result["extracted_offers"] = len(all_offers)
     result["offers_preview"] = [
@@ -161,8 +188,9 @@ def main() -> None:
         return
 
     client = load_supabase_client()
+    screenshot_mode = "force" if args.screenshot_only else "prefer" if args.prefer_screenshot else "auto"
     results = [
-        process_one(r, client, model=args.model, dry_run=args.dry_run, image_url_override=args.image_url)
+        process_one(r, client, model=args.model, dry_run=args.dry_run, image_url_override=args.image_url, screenshot_mode=screenshot_mode)
         for r in rows
     ]
 

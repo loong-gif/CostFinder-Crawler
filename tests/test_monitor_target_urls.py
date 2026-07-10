@@ -67,7 +67,20 @@ def test_returns_up_to_max_urls_for_strong_promo_pages():
         max_urls=2,
     )
     assert len(urls) == 2
+    assert "https://example.com/memberships" not in urls
     assert all("example.com" in u for u in urls)
+
+
+def test_excludes_membership_paths_from_monitor_targets():
+    urls = pick_monitor_urls(
+        [
+            "https://example.com/membership",
+            "https://example.com/specials",
+        ],
+        domain_name="example.com",
+        max_urls=2,
+    )
+    assert urls == ["https://example.com/specials"]
 
 
 def test_normalize_monitor_url_forces_https_and_strips_www():
