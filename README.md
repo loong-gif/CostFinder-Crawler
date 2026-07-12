@@ -203,6 +203,14 @@ python scripts/apply_sql_migration.py config/sql/m003_promo_offer_fingerprint.sq
 
 Active writers require `SUPABASE_WRITER_KEY`. `SUPABASE_SERVICE_ROLE_KEY` is reserved for migrations and controlled administration; `ALLOW_SERVICE_ROLE_WRITES=true` is an explicit rollback-only diagnostic override.
 
-The safety migration is `config/sql/m004_safety_invariants.sql`. Run it with `scripts/apply_sql_migration.py --dry-run` first, then apply only after reviewing the preflight output. It creates the migration ledger, canonical offer lifecycle checks, durable notification outbox, and outbox RPC transitions.
+The production schema is currently the legacy schema (`promo_offer_master.status` plus an existing `promo_monitor_state`). Do not run the old `offer_evidence_pipeline.sql` or legacy M004 directly. Use the staged migrations below, each with a dry-run and a read-only preflight first:
+
+```text
+config/sql/m004_safety_invariants.sql       # outbox + operation_runs only
+config/sql/m005_monitor_state_leases.sql   # existing monitor table only
+config/sql/m006_evidence_pipeline_bootstrap.sql # new evidence tables only
+```
+
+M006 deliberately does not change `promo_offer_master.status`; lifecycle compatibility/backfill remains a separate reviewed migration.
 
 Set `SLACK_NOTIFICATIONS_ENABLED=true` only after validating the outbox schema. Install the user-level unit from `config/systemd/hermes-notification-worker.service` after configuring a restricted `SUPABASE_WRITER_KEY`; the worker uses the local Hermes CLI and deterministic text fallback. `#costfinder-ops` should be stored as its immutable Slack channel ID in outbox targets.

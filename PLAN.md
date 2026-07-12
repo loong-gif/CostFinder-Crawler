@@ -99,3 +99,15 @@ _Locked via grill — by Claude + user_
 
 - Database permission boundary is in scope: active writers move from `SUPABASE_SERVICE_ROLE_KEY` to a restricted writer role/API key that can invoke only approved mutation RPCs; service-role credentials are reserved for migrations and controlled administration.
 - Add deployment/integration tests proving direct INSERT/UPDATE/DELETE against business tables fail for the writer role while approved RPCs succeed, and verify no active client retains service-role credentials.
+
+
+## Production schema audit resolution
+
+The live Supabase schema was inspected read-only before any corrective migration. It contains the legacy `promo_offer_master.status` and `promo_monitor_state`, but none of the evidence, outbox, or migration-ledger tables. The migration implementation was split accordingly:
+
+- `m004_safety_invariants.sql`: only `schema_migrations`, `operation_runs`, `notification_outbox`, and delivery RPCs.
+- `m005_monitor_state_leases.sql`: additive fields on the verified existing monitor table, guarded by a table preflight.
+- `m006_evidence_pipeline_bootstrap.sql`: new evidence/change-event tables only; it does not alter `promo_offer_master.status`.
+- `scripts/audit_schema_preflight.py`: read-only REST schema audit before each staged migration.
+
+The previous combined M004 is retained under `config/sql/archive/` for historical review and is not an execution target.

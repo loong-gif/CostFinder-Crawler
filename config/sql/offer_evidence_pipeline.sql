@@ -1,3 +1,8 @@
+-- LEGACY DESIGN: this file was authored before the production schema audit.
+-- Do not run it directly against production. Use m006_evidence_pipeline_bootstrap.sql
+-- after running scripts/audit_schema_preflight.py and reviewing its output.
+-- It still documents the original full evidence design for reference.
+
 -- Offer evidence pipeline schema for CostFinder.
 --
 -- Purpose:
