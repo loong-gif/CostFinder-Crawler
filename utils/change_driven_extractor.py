@@ -1013,7 +1013,8 @@ def build_change_event_payloads(
             )
         elif action == "mark_ended":
             event["proposed_field_updates"] = {
-                "lifecycle_status": "missing_once",
+                "lifecycle_status": "ended",
+                "ended_reason": "explicit_successful_disappearance",
                 "missing_count_increment": 1,
             }
 
@@ -1426,7 +1427,7 @@ def apply_offer_actions(
                 _update_master_row(
                     client,
                     matched_id,
-                    {"status": "ended"},
+                    {"status": "ended", "lifecycle_status": "ended"},
                     now_iso=now_iso,
                 )
                 ended += 1
@@ -1523,6 +1524,7 @@ def extract_and_upsert_check_pages(
     dry_run: bool = False,
     min_confidence: str = "low",
     include_change_events: bool = False,
+    auto_apply_high_confidence: bool = True,
 ) -> Dict[str, Any]:
     """Full change-driven pipeline for one check's meaningful changed pages."""
     pages_with_diff = 0
@@ -1620,13 +1622,33 @@ def extract_and_upsert_check_pages(
         total_offers_extracted += len(extracted_offers)
 
         if extracted_offers:
+            change_payloads = build_change_event_payloads(
+                extracted_offers,
+                payload,
+                candidate_offers,
+                source_url=url,
+                source_name=domain_name,
+            )
+            decision_plan = build_change_event_decision_plan(change_payloads)
+            eligible_indexes = {
+                int(event.get("event_index", 0)) - 1
+                for event in decision_plan["auto_apply_events"]
+                if str(event.get("event_index", "")).isdigit()
+            }
+            offers_to_apply = (
+                [offer for index, offer in enumerate(extracted_offers) if index in eligible_indexes]
+                if auto_apply_high_confidence
+                else []
+            )
             apply_result = apply_offer_actions(
                 client_db,
-                extracted_offers,
+                offers_to_apply,
                 source_url=url,
                 source_name=domain_name,
                 dry_run=dry_run,
             )
+            apply_result["proposed_offers"] = len(extracted_offers)
+            apply_result["withheld_for_review"] = len(extracted_offers) - len(offers_to_apply)
             total_updated += apply_result["updated"]
             total_inserted += apply_result["inserted"]
             total_ended += apply_result["ended"]
@@ -1642,18 +1664,14 @@ def extract_and_upsert_check_pages(
                 **apply_result,
                 **({"offer_actions": extracted_offers} if dry_run else {}),
             }
+            total_auto_apply_events += len(decision_plan["auto_apply_events"])
+            total_review_events += len(decision_plan["review_events"])
             if include_change_events:
-                change_payloads = build_change_event_payloads(
-                    extracted_offers,
-                    payload,
-                    candidate_offers,
-                    source_url=url,
-                    source_name=domain_name,
-                )
-                decision_plan = build_change_event_decision_plan(change_payloads)
-                total_auto_apply_events += len(decision_plan["auto_apply_events"])
-                total_review_events += len(decision_plan["review_events"])
                 page_result.update(decision_plan)
+                if not dry_run:
+                    page_result["change_event_persistence"] = persist_change_event_payloads(
+                        client_db, decision_plan, dry_run=False
+                    )
             page_results.append(page_result)
             log.info(
                 "change_driven: {url} -> {n} offers (updated={u}, inserted={i}, ended={e}, downgraded={d})",

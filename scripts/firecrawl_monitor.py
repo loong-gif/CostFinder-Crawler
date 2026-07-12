@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -74,7 +75,7 @@ def get_supabase_client():
     import requests
 
     base_url = os.getenv("SUPABASE_URL")
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_role_key = get_supabase_writer_key()
     if not base_url or not service_role_key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
 
@@ -195,6 +196,8 @@ def build_scrape_target(urls: List[str]) -> Dict[str, Any]:
                 }
             ],
             "maxAge": 0,
+            "onlyMainContent": True,
+            "blockAds": True,
         },
     }
 

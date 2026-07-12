@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -473,6 +474,7 @@ def process_monitor(
             if llm_client is not None and meaningful_pages:
                 from utils.change_driven_extractor import extract_and_upsert_check_pages
                 try:
+                    auto_apply_enabled = os.getenv("AUTO_APPLY_HIGH_CONFIDENCE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
                     change_driven_result = extract_and_upsert_check_pages(
                         meaningful_pages,
                         llm_client,
@@ -481,6 +483,7 @@ def process_monitor(
                         dry_run=dry_run,
                         min_confidence=min_confidence,
                         include_change_events=include_change_events,
+                        auto_apply_high_confidence=auto_apply_enabled,
                     )
                     check_entry["change_driven"] = change_driven_result
                     if (
@@ -630,8 +633,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--include-change-events",
-        action="store_true",
-        help="Include dry-run promo_offer_change_events payloads in the report",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Persist and report promo_offer_change_events (use --no-include-change-events only for diagnostics)",
     )
     return parser.parse_args()
 

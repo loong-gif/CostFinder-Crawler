@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -141,7 +142,7 @@ def parse_args() -> argparse.Namespace:
 def load_client() -> SupabaseRestClient:
     load_dotenv(PROJECT_ROOT / ".env")
     base_url = os.getenv("SUPABASE_URL")
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_role_key = get_supabase_writer_key()
     if not base_url or not service_role_key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)

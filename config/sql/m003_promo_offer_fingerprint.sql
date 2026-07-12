@@ -1,7 +1,7 @@
 -- M003: promo_offer_master offer_fingerprint support
 --
 -- Part A (safe anytime): ensure column exists, drop legacy lifecycle_status index.
--- Part B (run AFTER scripts/dedupe_promo_offer_master.py): active fingerprint unique index.
+-- Part B (run AFTER scripts/archive/dedupe_promo_offer_master.py): active fingerprint unique index.
 
 BEGIN;
 

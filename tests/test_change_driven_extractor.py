@@ -490,7 +490,7 @@ def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
     assert len(client.update_calls) == 4
     assert "updated_at" in client.update_calls[0]["payload"]
     assert "updated_at" not in client.update_calls[1]["payload"]
-    assert client.update_calls[3]["payload"] == {"status": "ended"}
+    assert client.update_calls[3]["payload"] == {"status": "ended", "lifecycle_status": "ended"}
 
 
 def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_response_text():
@@ -599,7 +599,7 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
     assert events[1]["proposed_new_offer"]["channel"] == "web_change_driven"
     assert events[1]["proposed_new_offer"]["discount_price"] == 199.0
     assert events[2]["business_change_type"] == "offer_missing"
-    assert events[2]["proposed_field_updates"]["lifecycle_status"] == "missing_once"
+    assert events[2]["proposed_field_updates"]["lifecycle_status"] == "ended"
     assert events[2]["proposed_field_updates"]["missing_count_increment"] == 1
     assert [item["candidate_offer_id"] for item in result["match_candidates"]] == [
         "offer-botox",
@@ -830,8 +830,9 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
     assert result["pages_without_diff"] == 0
     assert result["total_offers_extracted"] == 3
     assert result["total_updated"] == 1
-    assert result["total_inserted"] == 1
-    assert result["total_ended"] == 1
+    assert result["total_inserted"] == 0
+    assert result["total_ended"] == 0
+    assert result["page_results"][0]["withheld_for_review"] == 2
     assert result["candidates_unavailable"] is False
     assert result["page_results"][0]["downgraded"] == 0
     assert len(result["page_results"][0]["offer_actions"]) == 3
@@ -886,8 +887,9 @@ def test_extract_and_upsert_check_pages_downgrades_to_insert_when_candidates_una
     )
 
     assert result["candidates_unavailable"] is True
-    assert result["total_inserted"] == 1
+    assert result["total_inserted"] == 0
     assert result["total_updated"] == 0
+    assert result["page_results"][0]["withheld_for_review"] == 1
     assert result["page_results"][0]["candidates_unavailable"] is True
     assert result["page_results"][0]["downgraded"] == 1
     assert result["page_results"][0]["offer_actions"][0]["action"] == "insert"

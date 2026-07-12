@@ -171,32 +171,15 @@ python scripts/audit_promo_offer_master.py
 python scripts/audit_promo_website_staging.py
 ```
 
-### 5) promo_offer_master 质量运维（去重 / 价格 / 字段）
+### 5) promo_offer_master 质量运维
 
-写入路径已支持 `offer_fingerprint` 去重（同页同服务同 unit → UPDATE 而非重复 INSERT）。历史数据一次性清理顺序：
+生产链路已在写入时使用 `offer_fingerprint` 去重。历史数据去重、回填、规范化和迁移脚本已移至 [`scripts/archive/`](scripts/archive/)，仅用于审计或受控恢复。
+
+如需部署 schema 变更，继续使用：
 
 ```bash
-# 1) 确保列存在（可随时执行）
 python scripts/apply_sql_migration.py config/sql/m003_promo_offer_fingerprint.sql
-
-# 2) dry-run 预览
-python scripts/dedupe_promo_offer_master.py
-python scripts/backfill_offer_prices.py
-python scripts/normalize_offer_fields.py
-python scripts/normalize_service_category.py --dry-run
-
-# 3) 正式执行（先 dedupe，再建唯一索引，再回填）
-python scripts/dedupe_promo_offer_master.py --apply
-python scripts/apply_sql_migration.py config/sql/m003b_promo_offer_active_fp_index.sql
-python scripts/backfill_offer_prices.py --apply
-python scripts/normalize_offer_fields.py --apply
-python scripts/normalize_service_category.py
-
-# 4) 验证
-python scripts/audit_promo_offer_master.py
 ```
-
-`dedupe` 会物理删除重复行；删前重映射 `claims` / `saved_deals`。也可用 `python scripts/dedupe_promo_offer_master.py --apply --create-index` 在 dedupe 成功后自动应用唯一索引。
 
 ## 输出位置
 
@@ -205,6 +188,21 @@ python scripts/audit_promo_offer_master.py
 - 审计报告：`reports/`（与 `output/` 同为运行产物，已 gitignore）
 - 日志文件：`output/logs/`
 
+## 脚本维护边界
+
+- `scripts/` 只保留可重复运行、已文档化的生产链路和审计入口。
+- `crawler/`、`utils/` 保存可复用的抓取、清洗、入库和业务规则。
+- 已执行的数据修复、迁移、实验和临时诊断脚本放在 [`scripts/archive/`](scripts/archive/)，不纳入正常测试与调度。
+- schema 部署 SQL 仍保留在 `config/sql/`，由 `scripts/apply_sql_migration.py` 执行。
+
 ## 不纳入本 README 的内容
 
 - `scripts/archive/`：历史一次性脚本与部署 bootstrap，不再维护
+
+## Production safety and notifications
+
+Active writers require `SUPABASE_WRITER_KEY`. `SUPABASE_SERVICE_ROLE_KEY` is reserved for migrations and controlled administration; `ALLOW_SERVICE_ROLE_WRITES=true` is an explicit rollback-only diagnostic override.
+
+The safety migration is `config/sql/m004_safety_invariants.sql`. Run it with `scripts/apply_sql_migration.py --dry-run` first, then apply only after reviewing the preflight output. It creates the migration ledger, canonical offer lifecycle checks, durable notification outbox, and outbox RPC transitions.
+
+Set `SLACK_NOTIFICATIONS_ENABLED=true` only after validating the outbox schema. Install the user-level unit from `config/systemd/hermes-notification-worker.service` after configuring a restricted `SUPABASE_WRITER_KEY`; the worker uses the local Hermes CLI and deterministic text fallback. `#costfinder-ops` should be stored as its immutable Slack channel ID in outbox targets.

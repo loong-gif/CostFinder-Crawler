@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Check URL statuses from the LiquidWeb machine. Run via: ssh ... python3 /tmp/check_urls.py"""
+import subprocess, sys, json, re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
+
+URLS = """https://zenaestheticsandwellness.com/specials
+https://zahrahealthytouch.glossgenius.com/services
+https://youthbar.com/memberships
+https://youthbar.com/service-pricing-boulder-colorado
+https://youngerlook.com/non-surgical/botox-dysport-xeomine/
+https://yasmintork.com/facial
+https://wheelermedspa.com/memberships/
+https://westmedspa.com/specials
+https://waveplasticsurgery.com/specials/
+https://vgbeautyloungetucson.zoca.com/services
+https://vasuskinsolutions.com/memberships/
+https://vasuskinsolutions.com/skincare-specials-boulder/
+https://trubalancedaesthetics.com/membership/
+https://triviumsalon.com/skin/
+https://trimbodymd.com/las-vegas-nv/cosmetic-services/laser-treatments/
+https://treatsalonandspa.com/services
+https://touchnglam.com/collections/all
+https://totalwomenhealthcare.com/pricing/
+https://topangabeauty.com/specials/
+https://topangabeauty.com/price-list/
+https://thetreatmentroomokc.com/memberships/
+https://themedspotla.com/membership/
+https://theface.co/membership
+https://symmetrynorman.com/specials
+https://symmetrynorman.com/membership/
+https://sskplasticsurgery.com/specials
+https://smoothmd.com/collections/all-treatments
+https://skinzonemedical.com/specials/
+https://skinstudiookc.com/specials
+https://skinperfectmedical.com/
+https://skinlaundry.com/membership
+https://skinjectables.com/specials/
+https://skinjectables.com/membership/
+https://skinani.com/facials/
+https://simplicitylaser.com/collections/all
+https://sculptedmedspas.com/offers
+https://santaanadental.com/free-sedation-offer/
+https://saddlebackdermatology.com/services/
+https://robertmarkley.com/specials/
+https://rmaok.com/specials
+https://richlandmd.com/promotions/
+https://revivemedspaokc.com/pricing
+https://restore.com/memberships
+https://renewedmedicalhealth.com/medical-aesthetics/botox/
+https://renew360az.com/renew360-member-100-month/
+https://refreshmedspala.com/memberships/
+https://redrocksalon.com/pricing/
+https://rawbeautyaesthetics.com/prices/
+https://rachelmoayerskin.com/collections/sensitive-skin
+https://quiktox.com/pricing/
+https://primeaestheticsok.com/memberships
+https://primeaestheticsok.com/specials
+https://prestigiousbodycontouring.com/services/
+https://plumpmedicalspa.com/shop/specials
+https://plumpmedicalspa.com/specials
+https://pimaderm.com/specials/
+https://peachskinlaser.com/promotions/
+https://peachskinlaser.com/bogo-deals/
+https://parisanbeauty.com/services/
+https://nubellamedspa.com/nu-bella-store-tepDU/promos
+https://newportbodyworks.com/facials
+https://newportbeachskintightening.com/pricing
+https://newlookskincenter.com/monthly-specials/
+https://nakedmd.com/collections/offers
+https://myenve.com/alle-promos/
+https://movaesthetics.com/injectables/botox/
+https://mirrormirrorbeautycenter.com/collections
+https://mintwaxcenter.com/memberships
+https://milanlaser.com/specials
+https://masters-medspa.com/pricing
+https://massageluxe.com/facials/
+https://marjanbeautyrtz.com/pricing
+https://mariposaskincare.com/collections/specials-gifts-with-purchase
+https://mariposaokc.com/medspa-services/dermal-fillers/
+https://luxeroomcosmetic.com/botox-specials-denver-boulder/
+https://luxeroomcosmetic.com/luxe-club-memberships/
+https://luminousmedaesthetics.com/services/
+https://lp.h-md.com/monthlypromotions
+https://louloumedspa.com/membership/
+https://longevityok.com/pages/specials-page
+https://longevityok.com/pages/membership
+https://laserlightsc.com/specials
+https://laseraway.com/pricing/
+https://laraclinic.com/services-pricing
+https://laqueenmedspa.com/year-end-specials/
+https://ladivanailsbaryukon.com/services
+https://labelleoc.com/specials
+https://l3aesthetics.com/l3-beauty-bank/
+https://irvinespa.com/our-services/
+https://irvinenailsirvine.com/service/
+https://innerbeautyacuclinic.com/price
+https://iconiquemedspa.com/shop/promotions/
+https://ibeautyirvine.com/promotions
+https://highwateraesthetics.com/injectables/neuromodulators/botox/
+https://halestormaesthetics.com/spring-specials
+https://halcyonmindbody.com/memberships/
+https://haciendadelsol.com/offers
+https://gudgelaesthetics.com/specials
+https://gudgelaesthetics.com/membership
+https://greenspringaesthetics.com/specials/
+https://goldcoastaesthetics.com/memberships
+https://glowupmedspa.com/pages/injectables
+https://genesismedlaser.com/specials-2/
+https://fuchsiaspa.com/monthly-specials/
+https://francoaesthetics.com/specials
+https://francoaesthetics.com/membership-plans
+https://foothillsfacialplasticsurgery.com/procedures/nonsurgical/botox-cosmetic/
+https://facialartistryaesthetics.com/specials/
+https://facialaestheticsinc.com/offers/
+https://execesthetics.com/services
+https://everglowaesthetics.com/pricing
+https://everglowaesthetics.com/membership
+https://drlaserla.com/sale/
+https://dovaliaaesthetics.com/services
+https://dollfacepmu.com/services
+https://dollfacelaguna.com/services/
+https://dolcemd.com/special-offers
+https://dolcemd.com/membership/
+https://dermplasticsaz.com/specials/
+https://deluxemedspa.com/treatments/botox
+https://conciergeaesthetics.com/current-specials/new-patient-discount/
+https://conciergeaesthetics.com/current-specials/
+https://clarebellaokc.com/specials/
+https://cienegaspa.com/services/botox/
+https://cereset.com/pricing
+https://calistamedspa.com/services
+https://boulderskinbar.com/memberships/
+https://boulderskinbar.com/resources/specials/
+https://bespokebeautyusa.com/promotions
+https://bespokebeautyusa.com/pricing
+https://belleviemedical.com/special-offer
+https://belleviemedical.com/membership
+https://belleroseaesthetics.net/promotions
+https://belleamemedspa.com/belle-ame-bank/
+https://bellaluceokc.com/specials
+https://beautynowok.com/membership
+https://beautybysatik.com/plans-pricing
+https://beautyandhealthbyliz.com/med-spa-specials-tucson/
+https://bbeautifulmedspa.com/pricing/
+https://barewaxingandlaser.com/memberships
+https://barewaxingandlaser.com/membership-pricing
+https://babyfacebeautywellness.com/promotion
+https://babyfacebeautywellness.com/babyface-membershipplans
+https://avantdermatology.com/patient-resources/skincare-specials-tucson-az
+https://avantdermatology.com/lp/lip-filler-special
+https://amoderm.com/cosmetic-store/special-offers
+https://amoderm.com/special-offers/
+https://alchemyfacebar.com/pages/pricing
+https://alchemyfacebar.com/pages/promos
+https://afterglowexperienceaz.com/new-client-monthly-special
+https://advancedaesthetics.com/neuromodulators/botox/
+https://acemedspa.com/promotions
+https://acemedspa.com/memberships-at-ace/""".strip().split('\n')
+
+def check(url):
+    try:
+        r = subprocess.run(
+            ['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}|%{url_effective}|%{num_redirects}',
+             '--connect-timeout', '10', '--max-time', '25', '-L', url],
+            capture_output=True, text=True, timeout=30)
+        out = r.stdout.strip()
+        if not out:
+            return (url, 'CURL_EMPTY', url, 0)
+        parts = out.split('|')
+        code = parts[0]
+        final = parts[1] if len(parts) > 1 else url
+        redirs = int(parts[2]) if len(parts) > 2 else 0
+        return (url, code, final, redirs)
+    except subprocess.TimeoutExpired:
+        return (url, 'TIMEOUT', url, 0)
+    except Exception as e:
+        return (url, f'ERROR:{e}', url, 0)
+
+def get_domain(u):
+    return urlparse(u).netloc.lower().replace('www.', '')
+
+results = []
+with ThreadPoolExecutor(max_workers=10) as pool:
+    futures = {pool.submit(check, url): url for url in URLS}
+    for f in as_completed(futures):
+        results.append(f.result())
+
+# Analyze
+problems = []  # 4xx, 5xx, timeout, cross-domain redirect
+for url, code, final, redirs in sorted(results):
+    orig_domain = get_domain(url)
+    final_domain = get_domain(final)
+    
+    issue = None
+    if code.startswith('4') or code.startswith('5'):
+        issue = f'HTTP {code}'
+    elif code == 'TIMEOUT' or code.startswith('CURL_') or code.startswith('ERROR:'):
+        issue = code
+    elif orig_domain != final_domain:
+        issue = f'Cross-domain redirect: {url} -> {final}'
+    elif redirs >= 3:
+        issue = f'Redirect chain ({redirs} hops): {url} -> ... -> {final}'
+    
+    if issue:
+        problems.append((url, issue, final, redirs))
+    else:
+        # Just note the redirect count for same-domain
+        if redirs > 0:
+            pass  # OK redirects
+
+print(f'=== URL Check Results ===')
+print(f'Total: {len(results)}')
+ok = len(results) - len(problems)
+print(f'OK (2xx, same domain): {ok}')
+print(f'Problematic: {len(problems)}')
+print()
+
+if problems:
+    print('=== PROBLEMATIC URLS ===')
+    for url, issue, final, redirs in problems:
+        print(f'{issue:40s} | {url}')

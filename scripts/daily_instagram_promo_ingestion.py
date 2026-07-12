@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 from utils.supabase_rest import SupabaseRestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +36,10 @@ from utils.instagram_promo_filter import (
     resolve_post_local_date,
     summarize_filtered_post,
 )
+from utils.social_ingestion import (
+    chunked, fetch_all_rows, fetch_dataset_items, local_date_window_bounds_utc,
+    local_day_bounds_utc, resolve_target_date, run_cli_json, stringify_timestamp, write_json,
+)
 
 TABLE_NAME = "promo_social_staging"
 DEFAULT_ACTOR_ID = os.getenv("APIFY_INSTAGRAM_ACTOR_ID") or os.getenv("INSTAGRAM_ACTOR_ID") or "apify/instagram-scraper"
@@ -47,6 +52,7 @@ DEFAULT_LOOKBACK_DAYS = 1
 TIMESTAMP_COLUMN_CANDIDATES = ["local_post_date", "published_at", "posted_at", "timestamp", "crawl_timestamp", "created_at"]
 POST_URL_COLUMN_CANDIDATES = ["post_url", "url", "postUrl", "source_url"]
 
+@dataclass(frozen=True)
 class InstagramTarget:
     master_id: Optional[int]
     business_id: Optional[int]
@@ -72,43 +78,10 @@ def parse_args() -> argparse.Namespace:
 def load_supabase_client() -> SupabaseRestClient:
     load_dotenv(PROJECT_ROOT / ".env")
     base_url = os.getenv("SUPABASE_URL")
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_role_key = get_supabase_writer_key()
     if not base_url or not service_role_key:
         raise RuntimeError("缺少 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)
-
-def fetch_all_rows(
-    client: SupabaseRestClient,
-    table: str,
-    select: str,
-    *,
-    filters: Optional[Dict[str, str]] = None,
-    page_size: int = 500,
-    order: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    offset = 0
-    while True:
-        batch = client.fetch_rows(
-            table,
-            select,
-            filters=filters,
-            limit=page_size,
-            offset=offset,
-            order=order,
-        )
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-    return rows
-
-def resolve_target_date(local_date_arg: Optional[str], timezone_name: str) -> date:
-    if local_date_arg:
-        return date.fromisoformat(local_date_arg)
-    return datetime.now(ZoneInfo(timezone_name)).date()
 
 def resolve_target_date_window(target_date: date, lookback_days: int) -> Tuple[date, date]:
     days = max(1, int(lookback_days or 1))
@@ -125,22 +98,6 @@ def resolve_report_path(now: datetime, lookback_days: int) -> Path:
     timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
     mode = "weekly" if int(lookback_days or 1) > 1 else "daily"
     return OUTPUT_DIR / f"instagram_promo_{mode}_ingestion_{timestamp}.json"
-
-def write_json(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def run_cli_json(command: Sequence[str]) -> Dict[str, Any]:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "").strip() or "命令执行失败")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"命令输出不是合法 JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("命令输出格式异常，预期为 JSON 对象")
-    return payload
 
 def run_actor(
     actor_id: str,
@@ -176,27 +133,6 @@ def run_actor(
                 str(actor_timeout_secs),
             ]
         )
-
-def fetch_dataset_items(dataset_id: str) -> List[Dict[str, Any]]:
-    result = subprocess.run(
-        ["apify", "datasets", "get-items", dataset_id, "--format", "json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "").strip() or "拉取 dataset 失败")
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"dataset 输出不是合法 JSON: {exc}") from exc
-    if not isinstance(payload, list):
-        raise RuntimeError("dataset 输出格式异常，预期为 JSON 数组")
-    return [item for item in payload if isinstance(item, dict)]
-
-def chunked(items: Sequence[str], size: int) -> Iterator[List[str]]:
-    for start in range(0, len(items), max(1, size)):
-        yield list(items[start : start + max(1, size)])
 
 def load_fixture_posts(path_str: str) -> List[Dict[str, Any]]:
     path = Path(path_str).expanduser().resolve()
@@ -317,25 +253,6 @@ def detect_table_columns(client: SupabaseRestClient, table: str) -> Set[str]:
 
 def build_target_lookup(targets: Sequence[InstagramTarget]) -> Dict[str, InstagramTarget]:
     return {target.instagram_url: target for target in targets}
-
-def local_day_bounds_utc(target_date: date, timezone_name: str) -> Tuple[datetime, datetime]:
-    zone = ZoneInfo(timezone_name)
-    local_start = datetime.combine(target_date, time.min, tzinfo=zone)
-    local_end = local_start + timedelta(days=1)
-    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
-
-def local_date_window_bounds_utc(start_date: date, end_date: date, timezone_name: str) -> Tuple[datetime, datetime]:
-    zone = ZoneInfo(timezone_name)
-    local_start = datetime.combine(start_date, time.min, tzinfo=zone)
-    local_end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=zone)
-    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
-
-def stringify_timestamp(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    return str(value)
 
 def resolve_existing_row_local_date(row: Dict[str, Any], timezone_name: str) -> str:
     explicit_local_date = (row.get("local_post_date") or "").strip()

@@ -175,6 +175,10 @@ NOISE_SEGMENT_PATTERNS = {
     "cta": re.compile(r"\b(book now|book online|schedule now|learn more|read more|call now|get started)\b", re.IGNORECASE),
     "review": re.compile(r"\b(star\s+star|review|reviews|testimonial|testimonials)\b", re.IGNORECASE),
     "social": re.compile(r"\b(facebook|instagram|tiktok|youtube|follow us)\b", re.IGNORECASE),
+    "cookie_consent": re.compile(r"\b(cookie|cookies|consent|gdpr|ccpa|privacy preference|data processing)\b", re.IGNORECASE),
+    "cookie_buttons": re.compile(r"^(accept all|reject all|customi[sz]e|save (my )?preferences|do not sell|necessary only)\s*$", re.IGNORECASE),
+    "cookie_blurb": re.compile(r"\b(we (use|value) (cookies|your privacy)|enhance your browsing|personalised? ads|analys[ez] our traffic)\b", re.IGNORECASE),
+    "chat_widget": re.compile(r"\b(chat with us|live chat|we('ll| will) reply|how can we help|send us a message)\b", re.IGNORECASE),
 }
 PROMO_SEGMENT_PATTERNS = {
     "price": PRICE_PATTERNS,
@@ -381,7 +385,79 @@ def _clean_markdown_content(content: str) -> str:
     stripped = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", stripped)
     stripped = re.sub(r"<https?://[^>]+>", "", stripped)
     stripped = re.sub(r"https?://[^\s)]+", "", stripped)
+    stripped = _strip_cookie_consent_banners(stripped)
     return _normalize_markdown_text(stripped)
+
+
+_COOKIE_BANNER_HEADER = re.compile(
+    r"(?:revisit consent|we value your privacy|we use cookies|this website uses cookies|"
+    r"cookie policy|privacy preference|cookie consent|cookie notice|"
+    r"we care about your privacy|your privacy is important)",
+    re.IGNORECASE,
+)
+_COOKIE_BUTTON_CLUSTER = re.compile(
+    r"(accept all|reject all|save .{0,20}preferences|customi[sz]e|customi[sz]e settings|"
+    r"necessary only|do not sell|manage cookies)",
+    re.IGNORECASE,
+)
+
+
+def _strip_cookie_consent_banners(text: str) -> str:
+    """Remove cookie/GDPR consent banner blocks from markdown content.
+
+    Cookie banners span multiple consecutive blocks: a header like "We value your
+    privacy", followed by description text, followed by button clusters like
+    "Accept All / Reject All / Customise".  We detect the contiguous span and
+    drop the whole thing.
+    """
+    blocks = text.split("\n\n")
+    if len(blocks) < 3:
+        return text
+
+    # Phase 1: mark each block as cookie-like
+    is_cookie: list[bool] = []
+    for block in blocks:
+        stripped = block.strip()
+        if not stripped:
+            is_cookie.append(False)
+            continue
+        lines = [l for l in stripped.splitlines() if l.strip()]
+        short_ratio = sum(1 for l in lines if len(l.split()) <= 4) / max(len(lines), 1)
+        header = bool(_COOKIE_BANNER_HEADER.search(stripped))
+        buttons = len(_COOKIE_BUTTON_CLUSTER.findall(stripped))
+        # A block is cookie-like if: header match, OR button-dense, OR short+adjacent
+        cookie_like = (
+            header
+            or (buttons >= 2 and short_ratio > 0.4)
+            or (buttons >= 1 and short_ratio > 0.7 and len(stripped) < 200)
+        )
+        is_cookie.append(cookie_like)
+
+    # Phase 2: find contiguous cookie spans anchored by a header + at least 1 button
+    drop_mask = [False] * len(blocks)
+    i = 0
+    while i < len(blocks):
+        if not is_cookie[i]:
+            i += 1
+            continue
+        # Look ahead for the end of this span
+        j = i
+        has_header = False
+        has_buttons = False
+        while j < len(blocks) and is_cookie[j]:
+            stripped = blocks[j].strip()
+            if stripped and _COOKIE_BANNER_HEADER.search(stripped):
+                has_header = True
+            if stripped:
+                has_buttons = has_buttons or bool(_COOKIE_BUTTON_CLUSTER.findall(stripped))
+            j += 1
+        # Drop the span if it has both header and buttons
+        if has_header and has_buttons:
+            for k in range(i, j):
+                drop_mask[k] = True
+        i = j
+
+    return "\n\n".join(b for b, drop in zip(blocks, drop_mask) if not drop)
 
 
 def _is_markdown_ui_block(text: str) -> bool:
@@ -957,6 +1033,19 @@ def build_llm_ready_content(filtered_segments: Iterable[Dict[str, Any]], max_cha
     return "\n\n".join(chunks)
 
 
+def build_clean_content(filtered_segments: Iterable[Dict[str, Any]], max_chars: int = 6000) -> str:
+    """Join filtered segments without segment markers for clean DB storage."""
+    chunks: List[str] = []
+    total_chars = 0
+    for segment in filtered_segments:
+        text = segment["text"]
+        if total_chars + len(text) + 2 > max_chars:
+            break
+        chunks.append(text)
+        total_chars += len(text) + 2
+    return "\n\n".join(chunks)
+
+
 def prepare_page_content(content: str, source_type: str = "html") -> Dict[str, Any]:
     raw_text = clean_page_text(content, source_type=source_type)
     raw_segments = extract_page_segments(content, source_type=source_type)
@@ -967,8 +1056,12 @@ def prepare_page_content(content: str, source_type: str = "html") -> Dict[str, A
     if not page_content_llm and raw_text:
         page_content_llm = raw_text[:6000]
         content_quality_flags = sorted(set(content_quality_flags + ["fallback:raw_page_content"]))
+    # Use filtered+deduped content (no segment markers) as the canonical stored content
+    page_content_clean = build_clean_content(filtered_segments, max_chars=6000)
+    if not page_content_clean and raw_text:
+        page_content_clean = raw_text[:6000]
     return {
-        "page_content": raw_text,
+        "page_content": page_content_clean,
         "page_segments_raw": raw_segments,
         "page_segments_filtered": filtered_segments,
         "page_content_llm": page_content_llm,

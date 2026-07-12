@@ -1,0 +1,18 @@
+[Unit]
+Description=CostFinder Hermes notification outbox worker
+After=network-online.target hermes-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/loong/projects/CostFinder-Crawler
+ExecStart=/home/loong/projects/CostFinder-Crawler/.venv/bin/python scripts/hermes_notification_worker.py
+EnvironmentFile=/home/loong/projects/CostFinder-Crawler/.env
+Environment=HERMES_PROFILE=costfinder-notifier
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -23,6 +23,19 @@ class DailyInstagramPromoIngestionTests(unittest.TestCase):
 
         self.assertEqual(ingestion.resolve_only_posts_newer_than(args), "7 days")
 
+    def test_instagram_target_is_explicitly_instantiable(self) -> None:
+        target = ingestion.InstagramTarget(
+            master_id=1,
+            business_id=2,
+            name="Demo Spa",
+            instagram_url="https://www.instagram.com/demo_spa",
+        )
+
+        self.assertEqual(target.master_id, 1)
+        self.assertEqual(target.business_id, 2)
+        self.assertEqual(target.name, "Demo Spa")
+        self.assertEqual(target.instagram_url, "https://www.instagram.com/demo_spa")
+
     def test_collect_posts_in_window_keeps_only_last_seven_days_and_dedupes(self) -> None:
         raw_posts = [
             {

@@ -124,3 +124,35 @@ class SupabaseRestClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def rpc(self, function: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+        response = self.session.post(
+            f"{self.base_url}/rpc/{function}",
+            json=payload or {},
+            timeout=90,
+        )
+        response.raise_for_status()
+        if not response.text.strip():
+            return None
+        return response.json()
+
+
+def get_supabase_writer_key() -> str:
+    """Return the restricted writer credential for active application paths.
+
+    Service-role credentials are reserved for migrations/administration. A
+    temporary explicit override exists only for controlled rollback diagnostics.
+    """
+    import os
+
+    writer_key = os.getenv("SUPABASE_WRITER_KEY")
+    if writer_key:
+        return writer_key
+    if os.getenv("ALLOW_SERVICE_ROLE_WRITES", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if service_key:
+            return service_key
+    raise RuntimeError(
+        "Missing SUPABASE_WRITER_KEY; service-role credentials are reserved for migrations "
+        "(set ALLOW_SERVICE_ROLE_WRITES=true only for controlled rollback diagnostics)"
+    )

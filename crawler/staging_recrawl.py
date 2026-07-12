@@ -15,6 +15,7 @@ from urllib.parse import urlparse, urlunparse
 
 import requests
 from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 from firecrawl.v2.types import ScrapeOptions
 
 from config.settings import FIRECRAWL_CRAWL_MAX_PAGES, FIRECRAWL_CRAWL_TIMEOUT_SECS
@@ -122,7 +123,7 @@ def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestCli
     root = project_root or Path(__file__).resolve().parents[1]
     load_dotenv(root / ".env")
     base_url = os.getenv("SUPABASE_URL")
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    service_role_key = get_supabase_writer_key()
     if not base_url or not service_role_key:
         raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
     return SupabaseRestClient(base_url, service_role_key)
@@ -209,7 +210,7 @@ def recrawl_domain_via_firecrawl(
     crawl_job = fc.crawl(
         target.website_url,
         limit=max_crawl_pages,
-        scrape_options=ScrapeOptions(formats=["markdown"]),
+        scrape_options=ScrapeOptions(formats=["markdown"], only_main_content=True, block_ads=True),
         allow_subdomains=True,
         ignore_query_parameters=True,
         timeout=crawl_timeout_secs)
@@ -563,24 +564,29 @@ class MonitorStateStore:
         fallback_path: Path = MONITOR_STATE_FALLBACK_PATH):
         self.client = client
         self.fallback_path = fallback_path
+        self.allow_fallback = os.getenv("ALLOW_MONITOR_STATE_FILE_FALLBACK", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.use_supabase = client is not None
         self._fallback: Dict[str, Dict[str, Any]] = {}
         self._probe_backend()
 
     def _probe_backend(self) -> None:
         if not self.client:
+            if not self.allow_fallback:
+                raise RuntimeError("Supabase monitor state is required; set ALLOW_MONITOR_STATE_FILE_FALLBACK=true only for explicit diagnostics")
             self.use_supabase = False
             self._load_fallback()
-            log.warning("Monitor state using local fallback (no Supabase client).")
+            log.warning("Monitor state using explicitly enabled local fallback (no Supabase client).")
             return
         try:
             self.client.fetch_rows(PROMO_MONITOR_STATE_TABLE, "monitor_id", limit=1)
             self.use_supabase = True
         except Exception as exc:
+            if not self.allow_fallback:
+                raise RuntimeError(f"promo_monitor_state table unavailable and fallback is disabled: {exc}") from exc
             self.use_supabase = False
             self._load_fallback()
             log.error(
-                "promo_monitor_state table unavailable ({error}); using local fallback at {path}".format(
+                "promo_monitor_state table unavailable ({error}); using explicitly enabled local fallback at {path}".format(
                     error=exc,
                     path=self.fallback_path)
             )
@@ -671,7 +677,9 @@ class MonitorStateStore:
                     on_conflict="monitor_id")
                 return
             except Exception as exc:
-                log.error("Failed to upsert monitor state to Supabase ({error}); falling back to file.", error=exc)
+                if not self.allow_fallback:
+                    raise RuntimeError(f"Failed to persist monitor state and fallback is disabled: {exc}") from exc
+                log.error("Failed to upsert monitor state to Supabase ({error}); using explicitly enabled file fallback.", error=exc)
                 self.use_supabase = False
                 self._load_fallback()
 
