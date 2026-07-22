@@ -102,7 +102,7 @@ class DailyInstagramPromoIngestionTests(unittest.TestCase):
         inserted, errors, with_business_id = ingestion.insert_rows_with_fallback(
             client,
             posts=[post],
-            target_lookup={"https://www.instagram.com/demo_spa": target},
+            target_lookup={"https://www.instagram.com/demo_spa/": target},
             available_columns=set(),
             run_timestamp="2026-05-05T00:00:00+00:00",
             dry_run=False,

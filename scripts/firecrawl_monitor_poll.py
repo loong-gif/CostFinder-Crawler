@@ -477,7 +477,9 @@ def _try_change_driven_extraction(
             auto_apply_high_confidence=auto_apply_enabled,
         )
         skip_apify = (
-            skip_apify_on_success and not change_driven_result["needs_apify_fallback"]
+            skip_apify_on_success
+            and not change_driven_result["needs_apify_fallback"]
+            and not change_driven_result.get("pages_with_write_failure", 0)
         )
         if skip_apify:
             log.info(

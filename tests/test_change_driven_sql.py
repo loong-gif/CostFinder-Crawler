@@ -45,15 +45,16 @@ def test_insert_full_fields() -> None:
     sqls = build_offer_sql_statements(
         [offer], source_url=URL, source_name=DOMAIN, now_iso=NOW
     )
-    assert len(sqls) == 1, sqls
-    sql = sqls[0]
-    assert sql.startswith("INSERT INTO promo_offer_master ("), sql
-    assert "channel" in sql and "status" in sql
-    assert "source_url" in sql and "source_name" in sql
-    assert "'Botox'" in sql
-    assert "10" in sql and "12" in sql
-    assert "'$10/unit'" in sql
-    assert sql.endswith(");"), sql
+    assert len(sqls) == 2, sqls
+    master_sql, item_sql = sqls
+    assert master_sql.startswith("INSERT INTO promo_offer_master ("), master_sql
+    assert "is_active" in master_sql and "offer_fingerprint" in master_sql
+    assert "channel" not in master_sql and "status" not in master_sql
+    assert "10" in master_sql and "12" in master_sql
+    assert "'$10/unit'" in master_sql
+    assert master_sql.endswith(");"), master_sql
+    assert item_sql.startswith("INSERT INTO promo_offer_items"), item_sql
+    assert "'Botox'" in item_sql
 
 
 def test_update_only_non_empty_fields() -> None:
@@ -71,7 +72,7 @@ def test_update_only_non_empty_fields() -> None:
     assert sql.startswith("UPDATE promo_offer_master SET "), sql
     assert "service_name" not in sql, sql  # empty field excluded
     assert "discount_price=8.5" in sql, sql
-    assert "updated_at='2026-07-02T14:00:00+00:00'" in sql, sql
+    assert "updated_at" not in sql, sql
     assert "WHERE id='abc-123';" in sql, sql
 
 
@@ -82,8 +83,7 @@ def test_mark_ended_fixed_shape() -> None:
     )
     assert len(sqls) == 1, sqls
     assert sqls[0] == (
-        "UPDATE promo_offer_master SET status='ended', "
-        "updated_at='2026-07-02T14:00:00+00:00' WHERE id='uuid-9';"
+        "UPDATE promo_offer_master SET is_active=FALSE WHERE id='uuid-9';"
     ), sqls[0]
 
 
@@ -100,15 +100,12 @@ def test_quote_injection_does_not_break_sql() -> None:
     sqls = build_offer_sql_statements(
         [offer], source_url=URL, source_name=DOMAIN, now_iso=NOW
     )
-    assert len(sqls) == 1, sqls
-    sql = sqls[0]
-    # The single quote in payload must be doubled, never emit a bare closing '
-    # that would let the injected ) escape the string literal.
-    assert "Inject''); DROP TABLE x;--" in sql, sql
-    assert "O''Brien" in sql, sql
-    # Should still be one statement ending with );
-    assert sql.count("INSERT INTO") == 1
-    assert sql.endswith(");"), sql
+    assert len(sqls) == 2, sqls
+    master_sql, item_sql = sqls
+    assert "O''Brien" in master_sql, master_sql
+    assert "Inject''); DROP TABLE x;--" in item_sql, item_sql
+    assert master_sql.count("INSERT INTO") == 1
+    assert item_sql.count("INSERT INTO") == 1
 
 
 def test_none_and_empty_become_null() -> None:

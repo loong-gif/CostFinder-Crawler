@@ -34,7 +34,7 @@ from utils.clinic_promotions_db import fetch_promotion_by_url, upsert_promotion
 from utils.offer_fingerprint import compute_offer_fingerprint
 from utils.offer_field_normalize import normalize_offer_field_values
 from utils.offer_price_normalize import normalize_offer_prices, parse_price
-from utils.promo_offer_items_db import build_item_from_offer_fields, upsert_offer_items
+from utils.promo_offer_items_db import build_item_from_offer_fields
 from utils.schema_contract import offer_item_name, TABLE_PROMO_OFFER_MASTER
 
 # ---------------------------------------------------------------------------
@@ -1658,61 +1658,6 @@ def _coerce_offer_id(offer_id: Any) -> Optional[int]:
         return int(offer_id)
     except (TypeError, ValueError):
         return None
-
-
-def _apply_offer_items(
-    client: Any,
-    offer_id: Any,
-    offer: Dict[str, Any],
-) -> None:
-    oid = _coerce_offer_id(offer_id)
-    if oid is None:
-        return
-    item = build_offer_item_payload(offer)
-    if item.get("item_name"):
-        upsert_offer_items(client, oid, [item])
-
-
-def _update_master_row(
-    client: Any,
-    row_id: str,
-    payload: Dict[str, Any],
-    *,
-    now_iso: str,
-) -> None:
-    payload_with_timestamp = {
-        **payload,
-        "last_verified_at": now_iso,
-        "updated_at": now_iso,
-    }
-    try:
-        client.update_row(
-            "promo_offer_master",
-            {"id": f"eq.{row_id}"},
-            payload_with_timestamp,
-        )
-        return
-    except Exception as exc:
-        response_text = getattr(getattr(exc, "response", None), "text", "")
-        error_text = f"{exc} {response_text}".strip()
-        if "updated_at" not in error_text and "last_verified_at" not in error_text:
-            raise
-        if (
-            "does not exist" not in error_text
-            and "schema cache" not in error_text
-            and "PGRST204" not in error_text
-        ):
-            raise
-        fallback_payload = {
-            key: value
-            for key, value in payload_with_timestamp.items()
-            if key not in {"updated_at", "last_verified_at"}
-        }
-        client.update_row(
-            "promo_offer_master",
-            {"id": f"eq.{row_id}"},
-            fallback_payload,
-        )
 
 
 # ---------------------------------------------------------------------------

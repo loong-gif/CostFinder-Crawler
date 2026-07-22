@@ -37,10 +37,10 @@ def _mock_promotion_helpers(monkeypatch):
         "utils.change_driven_extractor.upsert_promotion",
         lambda client, **kwargs: PROMOTION_ID,
     )
-    monkeypatch.setattr(
-        "utils.change_driven_extractor.upsert_offer_items",
-        lambda client, offer_id, items: items,
-    )
+
+
+_RPC_PERSIST = "persist_promo_offer_change_events"
+_RPC_APPLY = "apply_promo_change_offer_action"
 
 
 class FakeDbClient:
@@ -53,6 +53,7 @@ class FakeDbClient:
         self.update_calls = []
         self.insert_calls = []
         self.delete_calls = []
+        self.rpc_calls = []
         self._next_id = 1000
 
     def fetch_rows(self, table, select, **kwargs):
@@ -98,6 +99,51 @@ class FakeDbClient:
                 self._next_id += 1
             out.append(inserted)
         return out
+
+    def rpc(self, name, params):
+        self.rpc_calls.append({"name": name, "params": params})
+        if name == _RPC_PERSIST:
+            events = params.get("p_events") or []
+            candidates = params.get("p_match_candidates") or []
+            return {
+                "ok": True,
+                "change_events_inserted": len(events),
+                "match_candidates_inserted": len(candidates),
+            }
+        if name != _RPC_APPLY:
+            raise RuntimeError(f"unexpected rpc: {name}")
+
+        p_action = params.get("p_action") or {}
+        action = str(p_action.get("action") or "").lower()
+        if action == "__probe__":
+            return {"ok": False, "error": "invalid_action"}
+
+        offer_id = p_action.get("offer_id")
+        master = p_action.get("master") or {}
+
+        if action in {"update", "mark_ended"}:
+            oid = str(offer_id or "")
+            if oid in self.fail_update_ids:
+                raise RuntimeError(f"boom-update-{oid}")
+            payload = {"is_active": False} if action == "mark_ended" else dict(master)
+            self.update_calls.append(
+                {"table": "promo_offer_master", "filters": {"id": f"eq.{oid}"}, "payload": payload}
+            )
+            return {"ok": True, "action": action, "offer_id": offer_id}
+
+        if action == "insert":
+            offer_raw_text = master.get("offer_raw_text")
+            if offer_raw_text in self.fail_insert_offer_texts:
+                raise RuntimeError(f"boom-insert-{offer_raw_text}")
+            for item in p_action.get("items") or []:
+                if item.get("item_name") in self.fail_insert_service_names:
+                    raise RuntimeError(f"boom-insert-{item['item_name']}")
+            new_id = self._next_id
+            self._next_id += 1
+            self.insert_calls.append({"table": "promo_offer_master", "rows": [dict(master, id=new_id)]})
+            return {"ok": True, "action": "insert", "offer_id": new_id}
+
+        return {"ok": False, "error": "invalid_action"}
 
 
 class FakeLlmClient:
@@ -445,14 +491,30 @@ def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
         "ended": 1,
         "skipped": 0,
     }
+    assert len(result["failed"]) == 2
+    failed_actions = {item["action"] for item in result["failed"]}
+    assert failed_actions == {"update", "insert"}
     assert isinstance(result.get("sql_statements"), list)
-    assert len(client.update_calls) == 3
-    assert len(client.insert_calls) == 2
-    assert client.update_calls[0]["payload"]["regular_price"] == 12.0
-    assert client.update_calls[0]["payload"]["discount_price"] == 11.0
-    assert client.insert_calls[0]["rows"][0]["is_active"] is True
-    assert client.insert_calls[0]["rows"][0]["promotion_id"] == PROMOTION_ID
-    assert "offer_fingerprint" in client.insert_calls[0]["rows"][0]
+    apply_calls = [
+        call
+        for call in client.rpc_calls
+        if call["name"] == _RPC_APPLY
+        and call["params"]["p_action"].get("action") != "__probe__"
+    ]
+    assert len(apply_calls) == 5
+    ok_update = next(
+        call
+        for call in apply_calls
+        if call["params"]["p_action"].get("offer_id") == "offer-update-ok"
+    )
+    assert ok_update["params"]["p_action"]["master"]["regular_price"] == 12.0
+    assert ok_update["params"]["p_action"]["master"]["discount_price"] == 11.0
+    insert_call = next(
+        call for call in apply_calls if call["params"]["p_action"]["action"] == "insert"
+    )
+    assert insert_call["params"]["p_action"]["master"]["is_active"] is True
+    assert insert_call["params"]["p_action"]["master"]["promotion_id"] == PROMOTION_ID
+    assert "offer_fingerprint" in insert_call["params"]["p_action"]["master"]
 
 
 def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
@@ -493,96 +555,86 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
     assert result["updated"] == 1
     assert result["inserted"] == 0
     assert len(client.insert_calls) == 0
-    assert client.update_calls[-1]["filters"] == {"id": "eq.existing-laser"}
-    assert client.update_calls[-1]["payload"]["discount_price"] == 199.0
+    apply_calls = [
+        call
+        for call in client.rpc_calls
+        if call["name"] == _RPC_APPLY
+        and call["params"]["p_action"].get("action") != "__probe__"
+    ]
+    assert len(apply_calls) == 1
+    assert apply_calls[0]["params"]["p_action"]["action"] == "update"
+    assert apply_calls[0]["params"]["p_action"]["offer_id"] == "existing-laser"
+    assert apply_calls[0]["params"]["p_action"]["master"]["discount_price"] == 199.0
 
 
-def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
-    class MissingUpdatedAtDbClient(FakeDbClient):
-        def update_row(self, table, filters, payload):
-            self.update_calls.append({"table": table, "filters": filters, "payload": payload})
-            if "updated_at" in payload:
-                raise RuntimeError("column promo_offer_master.updated_at does not exist")
-            return [{"id": filters.get("id", "").removeprefix("eq."), **payload}]
-
-    client = MissingUpdatedAtDbClient()
-
-    result = apply_offer_actions(
-        client,
-        [
-            {
-                "action": "update",
-                "matched_id": "offer-1",
-                "service_name": "Botox",
-                "offer_raw_text": "Botox $11/unit",
-                "discount_price": "11",
-            },
-            {
-                "action": "mark_ended",
-                "matched_id": "offer-2",
-            },
-        ],
-        source_url="https://example.com/specials",
-        source_name="example.com",
-        business_id=1,
-    )
-
-    assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
-        "updated": 1,
-        "inserted": 0,
-        "ended": 1,
-        "skipped": 0,
+def test_extract_and_upsert_sets_needs_apify_fallback_on_write_failure():
+    page = {
+        "url": "https://example.com/specials",
+        "status": "changed",
+        "business_id": 1,
+        "diff": {"text": "- Botox $12/unit\n+ Botox $11/unit"},
+        "judgment": {
+            "meaningful": True,
+            "confidence": "high",
+            "reason": "Botox price changed",
+            "meaningfulChanges": [
+                {
+                    "type": "changed",
+                    "before": "Botox $12/unit",
+                    "after": "Botox $11/unit",
+                    "reason": "price",
+                }
+            ],
+        },
     }
-    assert isinstance(result.get("sql_statements"), list)
-    assert len(client.update_calls) == 4
-    assert "updated_at" in client.update_calls[0]["payload"]
-    assert "updated_at" not in client.update_calls[1]["payload"]
-    assert client.update_calls[3]["payload"] == {"is_active": False}
 
+    class FailWriteRpcClient(FakeDbClient):
+        def rpc(self, name, params):
+            if name == _RPC_APPLY:
+                p_action = params.get("p_action") or {}
+                if p_action.get("action") not in (None, "__probe__"):
+                    raise RuntimeError("rpc write failed")
+            return super().rpc(name, params)
 
-def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_response_text():
-    class FakeResponse:
-        text = "Could not find the 'updated_at' column of 'promo_offer_master' in the schema cache"
-
-    class FakeHttpError(Exception):
-        def __init__(self):
-            super().__init__("400 Client Error: Bad Request for url")
-            self.response = FakeResponse()
-
-    class HttpErrorDbClient(FakeDbClient):
-        def update_row(self, table, filters, payload):
-            self.update_calls.append({"table": table, "filters": filters, "payload": payload})
-            if "updated_at" in payload:
-                raise FakeHttpError()
-            return [{"id": filters.get("id", "").removeprefix("eq."), **payload}]
-
-    client = HttpErrorDbClient()
-
-    result = apply_offer_actions(
-        client,
-        [
+    db = FailWriteRpcClient(
+        rows=[
             {
-                "action": "update",
-                "matched_id": "offer-1",
-                "service_name": "Botox",
-                "offer_raw_text": "Botox $11/unit",
+                "id": "offer-botox",
+                "promotion_id": PROMOTION_ID,
+                "is_active": True,
+                "offer_raw_text": "Botox $12/unit",
+                "promo_offer_items": [{"item_name": "Botox"}],
             }
-        ],
-        source_url="https://example.com/specials",
-        source_name="example.com",
-        business_id=1,
+        ]
+    )
+    llm = FakeLlmClient(
+        {
+            "offers": [
+                {
+                    "action": "update",
+                    "matched_candidate_index": "1",
+                    "service_name": "Botox",
+                    "offer_raw_text": "Botox $11/unit",
+                    "regular_price": "12",
+                    "discount_price": "11",
+                }
+            ]
+        }
     )
 
-    assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
-        "updated": 1,
-        "inserted": 0,
-        "ended": 0,
-        "skipped": 0,
-    }
-    assert isinstance(result.get("sql_statements"), list)
-    assert len(client.update_calls) == 2
-    assert "updated_at" in client.update_calls[0]["payload"]
-    assert "updated_at" not in client.update_calls[1]["payload"]
+    result = extract_and_upsert_check_pages(
+        [page],
+        llm,
+        db,
+        "example.com",
+        dry_run=False,
+    )
+
+    assert result["needs_apify_fallback"] is True
+    assert result["pages_with_write_failure"] == 1
+    assert result["page_results"][0]["write_failed"] is True
+    assert result["page_results"][0]["action"] == "write_failed"
+    assert len(result["page_results"][0]["failed"]) == 1
 
 
 def test_build_change_event_payloads_maps_actions_to_audit_events():
