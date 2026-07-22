@@ -26,8 +26,9 @@ from crawler.promo_site_crawler import (
     normalize_domain)
 from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
-from utils.page_content_processor import normalize_raw_page_item
 from utils.membership_paths import is_membership_page_url
+from utils.page_content_processor import normalize_raw_page_item
+from utils.monitor_target_urls import sync_promotions_from_staging_rows
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMO_MONITOR_STATE_TABLE = "promo_monitor_state"
@@ -384,6 +385,10 @@ def sync_crawl_rows_to_staging(
                 [{**row, "last_updated_at": now_iso} for row in to_insert])
             inserted_rows = len(to_insert)
 
+    promotion_synced = sync_promotions_from_staging_rows(
+        client, crawl_rows, dry_run=dry_run
+    )
+
     return {
         "domain_name": target.domain_name,
         "website_url": target.website_url,
@@ -395,6 +400,7 @@ def sync_crawl_rows_to_staging(
         "insert_rows": len(to_insert),
         "updated_rows": updated_rows if not dry_run else len(to_update),
         "inserted_rows": inserted_rows if not dry_run else len(to_insert),
+        "promotions_synced": promotion_synced,
         "sample_subpage_urls": [row["subpage_url"] for row in crawl_rows[:5]],
     }
 

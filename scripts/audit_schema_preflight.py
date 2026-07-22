@@ -13,7 +13,7 @@ from dotenv import dotenv_values
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = {
     "legacy_base": {
-        "promo_offer_master": {"id", "business_id", "status"},
+        "promo_offer_master": {"id", "business_id", "is_active"},
         "promo_website_staging": {"promo_website_id", "business_id", "page_content"},
         "promo_monitor_state": {"monitor_id", "last_check_id"},
         "master_business_info": {"business_id"},

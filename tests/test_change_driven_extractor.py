@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from utils.change_driven_extractor import (
     apply_offer_actions,
@@ -18,16 +21,39 @@ from utils.change_driven_extractor import (
 
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+PROMOTION_ID = 99
+
+
+@pytest.fixture(autouse=True)
+def _mock_promotion_helpers(monkeypatch):
+    monkeypatch.setattr(
+        "utils.change_driven_extractor.fetch_promotion_by_url",
+        lambda client, source_url, **kwargs: {
+            "promotion_id": PROMOTION_ID,
+            "source_url": source_url,
+        },
+    )
+    monkeypatch.setattr(
+        "utils.change_driven_extractor.upsert_promotion",
+        lambda client, **kwargs: PROMOTION_ID,
+    )
+    monkeypatch.setattr(
+        "utils.change_driven_extractor.upsert_offer_items",
+        lambda client, offer_id, items: items,
+    )
 
 
 class FakeDbClient:
-    def __init__(self, rows=None, *, fail_update_ids=None, fail_insert_service_names=None):
+    def __init__(self, rows=None, *, fail_update_ids=None, fail_insert_service_names=None, fail_insert_offer_texts=None):
         self.rows = rows or []
         self.fail_update_ids = set(fail_update_ids or [])
         self.fail_insert_service_names = set(fail_insert_service_names or [])
+        self.fail_insert_offer_texts = set(fail_insert_offer_texts or [])
         self.fetch_calls = []
         self.update_calls = []
         self.insert_calls = []
+        self.delete_calls = []
+        self._next_id = 1000
 
     def fetch_rows(self, table, select, **kwargs):
         self.fetch_calls.append({"table": table, "select": select, **kwargs})
@@ -37,11 +63,19 @@ class FakeDbClient:
             if not isinstance(expr, str) or not expr.startswith("eq."):
                 continue
             value = expr[3:]
+            if key == "is_active":
+                want = value.lower() == "true"
+                rows = [row for row in rows if bool(row.get("is_active")) == want]
+                continue
             if any(key in row for row in rows):
                 rows = [row for row in rows if str(row.get(key, "")) == value]
             elif key == "offer_fingerprint":
                 rows = []
         return rows
+
+    def delete_rows(self, table, filters):
+        self.delete_calls.append({"table": table, "filters": filters})
+        return []
 
     def update_row(self, table, filters, payload):
         self.update_calls.append({"table": table, "filters": filters, "payload": payload})
@@ -52,10 +86,18 @@ class FakeDbClient:
 
     def insert_rows(self, table, rows):
         self.insert_calls.append({"table": table, "rows": rows})
+        out = []
         for row in rows:
             if row.get("service_name") in self.fail_insert_service_names:
                 raise RuntimeError(f"boom-insert-{row['service_name']}")
-        return rows
+            if row.get("offer_raw_text") in self.fail_insert_offer_texts:
+                raise RuntimeError(f"boom-insert-{row['offer_raw_text']}")
+            inserted = dict(row)
+            if "id" not in inserted and table == "promo_offer_master":
+                inserted["id"] = self._next_id
+                self._next_id += 1
+            out.append(inserted)
+        return out
 
 
 class FakeLlmClient:
@@ -63,7 +105,7 @@ class FakeLlmClient:
         self.response = response
         self.calls = []
 
-    def create_json_response(self, messages):
+    def create_json_response(self, messages, *, json_schema=None):
         self.calls.append(messages)
         return self.response
 
@@ -72,11 +114,12 @@ def test_fetch_candidate_offers_truncates_and_filters_active_query():
     rows = [
         {
             "id": f"id-{idx}",
-            "service_name": f"Service {idx}",
+            "promotion_id": PROMOTION_ID,
+            "is_active": True,
             "offer_raw_text": "X" * 250,
             "discount_price": idx,
-            "original_price": idx + 100,
-            "status": "active",
+            "regular_price": idx + 100,
+            "promo_offer_items": [{"item_name": f"Service {idx}", "unit_type": "unit"}],
         }
         for idx in range(101)
     ]
@@ -92,8 +135,8 @@ def test_fetch_candidate_offers_truncates_and_filters_active_query():
 
     fetch_call = client.fetch_calls[0]
     assert fetch_call["filters"] == {
-        "source_url": "eq.https://example.com/specials",
-        "status": "eq.active",
+        "promotion_id": f"eq.{PROMOTION_ID}",
+        "is_active": "eq.true",
     }
     assert fetch_call["limit"] == 101
 
@@ -102,15 +145,16 @@ def test_fetch_candidate_offers_falls_back_when_columns_are_missing():
     class FallbackDbClient(FakeDbClient):
         def fetch_rows(self, table, select, **kwargs):
             self.fetch_calls.append({"table": table, "select": select, **kwargs})
-            if "original_price" in select:
-                raise RuntimeError("column promo_offer_master.original_price does not exist")
+            if "promo_offer_items" in select:
+                raise RuntimeError("column promo_offer_master.promo_offer_items does not exist")
             return [
                 {
                     "id": "offer-1",
-                    "service_name": "Botox",
+                    "promotion_id": PROMOTION_ID,
+                    "is_active": True,
                     "offer_raw_text": "Botox $11/unit",
                     "discount_price": 11,
-                    "status": "active",
+                    "regular_price": 10,
                 }
             ]
 
@@ -120,12 +164,13 @@ def test_fetch_candidate_offers_falls_back_when_columns_are_missing():
 
     assert len(candidates) == 1
     assert candidates[0]["id"] == "offer-1"
+    assert candidates[0]["service_name"] == ""
     assert candidates[0]["candidate_index"] == 1
-    assert candidates[0]["regular_price"] is None
-    assert candidates[0]["original_price"] is None
+    assert candidates[0]["regular_price"] == 10
+    assert candidates[0]["original_price"] == 10
     assert len(client.fetch_calls) == 2
-    assert "original_price" in client.fetch_calls[0]["select"]
-    assert client.fetch_calls[1]["select"] == "id,service_name,offer_raw_text,regular_price,discount_price,status"
+    assert "promo_offer_items" in client.fetch_calls[0]["select"]
+    assert "promo_offer_items" not in client.fetch_calls[1]["select"]
 
 
 def test_enrich_update_actions_with_diff_prices_backfills_regular_and_discount_price():
@@ -350,7 +395,7 @@ def test_validate_offer_actions_forces_insert_when_candidates_unavailable():
 def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
     client = FakeDbClient(
         fail_update_ids={"offer-update-fail"},
-        fail_insert_service_names={"Insert Fail"},
+        fail_insert_offer_texts={"Should fail"},
     )
     offers = [
         {
@@ -391,6 +436,7 @@ def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
         offers,
         source_url="https://example.com/specials",
         source_name="example.com",
+        business_id=1,
     )
 
     assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
@@ -404,7 +450,8 @@ def test_apply_offer_actions_handles_all_actions_and_continues_after_failures():
     assert len(client.insert_calls) == 2
     assert client.update_calls[0]["payload"]["regular_price"] == 12.0
     assert client.update_calls[0]["payload"]["discount_price"] == 11.0
-    assert client.insert_calls[0]["rows"][0]["status"] == "active"
+    assert client.insert_calls[0]["rows"][0]["is_active"] is True
+    assert client.insert_calls[0]["rows"][0]["promotion_id"] == PROMOTION_ID
     assert "offer_fingerprint" in client.insert_calls[0]["rows"][0]
 
 
@@ -421,10 +468,9 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
         rows=[
             {
                 "id": "existing-laser",
-                "source_url": source_url,
-                "status": "active",
+                "business_id": 1,
+                "is_active": True,
                 "offer_fingerprint": fingerprint,
-                "service_name": "Laser Hair Removal",
             }
         ]
     )
@@ -441,6 +487,7 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
         ],
         source_url=source_url,
         source_name="example.com",
+        business_id=1,
     )
 
     assert result["updated"] == 1
@@ -448,7 +495,6 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
     assert len(client.insert_calls) == 0
     assert client.update_calls[-1]["filters"] == {"id": "eq.existing-laser"}
     assert client.update_calls[-1]["payload"]["discount_price"] == 199.0
-    assert client.update_calls[-1]["payload"]["unit_type"] == "unit"
 
 
 def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
@@ -478,6 +524,7 @@ def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
         ],
         source_url="https://example.com/specials",
         source_name="example.com",
+        business_id=1,
     )
 
     assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
@@ -490,7 +537,7 @@ def test_apply_offer_actions_retries_without_updated_at_when_column_missing():
     assert len(client.update_calls) == 4
     assert "updated_at" in client.update_calls[0]["payload"]
     assert "updated_at" not in client.update_calls[1]["payload"]
-    assert client.update_calls[3]["payload"] == {"status": "ended", "lifecycle_status": "ended"}
+    assert client.update_calls[3]["payload"] == {"is_active": False}
 
 
 def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_response_text():
@@ -523,6 +570,7 @@ def test_apply_offer_actions_retries_when_http_error_hides_updated_at_in_respons
         ],
         source_url="https://example.com/specials",
         source_name="example.com",
+        business_id=1,
     )
 
     assert {k: result[k] for k in ("updated", "inserted", "ended", "skipped")} == {
@@ -585,7 +633,6 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
     assert events[0]["business_change_type"] == "price_changed"
     assert events[0]["target_offer_id"] == "offer-botox"
     assert events[0]["proposed_field_updates"] == {
-        "service_name": "Botox",
         "offer_raw_text": "Botox $11/unit",
         "regular_price": 12.0,
         "discount_price": 11.0,
@@ -596,11 +643,10 @@ def test_build_change_event_payloads_maps_actions_to_audit_events():
     assert events[0]["source_url_normalized"] == "https://example.com/specials"
     assert events[0]["confidence"] == 0.9
     assert events[1]["business_change_type"] == "offer_added"
-    assert events[1]["proposed_new_offer"]["channel"] == "web_change_driven"
+    assert events[1]["proposed_new_offer"]["is_active"] is True
     assert events[1]["proposed_new_offer"]["discount_price"] == 199.0
     assert events[2]["business_change_type"] == "offer_missing"
-    assert events[2]["proposed_field_updates"]["lifecycle_status"] == "ended"
-    assert events[2]["proposed_field_updates"]["missing_count_increment"] == 1
+    assert events[2]["proposed_field_updates"]["is_active"] is False
     assert [item["candidate_offer_id"] for item in result["match_candidates"]] == [
         "offer-botox",
         "offer-old",
@@ -775,19 +821,19 @@ def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
         rows=[
             {
                 "id": "offer-botox",
-                "service_name": "Botox",
+                "promotion_id": PROMOTION_ID,
+                "is_active": True,
                 "offer_raw_text": "Botox 20% off this month",
                 "discount_price": None,
-                "original_price": None,
-                "status": "active",
+                "promo_offer_items": [{"item_name": "Botox"}],
             },
             {
                 "id": "offer-filler",
-                "service_name": "Juvederm",
+                "promotion_id": PROMOTION_ID,
+                "is_active": True,
                 "offer_raw_text": "Juvederm summer special $100 off",
                 "discount_price": None,
-                "original_price": None,
-                "status": "active",
+                "promo_offer_items": [{"item_name": "Juvederm"}],
             },
         ]
     )
@@ -1044,10 +1090,13 @@ def test_extract_and_upsert_filters_candidates_and_records_pool_size():
     rows = [
         {
             "id": f"id-{idx}",
-            "service_name": "Botox" if idx == 0 else f"Service {idx}",
+            "promotion_id": PROMOTION_ID,
+            "is_active": True,
             "offer_raw_text": "Botox $10/unit" if idx == 0 else f"Other {idx}",
             "discount_price": 10 + idx,
-            "status": "active",
+            "promo_offer_items": [
+                {"item_name": "Botox" if idx == 0 else f"Service {idx}"}
+            ],
         }
         for idx in range(15)
     ]

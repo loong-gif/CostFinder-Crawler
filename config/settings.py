@@ -96,6 +96,9 @@ PROXY_POOL = [
 # ==================== Firecrawl 配置 ====================
 FIRECRAWL_CRAWL_MAX_PAGES = int(os.getenv("FIRECRAWL_CRAWL_MAX_PAGES", "50"))
 FIRECRAWL_CRAWL_TIMEOUT_SECS = int(os.getenv("FIRECRAWL_CRAWL_TIMEOUT_SECS", "1800"))
+CLINIC_SERVICES_SEARCH_LIMIT = int(os.getenv("CLINIC_SERVICES_SEARCH_LIMIT", "5"))
+CLINIC_SERVICES_SEARCH_TIMEOUT = int(os.getenv("CLINIC_SERVICES_SEARCH_TIMEOUT", "120"))
+CLINIC_SERVICES_FALLBACK_CRAWL_PAGES = int(os.getenv("CLINIC_SERVICES_FALLBACK_CRAWL_PAGES", "15"))
 
 # ==================== 智能策略配置 ====================
 # 解析策略优先级

@@ -24,15 +24,18 @@ from utils.offer_scope_filter import should_exclude_from_offer_master
 from utils.service_category_lookup import MASTER_CATEGORY_PROMPT, resolve_service_category
 from utils.offer_extraction_llm import (
     OFFER_OUTPUT_FIELDS,
-    OpenAICompatibleClient,
+    StructuredLLMClient,
     canonicalize_service_name,
     normalize_offer_record,
     parse_json_payload,
 )
 from utils.offer_evidence_segments import normalize_url
+from utils.clinic_promotions_db import fetch_promotion_by_url, upsert_promotion
 from utils.offer_fingerprint import compute_offer_fingerprint
 from utils.offer_field_normalize import normalize_offer_field_values
 from utils.offer_price_normalize import normalize_offer_prices, parse_price
+from utils.promo_offer_items_db import build_item_from_offer_fields, upsert_offer_items
+from utils.schema_contract import offer_item_name, TABLE_PROMO_OFFER_MASTER
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -51,19 +54,19 @@ _CHANGE_EVENT_ACTIONS = {
 _CONFIDENCE_NUMERIC = {"low": 0.35, "medium": 0.65, "high": 0.9}
 _CANDIDATE_FETCH_VARIANTS = [
     (
-        "id,service_name,offer_raw_text,regular_price,discount_price,original_price,status",
-        "updated_at.desc",
-    ),
-    (
-        "id,service_name,offer_raw_text,regular_price,discount_price,status",
+        "id,offer_raw_text,regular_price,discount_price,promo_offer_items(item_name,unit_type)",
         "created_at.desc",
     ),
     (
-        "id,service_name,offer_raw_text,discount_price,status",
+        "id,offer_raw_text,regular_price,discount_price",
         "created_at.desc",
     ),
     (
-        "id,service_name,offer_raw_text,status",
+        "id,offer_raw_text,discount_price",
+        "created_at.desc",
+    ),
+    (
+        "id,offer_raw_text",
         "created_at.desc",
     ),
 ]
@@ -76,7 +79,7 @@ CHANGE_EXTRACTION_SYSTEM_PROMPT = (
     "Return one of three actions per offer: update, insert, or mark_ended. "
     "Service and member pricing use discount_price (and regular_price when applicable); "
     "do not output membership_name, membership_price, or billing_period — membership plan "
-    "structure is stored separately in promo_membership_plans. "
+    "structure is stored separately in clinic_memberships. "
     "Do not insert membership tier plan fees as service_name=Membership offers in master. "
     "Do not extract free consultations or consultation-only bookings as offers. "
     "Do not extract retail skincare/catalog shop products (/collections, /shop) as treatment offers. "
@@ -95,13 +98,9 @@ CHANGE_EXTRACTION_SYSTEM_PROMPT = (
 # (offer_content and evidence_segments are internal and have no master column.)
 _MASTER_TEXT_FIELDS = [
     "service_category",
-    "service_name",
     "offer_raw_text",
-    "template_type",
-    "unit_type",
-    "start_date",
-    "end_date",
 ]
+_ITEM_SOURCE_FIELDS = ("service_name", "unit_type", "service_area", "quantity")
 _MASTER_NUMERIC_FIELDS = [
     "regular_price",
     "discount_price",
@@ -122,12 +121,33 @@ _CHANGE_EXTRACTION_FIELDS = [
     *_CHANGE_EXTRACTION_EXTRA_FIELDS,
 ]
 _CHANGE_SCHEMA_FIELDS = ", ".join(_CHANGE_EXTRACTION_FIELDS)
-_SERVICE_NAME_DICT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "CF_Extrator_Agent"
-    / "data"
-    / "service_name_dict.json"
-)
+_SERVICE_NAME_DICT_PATH = Path(__file__).resolve().parents[1] / "service_name_dict.json"
+
+
+def build_change_extraction_json_schema() -> Dict[str, Any]:
+    offer_properties: Dict[str, Any] = {
+        field: {"type": "string"} for field in _CHANGE_EXTRACTION_FIELDS
+    }
+    offer_properties["action"] = {
+        "type": "string",
+        "enum": ["update", "insert", "mark_ended"],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "offers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": offer_properties,
+                    "required": ["action"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["offers"],
+        "additionalProperties": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +194,7 @@ def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not text_diff and not json_diff and not meaningful_changes:
         return None
 
-    return {
+    payload: Dict[str, Any] = {
         "url": (page.get("url") or "").strip(),
         "status": (page.get("status") or "").strip(),
         "text_diff": _head_tail(text_diff, _MAX_TEXT_DIFF_CHARS) if text_diff else "",
@@ -183,6 +203,9 @@ def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "judgment_reason": judgment_reason,
         "confidence": confidence,
     }
+    if page.get("business_id") is not None:
+        payload["business_id"] = page["business_id"]
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -226,16 +249,20 @@ def fetch_candidate_offers(
     limit: int = _MAX_CANDIDATE_OFFERS,
 ) -> List[Dict[str, Any]]:
     """Fetch active master offers for a page and compress them for LLM context."""
+    promotion = fetch_promotion_by_url(client, source_url)
+    if not promotion:
+        return []
+
     last_error: Optional[Exception] = None
     rows: List[Dict[str, Any]] = []
     for select, order in _CANDIDATE_FETCH_VARIANTS:
         try:
             rows = client.fetch_rows(
-                "promo_offer_master",
+                TABLE_PROMO_OFFER_MASTER,
                 select,
                 filters={
-                    "source_url": f"eq.{source_url}",
-                    "status": "eq.active",
+                    "promotion_id": f"eq.{promotion['promotion_id']}",
+                    "is_active": "eq.true",
                 },
                 limit=limit + 1,
                 order=order,
@@ -262,13 +289,13 @@ def fetch_candidate_offers(
         candidate = {
             "id": str(row.get("id") or "").strip(),
             "candidate_index": idx,
-            "service_name": str(row.get("service_name") or "").strip(),
+            "service_name": offer_item_name(row),
             "offer_raw_text": _truncate_text(
                 row.get("offer_raw_text"), _MAX_CANDIDATE_TEXT_CHARS
             ),
             "regular_price": row.get("regular_price"),
             "discount_price": row.get("discount_price"),
-            "original_price": row.get("original_price"),
+            "original_price": row.get("regular_price"),
         }
         if candidate["id"]:
             candidates.append(candidate)
@@ -810,16 +837,26 @@ def build_offer_update_payload(offer: Dict[str, Any]) -> Dict[str, Any]:
 
     payload = normalize_offer_field_values(payload, offer=offer)
 
-    if payload.get("service_name"):
+    service_name = str(offer.get("service_name") or "").strip()
+    if service_name:
         category, _, confidence = resolve_service_category(
-            payload["service_name"],
+            service_name,
             offer.get("service_category") or payload.get("service_category"),
             min_confidence="medium",
         )
         if category and confidence in {"high", "medium"}:
             payload["service_category"] = category
 
+    if offer.get("is_membership_required") is not None:
+        payload["is_membership_required"] = bool(offer.get("is_membership_required"))
+    if offer.get("is_new_customer_required") is not None:
+        payload["is_new_customer_required"] = bool(offer.get("is_new_customer_required"))
+
     return payload
+
+
+def build_offer_item_payload(offer: Dict[str, Any]) -> Dict[str, Any]:
+    return build_item_from_offer_fields(offer)
 
 
 def build_offer_insert_payload(
@@ -827,20 +864,29 @@ def build_offer_insert_payload(
     *,
     source_url: str,
     source_name: str,
+    business_id: Any = None,
+    promotion_id: Any = None,
 ) -> Dict[str, Any]:
     payload = build_offer_update_payload(offer)
     payload.update(
         {
-            "channel": "web_change_driven",
-            "status": "active",
-            "source_url": source_url,
-            "source_name": source_name,
+            "is_active": True,
+            "is_new_customer_required": payload.get(
+                "is_new_customer_required",
+                offer.get("is_new_customer_required", True),
+            ),
         }
     )
+    if business_id is not None:
+        payload["business_id"] = business_id
+    if promotion_id is not None:
+        payload["promotion_id"] = promotion_id
+    service_name = str(offer.get("service_name") or "").strip()
+    unit_type = offer.get("unit_type")
     fingerprint = compute_offer_fingerprint(
         source_url=source_url,
-        service_name=str(payload.get("service_name") or offer.get("service_name") or ""),
-        unit_type=payload.get("unit_type") or offer.get("unit_type"),
+        service_name=service_name,
+        unit_type=unit_type,
     )
     payload["offer_fingerprint"] = fingerprint
     return payload
@@ -849,18 +895,18 @@ def build_offer_insert_payload(
 def find_active_offer_by_fingerprint(
     client: Any,
     *,
-    source_url: str,
+    business_id: Any,
     offer_fingerprint: str,
 ) -> Optional[str]:
-    if not source_url or not offer_fingerprint:
+    if business_id is None or not offer_fingerprint:
         return None
     try:
         rows = client.fetch_rows(
-            "promo_offer_master",
+            TABLE_PROMO_OFFER_MASTER,
             "id",
             filters={
-                "source_url": f"eq.{source_url}",
-                "status": "eq.active",
+                "business_id": f"eq.{business_id}",
+                "is_active": "eq.true",
                 "offer_fingerprint": f"eq.{offer_fingerprint}",
             },
             limit=1,
@@ -873,8 +919,8 @@ def find_active_offer_by_fingerprint(
         ):
             return None
         log.warning(
-            "change_driven: fingerprint lookup failed for {url}: {error}",
-            url=source_url,
+            "change_driven: fingerprint lookup failed for business_id={bid}: {error}",
+            bid=business_id,
             error=exc,
         )
         return None
@@ -1013,9 +1059,8 @@ def build_change_event_payloads(
             )
         elif action == "mark_ended":
             event["proposed_field_updates"] = {
-                "lifecycle_status": "ended",
+                "is_active": False,
                 "ended_reason": "explicit_successful_disappearance",
-                "missing_count_increment": 1,
             }
 
         events.append(event)
@@ -1295,7 +1340,8 @@ def build_offer_sql_statements(
             payload = build_offer_insert_payload(
                 offer, source_url=source_url, source_name=source_name
             )
-            if not payload.get("service_name") and not payload.get("offer_raw_text"):
+            service_name = str(offer.get("service_name") or "").strip()
+            if not service_name and not payload.get("offer_raw_text"):
                 continue
             cols = list(payload.keys())
             vals = [_sql_value_for_field(col, payload[col]) for col in cols]
@@ -1304,6 +1350,13 @@ def build_offer_sql_statements(
             statements.append(
                 f"INSERT INTO promo_offer_master ({col_list}) VALUES ({val_list});"
             )
+            item = build_offer_item_payload(offer)
+            if item.get("item_name"):
+                statements.append(
+                    "INSERT INTO promo_offer_items (offer_id, item_name, unit_type) "
+                    f"VALUES (currval(pg_get_serial_sequence('promo_offer_master','id')), "
+                    f"{sql_quote(item['item_name'])}, {sql_quote(item.get('unit_type'))});"
+                )
             continue
 
         matched_id = str(offer.get("matched_id") or "").strip()
@@ -1312,8 +1365,8 @@ def build_offer_sql_statements(
             if not matched_id:
                 continue
             statements.append(
-                "UPDATE promo_offer_master SET status='ended', "
-                f"updated_at={sql_quote(now_iso)} WHERE id={sql_quote(matched_id)};"
+                "UPDATE promo_offer_master SET is_active=FALSE "
+                f"WHERE id={sql_quote(matched_id)};"
             )
             continue
 
@@ -1327,7 +1380,6 @@ def build_offer_sql_statements(
                 f"{field}={_sql_value_for_field(field, payload[field])}"
                 for field in payload
             ]
-            set_parts.append(f"updated_at={sql_quote(now_iso)}")
             set_clause = ", ".join(set_parts)
             statements.append(
                 f"UPDATE promo_offer_master SET {set_clause} "
@@ -1337,6 +1389,52 @@ def build_offer_sql_statements(
     return statements
 
 
+def _resolve_promotion_id(
+    client: Any,
+    *,
+    source_url: str,
+    business_id: Any,
+) -> Optional[int]:
+    if business_id is None:
+        return None
+    try:
+        bid = int(business_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return upsert_promotion(client, business_id=bid, source_url=source_url)
+    except Exception as exc:
+        log.warning(
+            "change_driven: promotion upsert failed for {url}: {error}",
+            url=source_url,
+            error=exc,
+        )
+        existing = fetch_promotion_by_url(client, source_url, business_id=bid)
+        if existing:
+            return int(existing["promotion_id"])
+        return None
+
+
+def _coerce_offer_id(offer_id: Any) -> Optional[int]:
+    try:
+        return int(offer_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_offer_items(
+    client: Any,
+    offer_id: Any,
+    offer: Dict[str, Any],
+) -> None:
+    oid = _coerce_offer_id(offer_id)
+    if oid is None:
+        return
+    item = build_offer_item_payload(offer)
+    if item.get("item_name"):
+        upsert_offer_items(client, oid, [item])
+
+
 def _update_master_row(
     client: Any,
     row_id: str,
@@ -1344,7 +1442,11 @@ def _update_master_row(
     *,
     now_iso: str,
 ) -> None:
-    payload_with_timestamp = {**payload, "updated_at": now_iso}
+    payload_with_timestamp = {
+        **payload,
+        "last_verified_at": now_iso,
+        "updated_at": now_iso,
+    }
     try:
         client.update_row(
             "promo_offer_master",
@@ -1355,7 +1457,7 @@ def _update_master_row(
     except Exception as exc:
         response_text = getattr(getattr(exc, "response", None), "text", "")
         error_text = f"{exc} {response_text}".strip()
-        if "updated_at" not in error_text:
+        if "updated_at" not in error_text and "last_verified_at" not in error_text:
             raise
         if (
             "does not exist" not in error_text
@@ -1363,10 +1465,15 @@ def _update_master_row(
             and "PGRST204" not in error_text
         ):
             raise
+        fallback_payload = {
+            key: value
+            for key, value in payload_with_timestamp.items()
+            if key not in {"updated_at", "last_verified_at"}
+        }
         client.update_row(
             "promo_offer_master",
             {"id": f"eq.{row_id}"},
-            payload,
+            fallback_payload,
         )
 
 
@@ -1380,6 +1487,7 @@ def apply_offer_actions(
     *,
     source_url: str,
     source_name: str,
+    business_id: Any = None,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Apply validated change-driven actions into promo_offer_master."""
@@ -1392,8 +1500,13 @@ def apply_offer_actions(
     ended = 0
     skipped = 0
 
+    promotion_id = _resolve_promotion_id(
+        client, source_url=source_url, business_id=business_id
+    )
+
     for offer in offers:
         action = str(offer.get("action") or "insert").strip().lower()
+        service_name = str(offer.get("service_name") or "").strip()
 
         if action == "update":
             matched_id = str(offer.get("matched_id") or "").strip()
@@ -1406,6 +1519,7 @@ def apply_offer_actions(
                 continue
             try:
                 _update_master_row(client, matched_id, payload, now_iso=now_iso)
+                _apply_offer_items(client, matched_id, offer)
                 updated += 1
             except Exception as exc:
                 log.error(
@@ -1427,7 +1541,7 @@ def apply_offer_actions(
                 _update_master_row(
                     client,
                     matched_id,
-                    {"status": "ended", "lifecycle_status": "ended"},
+                    {"is_active": False},
                     now_iso=now_iso,
                 )
                 ended += 1
@@ -1443,21 +1557,35 @@ def apply_offer_actions(
             offer,
             source_url=source_url,
             source_name=source_name,
+            business_id=business_id,
+            promotion_id=promotion_id,
         )
-        if not payload.get("service_name") and not payload.get("offer_raw_text"):
+        if not service_name:
             skipped += 1
             continue
-        if should_exclude_from_offer_master(payload):
+        if not payload.get("offer_raw_text"):
+            skipped += 1
+            continue
+        if business_id is None:
+            log.warning(
+                "change_driven: skip offer without business_id for {url} service={service}",
+                url=source_url,
+                service=service_name,
+            )
+            skipped += 1
+            continue
+        check_payload = {**payload, "service_name": service_name}
+        if should_exclude_from_offer_master(check_payload):
             log.warning(
                 "change_driven: skip non-service offer for {url} service={service}",
                 url=source_url,
-                service=payload.get("service_name"),
+                service=service_name,
             )
             skipped += 1
             continue
         existing_id = find_active_offer_by_fingerprint(
             client,
-            source_url=source_url,
+            business_id=business_id,
             offer_fingerprint=str(payload.get("offer_fingerprint") or ""),
         )
         if existing_id:
@@ -1466,6 +1594,7 @@ def apply_offer_actions(
                 continue
             try:
                 _update_master_row(client, existing_id, payload, now_iso=now_iso)
+                _apply_offer_items(client, existing_id, offer)
                 updated += 1
             except Exception as exc:
                 log.error(
@@ -1480,7 +1609,9 @@ def apply_offer_actions(
             inserted += 1
             continue
         try:
-            client.insert_rows("promo_offer_master", [payload])
+            rows = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [payload])
+            new_id = int(rows[0]["id"])
+            _apply_offer_items(client, new_id, offer)
             inserted += 1
         except Exception as exc:
             log.error(
@@ -1517,7 +1648,7 @@ def apply_offer_actions(
 
 def extract_and_upsert_check_pages(
     pages: List[Dict[str, Any]],
-    client_llm: OpenAICompatibleClient,
+    client_llm: StructuredLLMClient,
     client_db: Any,
     domain_name: str,
     *,
@@ -1586,7 +1717,10 @@ def extract_and_upsert_check_pages(
         messages = build_change_extraction_messages(payload, domain_name, candidate_offers)
 
         try:
-            raw_response = client_llm.create_json_response(messages)
+            raw_response = client_llm.create_json_response(
+                messages,
+                json_schema=build_change_extraction_json_schema(),
+            )
         except Exception as exc:
             log.error(
                 "change_driven: LLM call failed for {url}: {error}", url=url, error=exc
@@ -1645,6 +1779,7 @@ def extract_and_upsert_check_pages(
                 offers_to_apply,
                 source_url=url,
                 source_name=domain_name,
+                business_id=payload.get("business_id"),
                 dry_run=dry_run,
             )
             apply_result["proposed_offers"] = len(extracted_offers)

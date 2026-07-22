@@ -51,6 +51,7 @@ def test_build_priced_offer_insert_row():
     assert row["membership_plan_id"] == 42
     assert row["discount_price"] == 11.5
     assert row["regular_price"] == 13.5
+    assert row["last_verified_at"]
     assert "membership_price" not in row
 
 

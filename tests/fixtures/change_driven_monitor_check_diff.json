@@ -1,5 +1,6 @@
 {
   "url": "https://example.com/specials",
+  "business_id": 1,
   "status": "changed",
   "diff": {
     "text": "- Botox 20% off this month\n+ Botox $11/unit limited time\n- Juvederm summer special $100 off\n+ (removed)",

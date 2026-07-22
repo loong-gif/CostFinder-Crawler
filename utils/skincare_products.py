@@ -34,14 +34,39 @@ def _treatment_service_names() -> frozenset[str]:
     return frozenset(name for name in get_standardized_service_names() if name not in skip)
 
 
+_TREATMENT_CATEGORY_FOLD = frozenset(
+    {
+        "neurotoxins",
+        "fillers & other injectables",
+        "microneedling",
+        "laser",
+        "laser hair removal",
+        "facial",
+        "skin treatments",
+        "chemical peel",
+        "package",
+    }
+)
+_TREATMENT_TEXT_RE = re.compile(
+    r"\b(botox|dysport|filler|tox|unit|syringe|juvederm|xeomin|jeuveau|daxxify|sculptra|kybella|hydrafacial|laser|microneedling|prf|prp|morpheus)\b",
+    re.IGNORECASE,
+)
+
+
 def is_skincare_product_offer(offer: Dict[str, Any]) -> bool:
     service = str(offer.get("service_name") or "").strip()
     if service == "Skincare Product":
         return True
+    # ponytail: treatment semantics beat retail URL (avoids PRF/TrapTox false positives)
+    if service in _treatment_service_names():
+        return False
+    if _TREATMENT_TEXT_RE.search(str(offer.get("offer_raw_text") or "")):
+        return False
+    category = str(offer.get("service_category") or "").strip().casefold()
+    if category in _TREATMENT_CATEGORY_FOLD:
+        return False
     source_url = str(offer.get("source_url") or "")
     if not is_retail_catalog_url(source_url):
-        return False
-    if service in _treatment_service_names():
         return False
     if service in {"", "Others", "detected", "Package"}:
         return False

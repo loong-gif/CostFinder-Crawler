@@ -70,3 +70,32 @@ def test_filter_service_offers():
     assert len(rows) == 1
     assert rows[0]["service_name"] == "Dysport"
     assert should_exclude_from_offer_master({"service_name": "Membership", "offer_raw_text": "$99/month"})
+
+
+def test_skincare_does_not_flag_traptox_on_retail_url():
+    from utils.skincare_products import is_skincare_product_offer
+
+    assert not is_skincare_product_offer(
+        {
+            "service_name": "TrapTox",
+            "source_url": "https://shop.example.com/collections/all",
+            "offer_raw_text": "TrapTox $12/unit",
+        }
+    )
+
+
+def test_apply_offer_actions_skips_missing_business_id():
+    class _Client:
+        def insert_rows(self, *args, **kwargs):
+            raise AssertionError("should not insert")
+
+    result = apply_offer_actions(
+        _Client(),
+        [{"action": "insert", "service_name": "Botox", "offer_raw_text": "Botox $11/unit"}],
+        source_url="https://example.com/pricing",
+        source_name="example.com",
+        business_id=None,
+        dry_run=True,
+    )
+    assert result["inserted"] == 0
+    assert result["skipped"] == 1

@@ -69,9 +69,10 @@ def test_build_membership_plan_insert_row_from_offer():
         "offer_raw_text": "VIP $1200/year",
     }
     row = build_membership_plan_insert_row_from_offer(offer)
-    assert row["annual_fee"] == 1200
+    assert row["membership_price"] == 1200
+    assert row["billing_period"] == "annual"
     assert row["source_url"] == "https://example.com/membership"
-    assert row["domain_name"] == "example.com"
+    assert row["benefits"] == []
 
 
 def test_can_migrate_requires_fee():

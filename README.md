@@ -7,6 +7,16 @@
 
 ## 架构
 
+五表关系与数据流转说明见 [docs/data-model-pipeline.md](docs/data-model-pipeline.md)（`master_business_info` / `promo_website_staging` / `clinic_services` / `promo_offer_master` / `promo_membership_plans`）。
+
+改爬虫、Schema、表关系或数据流时，先读项目 Skill [`.cursor/skills/costfinder-architecture/SKILL.md`](.cursor/skills/costfinder-architecture/SKILL.md)。域级自测示例：`louloumedspa.com`（见 Skill 内 `examples/`）。
+促销服务与诊所服务目录的关联约定见 [促销服务匹配设计](docs/superpowers/specs/2026-07-18-promo-service-matching-design.md)。
+单域 Firecrawl Search/Scrape raw 入库示例见 [Masters Medspa 设计](docs/superpowers/specs/2026-07-20-masters-medspa-firecrawl-raw-design.md) 与 [执行计划](docs/superpowers/plans/2026-07-20-masters-medspa-firecrawl-raw.md)。
+对应的真实 LLM 服务/促销提取实测见 [提取设计](docs/superpowers/specs/2026-07-20-masters-medspa-llm-extraction-design.md) 与 [执行计划](docs/superpowers/plans/2026-07-20-masters-medspa-llm-extraction.md)；本地审计结果保存在 `.firecrawl/masters-medspa/llm-extraction.json`。
+本轮批量 raw 严格门店 AI 提取实测见 [设计](docs/superpowers/specs/2026-07-20-recent-raw-ai-extraction-design.md) 与 [实施计划](docs/superpowers/plans/2026-07-20-recent-raw-ai-extraction.md)；运行审计保存在 `.firecrawl/master-business-search/ai-extraction-audit.json`。
+本轮促销（promotion 7–11）Offer 抽取写入实测审计保存在 `.firecrawl/master-business-search/offer-extraction-audit.json`。
+促销 `promotion_content` 修复审计见 `.firecrawl/master-business-search/promotion-content-repair-audit.json`。
+
 ```text
 Daily (production path):
   Firecrawl monitor/check diff
@@ -43,6 +53,7 @@ Do not run both daily and fallback simultaneously.
 costfinder/
 ├── requirements.txt
 ├── README.md
+├── service_name_dict.json       # 共享服务名词典（LLM 提取 canonical 名）
 ├── pytest.ini
 ├── config/
 │   ├── settings.py
@@ -68,21 +79,35 @@ costfinder/
 │   ├── monthly_refresh_promo_website_staging.py  # 月度回退
 │   ├── detect_promo_website_staging_changes.py   # 按需全量比对
 │   ├── audit_expired_promo_offers.py
+│   ├── audit_extraction_quality.py  # 五表 + raw lineage 统一审计
+│   ├── apply_extraction_repairs.py  # 确定性修复（默认 dry-run）
 │   ├── audit_promo_offer_master.py
 │   ├── audit_promo_website_staging.py
 │   ├── apply_sql_migration.py       # 通用 SQL 迁移运维
 │   ├── daily_instagram_promo_ingestion.py
-│   ├── daily_facebook_promo_ingestion.py
-│   └── archive/                     # 历史一次性脚本（不再维护）
+│   └── daily_facebook_promo_ingestion.py
+├── one-off/                         # 一次性脚本（AI/人工临时任务，见 one-off/README.md）
 ├── tests/
-├── CF_Extrator_Agent/
-│   └── data/service_name_dict.json  # 共享服务名词典
+├── schema/                          # LLM 输出约束；service_name 枚举与共享词典同步
+│   ├── promotion_extraction_schema.json
+│   ├── offer_extraction_schema.json
+│   ├── membership_extraction_schema.json
+│   └── service_extraction_schema.json
 ├── output/
 │   ├── results/
 │   ├── logs/
 │   └── monitor_results/
 └── docs/
 ```
+
+## 提取 Schema 约定
+
+`schema/` 下四个 JSON Schema 约束 LLM 结构化输出。每个 schema 顶层首字段为必填 `explanation`（字符串），用于让模型先写简短、可审计的证据摘要（依据、歧义、空值原因），再输出业务数组（`promotions` / `offers` / `memberships` / `services`）。
+
+- `explanation` 是生成提示与审计元数据，**不是**入库业务字段；下游解析可忽略。
+- JSON Schema 标准不保证属性输出顺序；首字段位置是对结构化输出生成器的顺序提示，并非真正的两次模型调用解耦。
+- `offer_extraction_schema.json` 一次提取报价及其嵌套 `items`，并排除 example / comparison 等非真实报价；`items.service_name` 与 `service_extraction_schema.json` 使用相同枚举，per-unit 报价未声明购买数量时 `quantity=null`，套餐没有明确单项价格时 `unit_price=null`。
+- `membership_extraction_schema.json` 仅输出页面可证实的会员业务字段；`business_id` 与 `source_url` 由程序注入，`benefits` 保留为独立的分段原文数组。
 
 ## 环境准备
 
@@ -101,7 +126,23 @@ uv pip install -r requirements.txt
 - `FIRECRAWL_CRAWL_TIMEOUT_SECS`（默认 1800）
 - `TZ`（默认影响社媒脚本本地日期判断）
 
-自部署 Firecrawl 引导见 [`docs/self_hosted_firecrawl_wsl.md`](docs/self_hosted_firecrawl_wsl.md)。
+## 消费者认证（Frontend）
+
+Consumer auth: Supabase email/password via the frontend Header modal.
+
+Schema prerequisite: `config/sql/m017_consumer_auth_profiles.sql`（`profiles` 表、RLS、消费者建档触发器）。
+
+Deal claims prerequisite: `config/sql/m018_claims.sql`（`claims` 表、`claim_status` 枚举、RLS）。
+
+Supabase Auth prerequisite: 在 Dashboard 关闭 **Confirm email**，注册后直接建立会话。
+
+部署迁移：
+
+```bash
+python scripts/apply_sql_migration.py config/sql/m017_consumer_auth_profiles.sql
+```
+
+前端本地开发见 `frontend/.env.example`；运行 `cd frontend && npm run dev`。
 
 ## 运行方式
 
@@ -166,19 +207,22 @@ python scripts/firecrawl_monitor_poll.py --monitor-id <id> --dry-run
 ### 4) 审计与其它工具
 
 ```bash
+python scripts/audit_extraction_quality.py      # 五表质量审计（非零退出码 = 有 blocking 问题）
+python scripts/apply_extraction_repairs.py      # 修复计划 dry-run
+python scripts/apply_extraction_repairs.py --apply
 python scripts/audit_expired_promo_offers.py
-python scripts/audit_promo_offer_master.py
+python scripts/audit_promo_offer_master.py      # legacy：仅 promo_offer_master
 python scripts/audit_promo_website_staging.py
 ```
 
 ### 5) promo_offer_master 质量运维
 
-生产链路已在写入时使用 `offer_fingerprint` 去重。历史数据去重、回填、规范化和迁移脚本已移至 [`scripts/archive/`](scripts/archive/)，仅用于审计或受控恢复。
+生产链路已在写入时使用 `offer_fingerprint` 去重。
 
 如需部署 schema 变更，继续使用：
 
 ```bash
-python scripts/apply_sql_migration.py config/sql/m003_promo_offer_fingerprint.sql
+python scripts/apply_sql_migration.py config/sql/m016_extraction_quality_guardrails.sql
 ```
 
 ## 输出位置
@@ -191,13 +235,10 @@ python scripts/apply_sql_migration.py config/sql/m003_promo_offer_fingerprint.sq
 ## 脚本维护边界
 
 - `scripts/` 只保留可重复运行、已文档化的生产链路和审计入口。
+- **`one-off/`** 是**唯一**允许放置一次性脚本的位置（迁移修复、单域 bootstrap、临时诊断等）。AI 产出的一次性脚本**必须**放在 [`one-off/`](one-off/)，详见 [`one-off/README.md`](one-off/README.md)。
 - `crawler/`、`utils/` 保存可复用的抓取、清洗、入库和业务规则。
-- 已执行的数据修复、迁移、实验和临时诊断脚本放在 [`scripts/archive/`](scripts/archive/)，不纳入正常测试与调度。
 - schema 部署 SQL 仍保留在 `config/sql/`，由 `scripts/apply_sql_migration.py` 执行。
-
-## 不纳入本 README 的内容
-
-- `scripts/archive/`：历史一次性脚本与部署 bootstrap，不再维护
+- 已完成的一次性脚本在任务结束后从 `one-off/` 删除；更早的历史见 `git log`。
 
 ## Production safety and notifications
 

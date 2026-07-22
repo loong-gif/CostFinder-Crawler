@@ -59,9 +59,10 @@ screenshots/
 frontend/
 !tests/fixtures/
 !tests/fixtures/**/*.json
-!CF_Extrator_Agent/data/service_name_dict.json
+!service_name_dict.json
 .hermes/
 
 # Local SSH credentials
 firecrawl_server
 firecrawl_server.pub
+.firecrawl/

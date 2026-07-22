@@ -30,30 +30,25 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.membership_plan_lookup import plan_display_name, resolve_plan_fields
 from utils.offer_evidence_segments import normalize_segment_text, normalize_url, split_page_content
+from utils.schema_contract import (
+    OFFER_MASTER_WITH_ITEMS_SELECT,
+    TABLE_PROMO_OFFER_MASTER,
+    offer_is_active,
+    offer_item_name,
+    offer_source_url,
+)
 from utils.supabase_rest import SupabaseRestClient  # noqa: E402
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "results"
 REPORT_DIR = PROJECT_ROOT / "reports"
 PAGE_SIZE = 1000
 
-MASTER_TABLE = "promo_offer_master_enriched"
-MASTER_TABLE_FALLBACK = "promo_offer_master"
-STAGING_TABLE = "promo_website_staging"
-
+MASTER_TABLE = TABLE_PROMO_OFFER_MASTER
 MASTER_SELECT = (
-    "id,channel,source_url,source_name,template_type,service_category,service_name,"
-    "offer_raw_text,end_date,discount_percent,discount_amount,offer_content,"
-    "regular_price,discount_price,unit_type,membership_plan_id,is_membership_required,"
-    "plan_tier_name,plan_display_name,plan_monthly_fee,plan_billing_period,"
-    "created_at,business_id,status"
+    f"{OFFER_MASTER_WITH_ITEMS_SELECT},"
+    "clinic_memberships(membership_name,membership_price,billing_period,perks)"
 )
-MASTER_SELECT_FALLBACK = (
-    "id,channel,source_url,source_name,template_type,service_category,service_name,"
-    "offer_raw_text,end_date,discount_percent,discount_amount,offer_content,"
-    "regular_price,discount_price,unit_type,membership_plan_id,is_membership_required,"
-    "created_at,business_id,status,"
-    "promo_membership_plans(tier_name,plan_name,monthly_fee,annual_fee,billing_period)"
-)
+STAGING_TABLE = "promo_website_staging"
 STAGING_SELECT = (
     "promo_website_id,subpage_url,domain_name,page_content,crawl_timestamp,"
     "last_updated_at,processed_status,business_id,needs_ocr"
@@ -133,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Audit active Website offers missing from their source URL")
     parser.add_argument("--limit", type=int, default=None, help="Only audit first N master rows")
     parser.add_argument("--domain", default=None, help="Filter source_url/source_name by domain substring")
-    parser.add_argument("--include-ended", action="store_true", help="Also audit rows whose status is not active")
+    parser.add_argument("--include-ended", action="store_true", help="Also audit rows where is_active is false")
     parser.add_argument("--live-probe", action="store_true", help="Fetch current source pages to catch no-offer messages absent from staging")
     parser.add_argument("--output-dir", default=str(OUTPUT_DIR), help="Structured output directory")
     parser.add_argument("--report-dir", default=str(REPORT_DIR), help="Markdown report directory")

@@ -1,7 +1,7 @@
 """Pick Firecrawl monitor scrape URLs from promo_website_staging subpage_url rows."""
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qsl, urlparse, urlunparse
 
 from crawler.promo_site_crawler import (
@@ -11,7 +11,9 @@ from crawler.promo_site_crawler import (
     score_candidate_link,
     should_exclude_candidate,
 )
+from utils.clinic_promotions_db import upsert_promotion
 from utils.membership_paths import is_membership_page_url
+from utils.schema_contract import TABLE_CLINIC_PROMOTIONS
 
 _MIN_STRONG_SCORE = 4
 
@@ -96,3 +98,71 @@ def pick_monitor_urls(
         return _dedupe_urls([scored[0][2]])[:max_urls]
 
     return [f"https://{domain}"]
+
+
+def fetch_monitor_urls_from_promotions(
+    client: Any,
+    *,
+    domain_name: Optional[str] = None,
+    limit: int = 5000,
+) -> List[str]:
+    """Return source_url values from clinic_promotions."""
+    filters: Dict[str, str] = {}
+    if domain_name:
+        domain = normalize_domain(domain_name) or domain_name.strip().lower()
+        filters["source_url"] = f"ilike.%{domain}%"
+    rows = client.fetch_rows(
+        TABLE_CLINIC_PROMOTIONS,
+        "source_url",
+        filters=filters or None,
+        limit=limit,
+        order="promotion_id.asc",
+    )
+    return [str(row.get("source_url") or "").strip() for row in rows if row.get("source_url")]
+
+
+def resolve_monitor_subpage_urls(
+    *,
+    promotion_urls: Iterable[str],
+    staging_urls: Iterable[str],
+    domain_name: str,
+    source: str = "both",
+    max_urls: int = 2,
+) -> List[str]:
+    """Merge promotion + staging URL sources for monitor targets."""
+    mode = (source or "both").strip().lower()
+    promo_list = list(promotion_urls) if mode in {"promotions", "both"} else []
+    staging_list = list(staging_urls) if mode in {"staging", "both"} else []
+    combined = promo_list + staging_list
+    if combined:
+        return pick_monitor_urls(combined, domain_name=domain_name, max_urls=max_urls)
+    return pick_monitor_urls(staging_list, domain_name=domain_name, max_urls=max_urls)
+
+
+def sync_promotions_from_staging_rows(
+    client: Any,
+    rows: Iterable[Dict[str, Any]],
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Dual-write clinic_promotions for crawled staging rows with business_id."""
+    synced = 0
+    for row in rows:
+        business_id = row.get("business_id")
+        source_url = str(row.get("subpage_url") or row.get("source_url") or "").strip()
+        if business_id is None or not source_url:
+            continue
+        if dry_run:
+            synced += 1
+            continue
+        try:
+            upsert_promotion(
+                client,
+                business_id=int(business_id),
+                source_url=source_url,
+                promotion_title=str(row.get("name") or "").strip() or None,
+            )
+            synced += 1
+        except Exception:
+            continue
+    return synced

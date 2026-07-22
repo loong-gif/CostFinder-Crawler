@@ -46,7 +46,7 @@ from crawler.staging_recrawl import (
 from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
 from utils.observability import init_observability
-from utils.offer_extraction_llm import OpenAICompatibleClient, build_client_from_env
+from utils.offer_extraction_llm import StructuredLLMClient, build_client_from_env
 
 REPORT_PREFIX = "firecrawl_monitor_poll"
 MONITOR_RESULTS_DIR = PROJECT_ROOT / "output" / "monitor_results"
@@ -340,7 +340,7 @@ def process_monitor(
     crawl_timeout_secs: int,
     since_check: Optional[str],
     force_reprocess_latest: bool,
-    llm_client: Optional[OpenAICompatibleClient] = None,
+    llm_client: Optional[StructuredLLMClient] = None,
     skip_apify_on_success: bool = False,
     min_confidence: str = "low",
     include_change_events: bool = False,

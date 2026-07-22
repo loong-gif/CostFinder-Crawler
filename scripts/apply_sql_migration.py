@@ -65,7 +65,7 @@ def _check_drop_gate_rest() -> str | None:
     if count:
         return (
             f"Refusing DROP: {count} active offers still have membership_name without membership_plan_id. "
-            "Run scripts/archive/migrate_offer_membership_fk.py first."
+            "Backfill membership_plan_id on active offers first (one-off migration removed; see git history)."
         )
     return None
 
@@ -92,7 +92,7 @@ def _check_drop_gate(db_url: str) -> str | None:
     if count:
         return (
             f"Refusing DROP: {count} active offers still have membership_name without membership_plan_id. "
-            "Run scripts/archive/migrate_offer_membership_fk.py first."
+            "Backfill membership_plan_id on active offers first (one-off migration removed; see git history)."
         )
     return None
 

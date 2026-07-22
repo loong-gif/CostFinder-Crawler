@@ -47,7 +47,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from utils.supabase_rest import get_supabase_writer_key
@@ -59,7 +59,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from crawler.promo_site_crawler import normalize_domain
 from crawler.staging_recrawl import PROMO_MONITOR_STATE_TABLE, MonitorStateStore, load_supabase_client
 from utils.firecrawl_client import get_firecrawl_client
-from utils.monitor_target_urls import normalize_monitor_url, pick_monitor_urls
+from utils.monitor_target_urls import (
+    fetch_monitor_urls_from_promotions,
+    normalize_monitor_url,
+    resolve_monitor_subpage_urls,
+)
 from utils.service_category_lookup import MASTER_CATEGORY_PROMPT
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "monitor_results"
@@ -258,6 +262,44 @@ def create_monitor_for_domain(
     return monitor
 
 
+def monitor_url_source() -> str:
+    return (os.getenv("MONITOR_URL_SOURCE") or "both").strip().lower()
+
+
+def fetch_promotion_urls_by_domain(client) -> Dict[str, List[str]]:
+    rows = client.fetch_rows(
+        "clinic_promotions",
+        "source_url,business_id,master_business_info(website)",
+        limit=5000,
+        order="promotion_id.asc",
+    )
+    out: Dict[str, List[str]] = defaultdict(list)
+    for row in rows:
+        url = str(row.get("source_url") or "").strip()
+        if not url:
+            continue
+        domain = normalize_domain(url)
+        if domain:
+            out[domain].append(url)
+    return dict(out)
+
+
+def resolve_domain_monitor_urls(
+    *,
+    domain: str,
+    staging_urls: List[str],
+    promotion_urls: List[str],
+    max_urls: int,
+) -> List[str]:
+    return resolve_monitor_subpage_urls(
+        promotion_urls=promotion_urls,
+        staging_urls=staging_urls,
+        domain_name=domain,
+        source=monitor_url_source(),
+        max_urls=max_urls,
+    )
+
+
 def fetch_staging_urls_by_domain(session, base_url: str) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     """Return domain -> subpage_urls and domain -> business name."""
     print("Fetching subpage_url rows from promo_website_staging...")
@@ -293,6 +335,8 @@ def create_monitors_for_all_domains(args: argparse.Namespace) -> None:
     fc = get_firecrawl_client()
     session, base_url = get_supabase_client()
     urls_by_domain, names_by_domain = fetch_staging_urls_by_domain(session, base_url)
+    sb_client = load_supabase_client()
+    promo_by_domain = fetch_promotion_urls_by_domain(sb_client)
 
     domains = dict(names_by_domain)
     if args.limit:
@@ -333,9 +377,10 @@ def create_monitors_for_all_domains(args: argparse.Namespace) -> None:
     errors = 0
 
     for i, (domain, name) in enumerate(domains.items(), 1):
-        target_urls = pick_monitor_urls(
-            urls_by_domain.get(domain, []),
-            domain_name=domain,
+        target_urls = resolve_domain_monitor_urls(
+            domain=domain,
+            staging_urls=urls_by_domain.get(domain, []),
+            promotion_urls=promo_by_domain.get(domain, []),
             max_urls=max_urls,
         )
         try:
@@ -538,6 +583,7 @@ def sync_monitor_targets(args: argparse.Namespace) -> None:
     state_store = MonitorStateStore(load_supabase_client(PROJECT_ROOT))
     domain_by_monitor_id = load_domain_by_monitor_id(state_store)
     urls_by_domain, _ = fetch_staging_urls_by_domain(session, base_url)
+    promo_by_domain = fetch_promotion_urls_by_domain(load_supabase_client())
 
     print("Removing duplicate monitors...")
     dedupe_duplicate_monitors(fc, dry_run=bool(args.dry_run))
@@ -565,9 +611,10 @@ def sync_monitor_targets(args: argparse.Namespace) -> None:
         monitor_id = monitor.get("id") or ""
         domain = infer_domain_from_monitor(monitor, domain_by_monitor_id=domain_by_monitor_id)
         old_urls = extract_urls_from_monitor(monitor)
-        new_urls = pick_monitor_urls(
-            urls_by_domain.get(domain, []),
-            domain_name=domain or "unknown",
+        new_urls = resolve_domain_monitor_urls(
+            domain=domain or "unknown",
+            staging_urls=urls_by_domain.get(domain, []),
+            promotion_urls=promo_by_domain.get(domain, []),
             max_urls=max_urls,
         )
 
@@ -825,9 +872,11 @@ def main() -> None:
         else:
             session, base_url = get_supabase_client()
             urls_by_domain, names_by_domain = fetch_staging_urls_by_domain(session, base_url)
-            urls = pick_monitor_urls(
-                urls_by_domain.get(domain, []),
-                domain_name=domain,
+            promo_by_domain = fetch_promotion_urls_by_domain(load_supabase_client())
+            urls = resolve_domain_monitor_urls(
+                domain=domain,
+                staging_urls=urls_by_domain.get(domain, []),
+                promotion_urls=promo_by_domain.get(domain, []),
                 max_urls=max(1, args.max_urls),
             )
             if not name:
