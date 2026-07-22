@@ -8,23 +8,15 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 import requests
 
-from crawler.promo_site_crawler import build_llm_ready_content, filter_page_segments, normalize_segment_text
-from utils.membership_plans import (
-    extract_membership_plans_for_row,
-    normalize_membership_plan_refs,
-)
-from utils.membership_paths import is_membership_page_url
+from crawler.promo_site_crawler import normalize_segment_text
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
 
 SERVICE_NAME_DICT_PATH = Path(__file__).resolve().parents[1] / "service_name_dict.json"
-SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schema"
-PROMOTION_EXTRACTION_SCHEMA_PATH = SCHEMA_DIR / "promotion_extraction_schema.json"
-SERVICE_EXTRACTION_SCHEMA_PATH = SCHEMA_DIR / "service_extraction_schema.json"
 
 OFFER_OUTPUT_FIELDS = [
     "service_name",
@@ -59,33 +51,6 @@ def parse_json_payload(value: Any, default: Any) -> Any:
         return default
 
 
-def build_text_segments(page_content: str) -> List[Dict[str, Any]]:
-    blocks = []
-    seen_indexes: set[int] = set()
-    for fallback_idx, part in enumerate(re.split(r"(?:===|\n{2,})", page_content or "")):
-        text = normalize_segment_text(part)
-        if not text:
-            continue
-        match = re.match(r"^\[SEGMENT\s+(\d+)\]", text, flags=re.IGNORECASE)
-        index = int(match.group(1)) if match else fallback_idx
-        while index in seen_indexes:
-            index += 1
-        seen_indexes.add(index)
-        blocks.append(
-            {
-                "index": index,
-                "tag": "text_block",
-                "text": text,
-                "text_length": len(text),
-            }
-        )
-    if not blocks and page_content:
-        text = normalize_segment_text(page_content)
-        if text:
-            blocks.append({"index": 0, "tag": "text_block", "text": text, "text_length": len(text)})
-    return blocks
-
-
 def load_service_name_dictionary() -> Dict[str, Any]:
     try:
         payload = json.loads(SERVICE_NAME_DICT_PATH.read_text(encoding="utf-8"))
@@ -102,13 +67,6 @@ def load_service_name_dictionary() -> Dict[str, Any]:
 
 def get_standardized_service_names() -> List[str]:
     return [str(item).strip() for item in load_service_name_dictionary().get("standardized_names", []) if str(item).strip()]
-
-
-def get_display_service_names() -> List[str]:
-    dictionary = load_service_name_dictionary()
-    names = [str(item).strip() for item in dictionary.get("display_service_names", []) if str(item).strip()]
-    aliases = [str(item).strip() for item in dictionary.get("aliases", {}).keys() if str(item).strip()]
-    return sorted(set(names + aliases))
 
 
 def _clean_text(value: Any) -> str:
@@ -179,59 +137,6 @@ def normalize_service_identity(record: Dict[str, Any]) -> None:
     record["service_name"] = canonical
 
 
-def chunk_segments(segments: List[Dict[str, Any]], chunk_size: int) -> List[List[Dict[str, Any]]]:
-    if chunk_size <= 0:
-        return [segments]
-    return [segments[index:index + chunk_size] for index in range(0, len(segments), chunk_size)]
-
-
-def merge_offer_payloads(payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    offers: List[Dict[str, Any]] = []
-    for payload in payloads:
-        items = payload.get("offers", []) if isinstance(payload, dict) else []
-        if isinstance(items, list):
-            offers.extend(item for item in items if isinstance(item, dict))
-    return {"offers": offers}
-
-
-def load_extraction_schema(path: Path) -> Dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def load_promotion_extraction_schema() -> Dict[str, Any]:
-    return load_extraction_schema(PROMOTION_EXTRACTION_SCHEMA_PATH)
-
-
-def load_service_extraction_schema() -> Dict[str, Any]:
-    return load_extraction_schema(SERVICE_EXTRACTION_SCHEMA_PATH)
-
-
-def merge_promotion_payloads(payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    title = ""
-    is_new_customer = False
-    offers: List[Dict[str, Any]] = []
-    for payload in payloads:
-        promotion = payload.get("promotion") if isinstance(payload, dict) else {}
-        if not isinstance(promotion, dict) or not promotion:
-            continue
-        if not title:
-            title = str(promotion.get("promotion_title") or "").strip()
-        if promotion.get("is_new_customer_required"):
-            is_new_customer = True
-        chunk_offers = promotion.get("offers")
-        if isinstance(chunk_offers, list):
-            offers.extend(item for item in chunk_offers if isinstance(item, dict))
-    if not title and not offers:
-        return {"promotion": {}}
-    return {
-        "promotion": {
-            "promotion_title": title or "Promotion",
-            "is_new_customer_required": is_new_customer,
-            "offers": offers,
-        }
-    }
-
-
 def _template_type_for_price_model(price_model: str) -> str:
     mapping = {"from": "FROM_PRICE", "total": "FIXED_PRICE", "per_unit": "FIXED_PRICE"}
     return mapping.get(str(price_model or "").strip(), "")
@@ -274,31 +179,6 @@ def promotion_payload_to_offers(payload: Any, allowed_indexes: set[int]) -> List
     return filter_service_offers(offers_out)
 
 
-def build_promotion_extraction_messages(
-    row: Dict[str, Any],
-    selected_segments: List[Dict[str, Any]],
-) -> List[Dict[str, str]]:
-    segment_lines = [f"[{item['index']}] {item['text']}" for item in selected_segments]
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract promotional pricing from aesthetic medspa page evidence only. "
-                "Do not infer missing values. Ignore navigation, CTAs, and membership tier plan fees. "
-                "Do not extract free consultations or retail catalog SKUs as treatment offers. "
-                "Price ranges without a single number should use null prices or be omitted."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Extract promotion data for {row.get('domain_name', '')} {row.get('subpage_url', '')}.\n"
-                f"Evidence:\n{json.dumps(segment_lines, ensure_ascii=False, indent=2)}"
-            ),
-        },
-    ]
-
-
 class StructuredLLMClient(Protocol):
     model: str
 
@@ -308,106 +188,6 @@ class StructuredLLMClient(Protocol):
         *,
         json_schema: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]: ...
-
-
-def load_filtered_segments(row: Dict[str, Any]) -> List[Dict[str, Any]]:
-    payload = parse_json_payload(row.get("page_segments_filtered"), [])
-    if isinstance(payload, list) and payload:
-        return [item for item in payload if isinstance(item, dict) and item.get("text")]
-
-    raw_payload = parse_json_payload(row.get("page_segments_raw"), [])
-    if isinstance(raw_payload, list) and raw_payload:
-        filtered, _ = filter_page_segments([item for item in raw_payload if isinstance(item, dict) and item.get("text")])
-        return filtered
-
-    filtered, _ = filter_page_segments(build_text_segments(row.get("page_content", "")))
-    return filtered
-
-
-def build_candidate_block_selection_messages(row: Dict[str, Any], segments: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    segment_lines = [f"[{item['index']}] {item['text']}" for item in segments]
-    user_payload = {
-        "domain_name": row.get("domain_name", ""),
-        "subpage_url": row.get("subpage_url", ""),
-        "segments": segment_lines,
-    }
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You select evidence blocks for aesthetic offer extraction. "
-                "Return strict JSON with keys selected_segments, excluded_segments, and summary. "
-                "Only choose segments that contain concrete service, membership, promotion, pricing, bundle, or date evidence. "
-                "Exclude navigation, CTA, commerce, account, and general marketing copy."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "Choose all useful evidence blocks for extracting structured offers. Do not cap selection when many rows are prices.\n"
-                "Return JSON in this shape:\n"
-                '{"selected_segments":[{"index":0,"reason":"contains Botox unit price"}],'
-                '"excluded_segments":[{"index":3,"reason":"navigation or CTA"}],"summary":"..."}\n'
-                f"Input:\n{json.dumps(user_payload, ensure_ascii=False, indent=2)}"
-            ),
-        },
-    ]
-
-
-def build_offer_extraction_messages(
-    row: Dict[str, Any],
-    selected_segments: List[Dict[str, Any]],
-) -> List[Dict[str, str]]:
-    segment_lines = [f"[{item['index']}] {item['text']}" for item in selected_segments]
-    schema_lines = ", ".join(OFFER_OUTPUT_FIELDS)
-    standardized_names = json.dumps(get_standardized_service_names(), ensure_ascii=False)
-    display_names = json.dumps(get_display_service_names()[:500], ensure_ascii=False)
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract aesthetic offers into strict JSON. "
-                "Use only the supplied evidence segments. "
-                "Do not infer missing values. "
-                "Do not treat navigation, CTA, or commerce labels as service names. "
-                "Do not extract free consultations, consultation-only bookings, membership plan tier fees, "
-                "or retail skincare/catalog shop products as offers. "
-                "Membership plan structure is stored separately; retail SKUs belong in promo_products_master. "
-                "If a pricing block contains multiple offers, split them into separate records. "
-                "service_name and canonical_service_name must be canonical categories from the allowed enum. "
-                "display_service_name must preserve the exact visible treatment/product name from the page. "
-                "Return JSON with a single top-level key offers."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Extract offers for {row.get('domain_name', '')} {row.get('subpage_url', '')}.\n"
-                f"Each offer must include these keys: {schema_lines}.\n"
-                f"Allowed canonical service_name/canonical_service_name enum: {standardized_names}.\n"
-                f"Known display service names/aliases, when applicable: {display_names}.\n"
-                "For service_name use the best canonical enum value. For display_service_name use the visible page wording such as Restylane Kysse or Lip Filler. "
-                "For canonical_service_name use the same canonical enum as service_name. "
-                "For missing scalar fields use an empty string. For evidence_segments use a list of segment indexes.\n"
-                f"Evidence:\n{json.dumps(segment_lines, ensure_ascii=False, indent=2)}"
-            ),
-        },
-    ]
-
-
-def rule_based_candidate_block_selection(segments: List[Dict[str, Any]], max_segments: int = 0) -> Dict[str, Any]:
-    ranked = sorted(segments, key=lambda item: (-int(item.get("score", 0)), item.get("index", 0)))
-    kept = [item for item in ranked if item.get("score", 0) > 0]
-    if max_segments and max_segments > 0:
-        kept = kept[:max_segments]
-    selected = [{"index": item["index"], "reason": "high heuristic relevance"} for item in kept]
-    selected_ids = {item["index"] for item in kept}
-    excluded = [{"index": item["index"], "reason": "not selected by heuristic"} for item in ranked if item.get("index") not in selected_ids]
-    return {
-        "selected_segments": selected,
-        "excluded_segments": excluded,
-        "summary": "Heuristic fallback used.",
-    }
 
 
 def normalize_offer_record(record: Dict[str, Any], allowed_indexes: set[int]) -> Dict[str, Any]:
@@ -581,100 +361,6 @@ class GeminiNativeClient:
         return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
-def build_llm_ready_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    filtered_segments = load_filtered_segments(row)
-    if not filtered_segments:
-        filtered_segments, flags = filter_page_segments(build_text_segments(row.get("page_content", "")))
-    else:
-        flags = parse_json_payload(row.get("content_quality_flags"), [])
-    llm_content = row.get("page_content_llm") or build_llm_ready_content(filtered_segments)
-    return {
-        **row,
-        "page_segments_filtered": filtered_segments,
-        "page_content_llm": llm_content,
-        "content_quality_flags": flags if isinstance(flags, list) else [],
-    }
-
-
-def extract_offers_for_row(
-    row: Dict[str, Any],
-    client: Optional[StructuredLLMClient] = None,
-    selection_limit: int = 0,
-    extraction_chunk_size: int = 12,
-) -> Dict[str, Any]:
-    prepared = build_llm_ready_row(row)
-    filtered_segments = prepared["page_segments_filtered"]
-    candidate_messages = build_candidate_block_selection_messages(prepared, filtered_segments)
-    if client:
-        selection_payload = client.create_json_response(candidate_messages)
-    else:
-        selection_payload = rule_based_candidate_block_selection(filtered_segments, max_segments=selection_limit)
-
-    selected_indexes = {
-        int(item["index"])
-        for item in selection_payload.get("selected_segments", [])
-        if isinstance(item, dict) and str(item.get("index", "")).isdigit()
-    }
-    rule_selection = rule_based_candidate_block_selection(filtered_segments, max_segments=selection_limit)
-    rule_indexes = {
-        int(item["index"])
-        for item in rule_selection.get("selected_segments", [])
-        if isinstance(item, dict) and str(item.get("index", "")).isdigit()
-    }
-    # Use the union so model selection cannot silently drop price rows from long tables.
-    selected_indexes |= rule_indexes
-    selection_payload = {
-        **selection_payload,
-        "selected_segments": [
-            {"index": index, "reason": "llm_or_rule_selected"}
-            for index in sorted(selected_indexes)
-        ],
-        "rule_selected_count": len(rule_indexes),
-        "llm_selected_count": len(selection_payload.get("selected_segments", []) or []),
-        "selection_strategy": "llm_union_rule_high_signal",
-    }
-
-    selected_segments = [item for item in filtered_segments if item.get("index") in selected_indexes]
-    promotion_messages = build_promotion_extraction_messages(prepared, selected_segments)
-    promotion_schema = load_promotion_extraction_schema()
-    chunk_payloads: List[Dict[str, Any]] = []
-    if client and selected_segments:
-        for segment_chunk in chunk_segments(selected_segments, extraction_chunk_size):
-            chunk_payloads.append(
-                client.create_json_response(
-                    build_promotion_extraction_messages(prepared, segment_chunk),
-                    json_schema=promotion_schema,
-                )
-            )
-        promotion_payload = merge_promotion_payloads(chunk_payloads)
-    else:
-        promotion_payload = {"promotion": {}}
-
-    normalized_offers = promotion_payload_to_offers(promotion_payload, allowed_indexes=selected_indexes)
-    membership_plans: List[Dict[str, Any]] = []
-    if client and is_membership_page_url(str(prepared.get("subpage_url") or "")):
-        page_text = prepared.get("page_content_llm") or prepared.get("page_content") or ""
-        membership_plans = extract_membership_plans_for_row(
-            prepared,
-            client=client,
-            page_content=page_text,
-        )
-
-    return {
-        "domain_name": prepared.get("domain_name", ""),
-        "subpage_url": prepared.get("subpage_url", ""),
-        "content_quality_flags": prepared.get("content_quality_flags", []),
-        "candidate_block_selection": selection_payload,
-        "selected_segments": selected_segments,
-        "candidate_block_selection_prompt": candidate_messages,
-        "offer_extraction_prompt": promotion_messages,
-        "offer_extraction_chunks": len(chunk_payloads),
-        "promotion_extraction": promotion_payload,
-        "offers": normalized_offers,
-        "membership_plans": normalize_membership_plan_refs(membership_plans),
-    }
-
-
 def build_client_from_env(
     *,
     api_url: Optional[str] = None,
@@ -709,3 +395,12 @@ def build_gemini_client_from_env(
     if not (resolved_key and resolved_model):
         return None
     return GeminiNativeClient(api_key=resolved_key, model=resolved_model)
+
+
+if __name__ == "__main__":
+    assert canonicalize_service_name("Botox", "botox cosmetic") == "Botox"
+    offers = promotion_payload_to_offers(
+        {"promotion": {"promotion_title": "Sale", "offers": [{"price_model": "from", "discount_price": 8, "items": [{"item_name": "Jeuveau"}]}]}},
+        allowed_indexes=set(),
+    )
+    assert offers and offers[0]["display_service_name"] == "Jeuveau"

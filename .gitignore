@@ -66,3 +66,6 @@ frontend/
 firecrawl_server
 firecrawl_server.pub
 .firecrawl/
+
+# Local architecture review reports (generated, not committed)
+architecture-review-*.html

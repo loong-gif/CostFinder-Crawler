@@ -78,6 +78,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_report_path(now: datetime) -> Path:
+    timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+    return OUTPUT_DIR / f"facebook_promo_daily_ingestion_{timestamp}.json"
+
+
 def load_supabase_client() -> SupabaseRestClient:
     load_dotenv(PROJECT_ROOT / ".env")
     base_url = os.getenv("SUPABASE_URL")
@@ -717,6 +722,8 @@ def main() -> None:
 
     write_json(report_path, report)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("status") == "error":
+        sys.exit(1)
 
 
 if __name__ == "__main__":

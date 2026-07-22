@@ -407,3 +407,195 @@ def test_sync_dry_run_issues_no_writes():
     assert report["inserted_rows"] == 1
     assert report["content_changed_rows"] == 1
     assert report["timestamp_only_rows"] == 2
+
+
+class FakeLlmClient:
+    def __init__(self, model="test-model"):
+        self.model = model
+
+
+def test_process_monitor_baseline_initializes_cursor(monkeypatch):
+    monitor = {"id": "m-baseline", "name": "shop.com"}
+    store = FakeStateStore(None)
+    checks = [
+        _completed_check("c1", "2024-01-02"),
+        _completed_check("c0", "2024-01-01"),
+    ]
+    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
+
+    report = poll.process_monitor(
+        None,
+        monitor,
+        store,
+        None,
+        dry_run=False,
+        max_crawl_pages=1,
+        crawl_timeout_secs=60,
+        since_check=None,
+        force_reprocess_latest=False,
+    )
+
+    assert report["status"] == "baseline_initialized"
+    assert report["baseline_check_id"] == "c1"
+    assert store.committed_cursors[-1] == "c1"
+
+
+def test_process_monitor_dry_run_does_not_write_cursor(monkeypatch):
+    monitor = {"id": "m-dry", "name": "shop.com"}
+    store = FakeStateStore(MonitorStateRow(monitor_id="m-dry", domain_name="shop.com", last_check_id="c0"))
+    checks = [
+        _completed_check("c0", "2024-01-01"),
+        _completed_check("c1", "2024-01-02", changed=0, new=0),
+    ]
+    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
+    monkeypatch.setattr(poll, "extract_domains_from_check", lambda fc, mid, cid, **kw: (set(), 0))
+
+    report = poll.process_monitor(
+        None,
+        monitor,
+        store,
+        None,
+        dry_run=True,
+        max_crawl_pages=1,
+        crawl_timeout_secs=60,
+        since_check=None,
+        force_reprocess_latest=False,
+    )
+
+    assert "c1" not in store.committed_cursors
+    assert report["checks_processed"][0]["action"] == "no_meaningful_change"
+
+
+def test_process_monitor_dry_run_still_upserts_domain_mapping(monkeypatch):
+    """dry-run 不推进游标，但 upsert_mapping 仍会持久化 domain 绑定（既有行为）。"""
+    monitor = {"id": "m-dry-map", "name": "shop.com"}
+    store = FakeStateStore(MonitorStateRow(monitor_id="m-dry-map", domain_name="", last_check_id="c0"))
+    checks = [
+        _completed_check("c0", "2024-01-01"),
+        _completed_check("c1", "2024-01-02", changed=0, new=0),
+    ]
+    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
+    monkeypatch.setattr(poll, "infer_domain_from_monitor", lambda monitor, store: "shop.com")
+    monkeypatch.setattr(poll, "extract_domains_from_check", lambda fc, mid, cid, **kw: (set(), 0))
+
+    poll.process_monitor(
+        None,
+        monitor,
+        store,
+        None,
+        dry_run=True,
+        max_crawl_pages=1,
+        crawl_timeout_secs=60,
+        since_check=None,
+        force_reprocess_latest=False,
+    )
+
+    assert store.committed_cursors == ["c0"]
+    assert store.get_state("m-dry-map").domain_name == "shop.com"
+
+
+def test_process_monitor_change_driven_skips_apify(monkeypatch):
+    monitor = {"id": "m-cd", "name": "shop.com"}
+    store = FakeStateStore(MonitorStateRow(monitor_id="m-cd", domain_name="shop.com", last_check_id="c0"))
+    checks = [
+        _completed_check("c0", "2024-01-01"),
+        _completed_check("c1", "2024-01-02"),
+    ]
+    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
+    monkeypatch.setattr(
+        poll,
+        "fetch_meaningful_pages",
+        lambda fc, mid, cid, **kw: (
+            [{"url": "https://shop.com/specials", "status": "changed", "judgment": {"meaningful": True}}],
+            1,
+        ),
+    )
+
+    def _fail_recrawl(*args, **kwargs):
+        raise AssertionError("recrawl_domains must not run when change-driven covers all pages")
+
+    monkeypatch.setattr(poll, "recrawl_domains", _fail_recrawl)
+    monkeypatch.setattr(
+        "utils.change_driven_extractor.extract_and_upsert_check_pages",
+        lambda pages, llm, db, domain, **kw: {
+            "needs_apify_fallback": False,
+            "pages_with_diff": 1,
+            "pages_without_diff": 0,
+            "total_offers_extracted": 1,
+            "total_updated": 1,
+            "total_inserted": 0,
+            "total_ended": 0,
+            "total_auto_apply_events": 1,
+            "total_review_events": 0,
+            "candidates_unavailable": False,
+            "page_results": [],
+        },
+    )
+
+    report = poll.process_monitor(
+        None,
+        monitor,
+        store,
+        object(),
+        dry_run=False,
+        max_crawl_pages=1,
+        crawl_timeout_secs=60,
+        since_check=None,
+        force_reprocess_latest=False,
+        llm_client=FakeLlmClient(),
+        skip_apify_on_success=True,
+    )
+
+    assert report["checks_processed"][0]["trigger_recrawl"] is True
+    assert report["recrawls"][0]["action"] == "skipped_change_driven"
+    assert "c1" in store.committed_cursors
+
+
+def test_process_monitor_change_driven_error_still_recrawls(monkeypatch):
+    monitor = {"id": "m-cd-err", "name": "shop.com"}
+    store = FakeStateStore(
+        MonitorStateRow(monitor_id="m-cd-err", domain_name="shop.com", last_check_id="c0")
+    )
+    checks = [
+        _completed_check("c0", "2024-01-01"),
+        _completed_check("c1", "2024-01-02"),
+    ]
+    monkeypatch.setattr(poll, "list_monitor_checks", lambda fc, mid: checks)
+    monkeypatch.setattr(
+        poll,
+        "fetch_meaningful_pages",
+        lambda fc, mid, cid, **kw: (
+            [{"url": "https://shop.com/specials", "status": "changed", "judgment": {"meaningful": True}}],
+            1,
+        ),
+    )
+    monkeypatch.setattr(
+        "utils.change_driven_extractor.extract_and_upsert_check_pages",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("llm pipeline boom")),
+    )
+    recrawl_calls = []
+
+    def _recrawl(domains, **kw):
+        recrawl_calls.append(list(domains))
+        return {"shop.com": {"action": "synced", "updated_rows": 1}}
+
+    monkeypatch.setattr(poll, "recrawl_domains", _recrawl)
+
+    report = poll.process_monitor(
+        None,
+        monitor,
+        store,
+        object(),
+        dry_run=False,
+        max_crawl_pages=1,
+        crawl_timeout_secs=60,
+        since_check=None,
+        force_reprocess_latest=False,
+        llm_client=FakeLlmClient(),
+        skip_apify_on_success=True,
+    )
+
+    assert recrawl_calls == [["shop.com"]]
+    assert report["checks_processed"][0].get("change_driven_error") == "llm pipeline boom"
+    assert report["recrawls"][0]["action"] == "synced"
+    assert "c1" in store.committed_cursors

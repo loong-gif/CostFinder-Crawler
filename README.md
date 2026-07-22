@@ -150,6 +150,27 @@ python scripts/apply_sql_migration.py config/sql/m017_consumer_auth_profiles.sql
 
 这是**日常生产路径**。Firecrawl monitor 检测 promo/pricing 子页变更，change_driven_extractor 提取差异后写入 promo_offer_change_events。只有检测到有意义变更时才触发重爬。
 
+**模块职责（重构后）**
+
+| 模块 | 职责 |
+| --- | --- |
+| [`scripts/firecrawl_monitor_poll.py`](scripts/firecrawl_monitor_poll.py) | 轮询 monitor、选择待处理 check、协调 change-driven 与 Apify 回退、推进游标 |
+| [`utils/change_driven_extractor.py`](utils/change_driven_extractor.py) | 从 diff 构建 LLM 输入、校验 action、生成 change events、门禁后写入 master |
+| [`crawler/staging_recrawl.py`](crawler/staging_recrawl.py) | Firecrawl crawl 重爬与 `promo_website_staging` 同步 |
+
+**生产路径回归**
+
+```bash
+python -m pytest tests/test_change_driven_extractor.py tests/test_monitor_db_update_flow.py tests/test_monitor_target_urls.py -v
+python scripts/firecrawl_monitor_poll.py --dry-run --limit 1   # 需 FIRECRAWL + SUPABASE_WRITER_KEY
+```
+
+**后续复杂度治理批次（未在本轮实施）**
+
+1. 社媒入库：合并 `daily_instagram_promo_ingestion.py` 与 `daily_facebook_promo_ingestion.py` 的重复 payload/回退逻辑
+2. 网页抓取：拆分 `promo_site_crawler.py`、`staging_recrawl.py` 的纯提取与 I/O 提交
+3. 审计写入：将 `promo_offer_audit.py`、`audit_expired_promo_offers.py`、`membership_plans.py` 的规则拆为小型可测函数
+
 ### 2) 社媒日常入库
 
 ```bash
@@ -198,7 +219,7 @@ python scripts/firecrawl_monitor_poll.py --monitor-id <id> --dry-run
 ```
 
 常用参数：
-- `--dry-run`：只检测与出报告，不重爬、不写 state
+- `--dry-run`：只检测与出报告，不重爬、不推进游标（`last_check_id`）；但首次解析域名时仍可能写入 `promo_monitor_state` 的 domain mapping（`upsert_mapping`），与 README 旧表述「完全不写 state」不同，属既有行为
 - `--max-crawl-pages`：Firecrawl crawl 单域最大页数
 - `--crawl-timeout-secs`：Firecrawl crawl 超时
 

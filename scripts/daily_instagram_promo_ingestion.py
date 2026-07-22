@@ -729,6 +729,8 @@ def main() -> None:
 
     write_json(report_path, report)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("status") == "error":
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

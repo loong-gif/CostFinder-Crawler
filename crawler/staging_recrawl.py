@@ -27,6 +27,7 @@ from crawler.promo_site_crawler import (
 from utils.firecrawl_client import get_firecrawl_client
 from utils.logger import log
 from utils.membership_paths import is_membership_page_url
+from utils.url_safety import assert_safe_crawl_entry_url, crawl_entry_url_error
 from utils.page_content_processor import normalize_raw_page_item
 from utils.monitor_target_urls import sync_promotions_from_staging_rows
 
@@ -206,6 +207,7 @@ def recrawl_domain_via_firecrawl(
     """Re-crawl a single domain via Firecrawl crawl API."""
     sb_client = client or load_supabase_client()
     target = build_sync_target_for_domain(sb_client, domain_name)
+    assert_safe_crawl_entry_url(target.website_url)
     fc = get_firecrawl_client()
 
     crawl_job = fc.crawl(
@@ -286,6 +288,9 @@ def build_sync_target_for_domain(client: SupabaseRestClient, domain_name: str) -
     website_url = normalize_seed_url(build_start_url(site) or f"https://{site.domain_name}")
     if not website_url:
         raise RuntimeError(f"No crawl entry URL for domain: {site.domain_name}")
+    url_error = crawl_entry_url_error(website_url)
+    if url_error:
+        raise ValueError(f"Unsafe crawl entry URL for {site.domain_name}: {url_error}")
     return SyncTarget(
         domain_name=site.domain_name,
         website_url=website_url,

@@ -11,6 +11,7 @@ openpyxl==3.1.2
 firecrawl-py>=4.28.0
 
 # 工具库
+pydantic>=2.0,<3
 python-dotenv==1.0.1
 tqdm>=4.66.5
 loguru==0.7.2

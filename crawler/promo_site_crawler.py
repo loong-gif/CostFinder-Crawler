@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from crawler.fetch_engine import FetchEngine, create_fetch_engine
 from utils.logger import log
 from utils.page_content_processor import process_page_content
+from utils.url_safety import crawl_entry_url_error
 
 CANDIDATE_KEYWORD_WEIGHTS = {
     "pricing": 5,
@@ -1193,6 +1194,19 @@ class PromoSiteCrawler:
         start_url = build_start_url(site)
         if not start_url:
             log.warning(f"站点缺少可用入口URL: {site.domain_name}")
+            return [], {
+                "site_success": 0,
+                "site_failed": 1,
+                "zero_hit": 0,
+                "hit_pages": 0,
+                "page_failures": 0,
+            }
+
+        url_error = crawl_entry_url_error(start_url)
+        if url_error:
+            log.warning(
+                f"站点入口URL不安全，跳过: {site.domain_name} -> {start_url} ({url_error})"
+            )
             return [], {
                 "site_success": 0,
                 "site_failed": 1,

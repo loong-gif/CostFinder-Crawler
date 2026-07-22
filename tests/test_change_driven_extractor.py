@@ -1145,6 +1145,127 @@ def test_extract_and_upsert_skips_low_confidence_and_triggers_fallback():
     assert len(llm.calls) == 0
 
 
+@pytest.mark.parametrize(
+    "payload,candidates,expected",
+    [
+        (
+            {
+                "offers": [
+                    {
+                        "action": "update",
+                        "matched_candidate_index": "2",
+                        "service_name": "Botox",
+                        "offer_raw_text": "Botox $11/unit",
+                    }
+                ]
+            },
+            [{"id": "db-2", "candidate_index": 2}],
+            {"matched_id": "db-2", "action": "update", "downgraded": 0},
+        ),
+        (
+            {
+                "offers": [
+                    {
+                        "action": "update",
+                        "matched_id": "ghost",
+                        "service_name": "Botox",
+                        "offer_raw_text": "Botox $11/unit",
+                    }
+                ]
+            },
+            [{"id": "db-1", "candidate_index": 1}],
+            {"matched_id": "", "action": "insert", "downgraded": 1},
+        ),
+        (
+            {"offers": [{"action": "mark_ended", "matched_candidate_index": "1"}]},
+            [{"id": "db-1", "candidate_index": 1}],
+            {"matched_id": "db-1", "action": "mark_ended", "downgraded": 0},
+        ),
+    ],
+)
+def test_validate_offer_actions_table_driven(payload, candidates, expected):
+    validated = validate_offer_actions(payload, candidates, source_url="https://example.com/specials")
+    assert validated["downgraded"] == expected["downgraded"]
+    assert validated["offers"][0]["action"] == expected["action"]
+    assert validated["offers"][0]["matched_id"] == expected["matched_id"]
+
+
+@pytest.mark.parametrize(
+    "offer,json_diff,expected_regular,expected_discount",
+    [
+        (
+            {
+                "action": "update",
+                "matched_id": "offer-1",
+                "service_name": "Validation Botox Update",
+                "offer_raw_text": "Validation Botox Update $11/unit limited time",
+                "regular_price": "",
+                "discount_price": "",
+            },
+            {
+                "offers[0]": {
+                    "previous": {
+                        "service_name": "Validation Botox Update",
+                        "offer_raw_text": "Validation Botox Update $12/unit validation seed",
+                        "discount_price": 12,
+                    },
+                    "current": {
+                        "service_name": "Validation Botox Update",
+                        "offer_raw_text": "Validation Botox Update $11/unit limited time",
+                        "discount_price": 11,
+                    },
+                }
+            },
+            "12",
+            "11",
+        ),
+        (
+            {
+                "action": "update",
+                "matched_id": "offer-1",
+                "service_name": "Botox",
+                "offer_raw_text": "Botox $11/unit",
+                "regular_price": "12",
+                "discount_price": "11",
+            },
+            {"offers[0]": {"previous": {"discount_price": 99}, "current": {"discount_price": 1}}},
+            "12",
+            "11",
+        ),
+    ],
+)
+def test_enrich_update_actions_price_backfill_table_driven(
+    offer, json_diff, expected_regular, expected_discount
+):
+    candidate_offers = [
+        {
+            "id": "offer-1",
+            "service_name": offer["service_name"],
+            "offer_raw_text": "seed text",
+            "regular_price": None,
+            "discount_price": None,
+            "original_price": None,
+        }
+    ]
+    enriched = enrich_update_actions_with_diff_prices(
+        [offer], {"json_diff": json_diff}, candidate_offers
+    )
+    assert enriched[0]["regular_price"] == expected_regular
+    assert enriched[0]["discount_price"] == expected_discount
+
+
+def test_build_change_event_payloads_maps_mark_ended_to_mark_missing():
+    payloads = build_change_event_payloads(
+        [{"action": "mark_ended", "matched_id": "offer-old", "matched_candidate_index": "1"}],
+        {"status": "changed", "confidence": "high"},
+        [{"id": "offer-old", "candidate_index": 1}],
+        source_url="https://example.com/specials",
+        source_name="example.com",
+    )
+    assert payloads["change_events"][0]["proposed_action"] == "mark_missing"
+    assert payloads["change_events"][0]["business_change_type"] == "offer_missing"
+
+
 def test_extract_diff_payload_on_harvested_cases():
     cases_dir = FIXTURES_DIR / "monitor_cases"
     if not cases_dir.exists():

@@ -4,7 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from pydantic import ValidationError
+
 from utils.clinic_services_db import fetch_service_row
+from utils.db_rows import ClinicServiceInsertRow
 from utils.recent_raw_extraction import validate_service
 from utils.schema_contract import TABLE_CLINIC_SERVICES
 
@@ -223,7 +226,11 @@ def upsert_extracted_service(
         area = item.get("service_area")
         if area is not None and str(area).strip():
             insert_row["service_area"] = str(area).strip()
-        inserted = client.insert_rows(TABLE_CLINIC_SERVICES, [insert_row])
+        try:
+            insert_payload = ClinicServiceInsertRow.model_validate(insert_row).to_api_dict()
+        except ValidationError:
+            return {**result, "accepted": False, "reason": "schema_invalid", "action": "skipped"}
+        inserted = client.insert_rows(TABLE_CLINIC_SERVICES, [insert_payload])
         service_id = int(inserted[0]["service_id"])
         result.update({"service_id": service_id, "action": "inserted"})
         return result

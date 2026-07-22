@@ -28,12 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from dotenv import load_dotenv
-from utils.supabase_rest import get_supabase_writer_key
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from dotenv import load_dotenv
+from utils.supabase_rest import get_supabase_writer_key
 
 from crawler.promo_site_crawler import normalize_domain
 from crawler.staging_recrawl import (
@@ -329,6 +329,363 @@ def resolve_report_path(prefix: str = REPORT_PREFIX) -> Path:
     return MONITOR_RESULTS_DIR / f"{prefix}_{timestamp}.json"
 
 
+def _resolve_monitor_context(
+    monitor: Dict[str, Any],
+    state_store: MonitorStateStore,
+    fc,
+) -> Dict[str, Any]:
+    monitor_id = monitor.get("id") or monitor.get("monitorId") or ""
+    monitor_name = monitor.get("name") or monitor_id
+    fallback_domain = infer_domain_from_monitor(monitor, state_store)
+    checks = list_monitor_checks(fc, monitor_id)
+    state = state_store.get_state(monitor_id)
+    last_check_id = state.last_check_id if state else None
+    domain_name = (
+        state.domain_name if state and state.domain_name else fallback_domain
+    ) or fallback_domain
+
+    if domain_name:
+        state_store.upsert_mapping(monitor_id, domain_name)
+
+    return {
+        "monitor_id": monitor_id,
+        "monitor_name": monitor_name,
+        "fallback_domain": fallback_domain,
+        "checks": checks,
+        "state": state,
+        "last_check_id": last_check_id,
+        "domain_name": domain_name,
+        "ordered_checks": sort_checks_newest_first(checks),
+    }
+
+
+def _initialize_baseline_if_needed(
+    *,
+    context: Dict[str, Any],
+    state_store: MonitorStateStore,
+    since_check: Optional[str],
+    force_reprocess_latest: bool,
+    dry_run: bool,
+) -> Optional[Dict[str, Any]]:
+    baseline_only = (
+        not context["last_check_id"]
+        and not since_check
+        and not force_reprocess_latest
+    )
+    if not baseline_only:
+        return None
+
+    ordered = context["ordered_checks"]
+    latest = ordered[0]
+    latest_id = latest.get("id")
+    domain_name = context["domain_name"]
+    fallback_domain = context["fallback_domain"]
+    monitor_id = context["monitor_id"]
+
+    if not dry_run and latest_id:
+        state_store.save_state(
+            monitor_id=monitor_id,
+            domain_name=domain_name or fallback_domain or "unknown",
+            last_check_id=latest_id,
+        )
+    return {
+        "monitor_id": monitor_id,
+        "name": context["monitor_name"],
+        "domain_name": domain_name,
+        "status": "baseline_initialized",
+        "baseline_check_id": latest_id,
+        "checks_seen": len(context["checks"]),
+    }
+
+
+def _collect_recrawl_targets(
+    fc,
+    monitor_id: str,
+    check_id: str,
+    *,
+    trigger_recrawl: bool,
+    llm_client: Optional[StructuredLLMClient],
+    domain_name: str,
+) -> tuple[Set[str], int, List[Dict[str, Any]]]:
+    domains_to_recrawl: Set[str] = set()
+    meaningful_count = 0
+    meaningful_pages: List[Dict[str, Any]] = []
+    if not trigger_recrawl:
+        return domains_to_recrawl, meaningful_count, meaningful_pages
+
+    if llm_client is not None:
+        meaningful_pages, meaningful_count = fetch_meaningful_pages(
+            fc, monitor_id, check_id
+        )
+        for page in meaningful_pages:
+            domain = normalize_domain(page.get("url") or "")
+            if domain:
+                domains_to_recrawl.add(domain)
+    else:
+        domains_to_recrawl, meaningful_count = extract_domains_from_check(
+            fc, monitor_id, check_id
+        )
+
+    if not domains_to_recrawl and meaningful_count > 0 and domain_name:
+        domains_to_recrawl.add(normalize_domain(domain_name))
+    return domains_to_recrawl, meaningful_count, meaningful_pages
+
+
+def _build_check_entry(
+    check: Dict[str, Any],
+    *,
+    trigger_recrawl: bool,
+    domains_to_recrawl: Set[str],
+) -> Dict[str, Any]:
+    return {
+        "check_id": check.get("id"),
+        "summary": check.get("summary"),
+        "trigger_recrawl": trigger_recrawl and bool(domains_to_recrawl),
+        "domains": sorted(domains_to_recrawl),
+    }
+
+
+def _try_change_driven_extraction(
+    *,
+    llm_client: Optional[StructuredLLMClient],
+    meaningful_pages: List[Dict[str, Any]],
+    supabase_client,
+    domain_name: str,
+    dry_run: bool,
+    min_confidence: str,
+    include_change_events: bool,
+    skip_apify_on_success: bool,
+    check_id: str,
+) -> tuple[Optional[Dict[str, Any]], bool, Optional[str]]:
+    if llm_client is None or not meaningful_pages:
+        return None, False, None
+
+    from utils.change_driven_extractor import extract_and_upsert_check_pages
+
+    try:
+        auto_apply_enabled = os.getenv(
+            "AUTO_APPLY_HIGH_CONFIDENCE_ENABLED", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        change_driven_result = extract_and_upsert_check_pages(
+            meaningful_pages,
+            llm_client,
+            supabase_client,
+            domain_name or "",
+            dry_run=dry_run,
+            min_confidence=min_confidence,
+            include_change_events=include_change_events,
+            auto_apply_high_confidence=auto_apply_enabled,
+        )
+        skip_apify = (
+            skip_apify_on_success and not change_driven_result["needs_apify_fallback"]
+        )
+        if skip_apify:
+            log.info(
+                "change_driven: all pages covered for check {cid}, skipping Apify",
+                cid=check_id,
+            )
+        return change_driven_result, skip_apify, None
+    except Exception as exc:
+        log.error(
+            "change_driven: pipeline failed for check {cid}: {error}",
+            cid=check_id,
+            error=exc,
+        )
+        return None, False, str(exc)
+
+
+def _execute_recrawl_or_skip(
+    *,
+    skip_apify_this_check: bool,
+    dry_run: bool,
+    domains_to_recrawl: Set[str],
+    domain_name: str,
+    change_driven_result: Optional[Dict[str, Any]],
+    supabase_client,
+    max_crawl_pages: int,
+    crawl_timeout_secs: int,
+) -> tuple[List[Dict[str, Any]], bool, str]:
+    recrawls: List[Dict[str, Any]] = []
+    recrawl_had_error = False
+    monitor_status = "processed"
+
+    if skip_apify_this_check:
+        recrawls.append(
+            {
+                "domain": domain_name,
+                "action": "skipped_change_driven",
+                "change_driven": change_driven_result,
+            }
+        )
+        return recrawls, recrawl_had_error, monitor_status
+
+    if dry_run:
+        for domain in sorted(domains_to_recrawl):
+            recrawls.append({"domain": domain, "dry_run": True, "action": "would_recrawl"})
+        return recrawls, recrawl_had_error, monitor_status
+
+    recrawl_results = recrawl_domains(
+        domains_to_recrawl,
+        client=supabase_client,
+        max_crawl_pages=max_crawl_pages,
+        crawl_timeout_secs=crawl_timeout_secs,
+    )
+    for domain, result in recrawl_results.items():
+        entry = {"domain": domain, "dry_run": False, **result}
+        if result.get("action") == "error":
+            monitor_status = "partial_error"
+            recrawl_had_error = True
+        recrawls.append(entry)
+    return recrawls, recrawl_had_error, monitor_status
+
+
+def _save_cursor(
+    state_store: MonitorStateStore,
+    *,
+    monitor_id: str,
+    domain_name: str,
+    fallback_domain: str,
+    check_id: str,
+    last_change_at: Optional[str] = None,
+    last_processed_at: Optional[str] = None,
+) -> None:
+    state_store.save_state(
+        monitor_id=monitor_id,
+        domain_name=domain_name or fallback_domain or "unknown",
+        last_check_id=check_id,
+        last_change_at=last_change_at,
+        last_processed_at=last_processed_at,
+    )
+
+
+def _process_single_check(
+    fc,
+    check: Dict[str, Any],
+    *,
+    context: Dict[str, Any],
+    state_store: MonitorStateStore,
+    supabase_client,
+    dry_run: bool,
+    max_crawl_pages: int,
+    crawl_timeout_secs: int,
+    llm_client: Optional[StructuredLLMClient],
+    skip_apify_on_success: bool,
+    min_confidence: str,
+    include_change_events: bool,
+) -> tuple[Dict[str, Any], bool]:
+    check_id = check.get("id")
+    monitor_id = context["monitor_id"]
+    domain_name = context["domain_name"]
+    fallback_domain = context["fallback_domain"]
+    state = context["state"]
+
+    check_status = (check.get("status") or "").lower()
+    if check_status and check_status not in {
+        "completed",
+        "complete",
+        "success",
+        "succeeded",
+    }:
+        if not dry_run:
+            _save_cursor(
+                state_store,
+                monitor_id=monitor_id,
+                domain_name=domain_name,
+                fallback_domain=fallback_domain,
+                check_id=check_id,
+                last_change_at=state.last_change_at if state else None,
+                last_processed_at=state.last_processed_at if state else None,
+            )
+        return (
+            {
+                "check_id": check_id,
+                "status": check_status,
+                "action": "skipped_not_completed",
+            },
+            False,
+        )
+
+    trigger_recrawl = check_has_changes(check)
+    domains_to_recrawl, meaningful_count, meaningful_pages = _collect_recrawl_targets(
+        fc,
+        monitor_id,
+        check_id,
+        trigger_recrawl=trigger_recrawl,
+        llm_client=llm_client,
+        domain_name=domain_name,
+    )
+    check_entry = _build_check_entry(
+        check,
+        trigger_recrawl=trigger_recrawl,
+        domains_to_recrawl=domains_to_recrawl,
+    )
+
+    if check_entry["trigger_recrawl"]:
+        change_driven_result, skip_apify_this_check, change_driven_error = (
+            _try_change_driven_extraction(
+                llm_client=llm_client,
+                meaningful_pages=meaningful_pages,
+                supabase_client=supabase_client,
+                domain_name=domain_name,
+                dry_run=dry_run,
+                min_confidence=min_confidence,
+                include_change_events=include_change_events,
+                skip_apify_on_success=skip_apify_on_success,
+                check_id=check_id,
+            )
+        )
+        if change_driven_result is not None:
+            check_entry["change_driven"] = change_driven_result
+        if change_driven_error:
+            check_entry["change_driven_error"] = change_driven_error
+
+        recrawls, recrawl_had_error, _ = _execute_recrawl_or_skip(
+            skip_apify_this_check=skip_apify_this_check,
+            dry_run=dry_run,
+            domains_to_recrawl=domains_to_recrawl,
+            domain_name=domain_name,
+            change_driven_result=change_driven_result,
+            supabase_client=supabase_client,
+            max_crawl_pages=max_crawl_pages,
+            crawl_timeout_secs=crawl_timeout_secs,
+        )
+        check_entry["recrawls"] = recrawls
+
+        if not dry_run and not recrawl_had_error:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            _save_cursor(
+                state_store,
+                monitor_id=monitor_id,
+                domain_name=domain_name,
+                fallback_domain=fallback_domain,
+                check_id=check_id,
+                last_change_at=now_iso,
+                last_processed_at=now_iso,
+            )
+        elif not dry_run and recrawl_had_error:
+            check_entry["cursor_advanced"] = False
+        return check_entry, check_entry.get("cursor_advanced") is False
+
+    if trigger_recrawl and meaningful_count > 0:
+        check_entry["action"] = "unresolved_domain"
+        if not dry_run:
+            check_entry["cursor_advanced"] = False
+        return check_entry, check_entry.get("cursor_advanced") is False
+
+    check_entry["action"] = "no_meaningful_change"
+    if not dry_run:
+        _save_cursor(
+            state_store,
+            monitor_id=monitor_id,
+            domain_name=domain_name,
+            fallback_domain=fallback_domain,
+            check_id=check_id,
+            last_change_at=state.last_change_at if state else None,
+            last_processed_at=state.last_processed_at if state else None,
+        )
+    return check_entry, False
+
+
 def process_monitor(
     fc,
     monitor: Dict[str, Any],
@@ -345,238 +702,81 @@ def process_monitor(
     min_confidence: str = "low",
     include_change_events: bool = False,
 ) -> Dict[str, Any]:
-    monitor_id = monitor.get("id") or monitor.get("monitorId") or ""
-    monitor_name = monitor.get("name") or monitor_id
-    fallback_domain = infer_domain_from_monitor(monitor, state_store)
-
-    checks = list_monitor_checks(fc, monitor_id)
-    state = state_store.get_state(monitor_id)
-    last_check_id = state.last_check_id if state else None
-    domain_name = (state.domain_name if state and state.domain_name else fallback_domain) or fallback_domain
-
-    if domain_name:
-        state_store.upsert_mapping(monitor_id, domain_name)
-
-    ordered = sort_checks_newest_first(checks)
-    if not ordered:
+    context = _resolve_monitor_context(monitor, state_store, fc)
+    if not context["ordered_checks"]:
         return {
-            "monitor_id": monitor_id,
-            "name": monitor_name,
-            "domain_name": domain_name,
+            "monitor_id": context["monitor_id"],
+            "name": context["monitor_name"],
+            "domain_name": context["domain_name"],
             "status": "no_checks",
             "checks_seen": 0,
         }
 
-    baseline_only = not last_check_id and not since_check and not force_reprocess_latest
-    checks_to_process = select_checks_to_process(
-        checks,
-        last_check_id=last_check_id,
+    baseline_report = _initialize_baseline_if_needed(
+        context=context,
+        state_store=state_store,
         since_check=since_check,
-        baseline_only=baseline_only,
+        force_reprocess_latest=force_reprocess_latest,
+        dry_run=dry_run,
+    )
+    if baseline_report is not None:
+        return baseline_report
+
+    checks_to_process = select_checks_to_process(
+        context["checks"],
+        last_check_id=context["last_check_id"],
+        since_check=since_check,
+        baseline_only=False,
         force_latest=force_reprocess_latest,
     )
 
-    if baseline_only:
-        latest = ordered[0]
-        latest_id = latest.get("id")
-        if not dry_run and latest_id:
-            state_store.save_state(
-                monitor_id=monitor_id,
-                domain_name=domain_name or fallback_domain or "unknown",
-                last_check_id=latest_id,
-            )
-        return {
-            "monitor_id": monitor_id,
-            "name": monitor_name,
-            "domain_name": domain_name,
-            "status": "baseline_initialized",
-            "baseline_check_id": latest_id,
-            "checks_seen": len(checks),
-        }
-
     monitor_report: Dict[str, Any] = {
-        "monitor_id": monitor_id,
-        "name": monitor_name,
-        "domain_name": domain_name,
+        "monitor_id": context["monitor_id"],
+        "name": context["monitor_name"],
+        "domain_name": context["domain_name"],
         "status": "processed",
-        "checks_seen": len(checks),
+        "checks_seen": len(context["checks"]),
         "checks_processed": [],
         "recrawls": [],
     }
 
     for check in checks_to_process:
-        check_id = check.get("id")
-        if not check_id:
+        if not check.get("id"):
             continue
-
-        check_status = (check.get("status") or "").lower()
-        if check_status and check_status not in {"completed", "complete", "success", "succeeded"}:
-            monitor_report["checks_processed"].append(
-                {
-                    "check_id": check_id,
-                    "status": check_status,
-                    "action": "skipped_not_completed",
-                }
-            )
-            if not dry_run:
-                state_store.save_state(
-                    monitor_id=monitor_id,
-                    domain_name=domain_name or fallback_domain or "unknown",
-                    last_check_id=check_id,
-                    last_change_at=state.last_change_at if state else None,
-                    last_processed_at=state.last_processed_at if state else None,
-                )
-            continue
-
-        trigger_recrawl = check_has_changes(check)
-        domains_to_recrawl: Set[str] = set()
-        meaningful_count = 0
-        # Full page objects (with diff/judgment) are only fetched when an LLM
-        # client is available; otherwise the cheaper domain-only path is used.
-        meaningful_pages: List[Dict[str, Any]] = []
-        if trigger_recrawl:
-            if llm_client is not None:
-                meaningful_pages, meaningful_count = fetch_meaningful_pages(
-                    fc, monitor_id, check_id
-                )
-                for page in meaningful_pages:
-                    d = normalize_domain(page.get("url") or "")
-                    if d:
-                        domains_to_recrawl.add(d)
-            else:
-                domains_to_recrawl, meaningful_count = extract_domains_from_check(
-                    fc, monitor_id, check_id
-                )
-            # 仅当确实存在 meaningful 页面时才回退到 monitor 绑定域名；
-            # 若 summary 报告了变更但没有任何 meaningful 页面，则不重爬（M1 修复）。
-            if not domains_to_recrawl and meaningful_count > 0 and domain_name:
-                domains_to_recrawl.add(normalize_domain(domain_name))
-
-        check_entry: Dict[str, Any] = {
-            "check_id": check_id,
-            "summary": check.get("summary"),
-            "trigger_recrawl": trigger_recrawl and bool(domains_to_recrawl),
-            "domains": sorted(domains_to_recrawl),
-        }
-
-        if check_entry["trigger_recrawl"]:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            recrawl_had_error = False
-
-            # --- Change-driven extraction (fast path) ----------------------------
-            # When an LLM client is supplied, attempt to extract offers directly
-            # from the Firecrawl diff data, avoiding a full Apify recrawl.
-            # If every changed page carried usable diff data AND skip_apify_on_success
-            # is set, the Apify recrawl is skipped entirely for this check.
-            change_driven_result: Optional[Dict[str, Any]] = None
-            skip_apify_this_check = False
-
-            if llm_client is not None and meaningful_pages:
-                from utils.change_driven_extractor import extract_and_upsert_check_pages
-                try:
-                    auto_apply_enabled = os.getenv("AUTO_APPLY_HIGH_CONFIDENCE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-                    change_driven_result = extract_and_upsert_check_pages(
-                        meaningful_pages,
-                        llm_client,
-                        supabase_client,
-                        domain_name or "",
-                        dry_run=dry_run,
-                        min_confidence=min_confidence,
-                        include_change_events=include_change_events,
-                        auto_apply_high_confidence=auto_apply_enabled,
-                    )
-                    check_entry["change_driven"] = change_driven_result
-                    if (
-                        skip_apify_on_success
-                        and not change_driven_result["needs_apify_fallback"]
-                    ):
-                        skip_apify_this_check = True
-                        log.info(
-                            "change_driven: all pages covered for check {cid}, skipping Apify",
-                            cid=check_id,
-                        )
-                except Exception as exc:
-                    log.error(
-                        "change_driven: pipeline failed for check {cid}: {error}",
-                        cid=check_id,
-                        error=exc,
-                    )
-                    check_entry["change_driven_error"] = str(exc)
-            # --- End change-driven extraction ------------------------------------
-
-            if skip_apify_this_check:
-                monitor_report["recrawls"].append(
-                    {
-                        "domain": domain_name,
-                        "action": "skipped_change_driven",
-                        "change_driven": change_driven_result,
-                    }
-                )
-            elif dry_run:
-                for domain in sorted(domains_to_recrawl):
-                    monitor_report["recrawls"].append(
-                        {"domain": domain, "dry_run": True, "action": "would_recrawl"}
-                    )
-            else:
-                recrawl_results = recrawl_domains(
-                    domains_to_recrawl,
-                    client=supabase_client,
-                    max_crawl_pages=max_crawl_pages,
-                    crawl_timeout_secs=crawl_timeout_secs,
-                )
-                for domain, result in recrawl_results.items():
-                    entry = {"domain": domain, "dry_run": False, **result}
-                    if result.get("action") == "error":
-                        monitor_report["status"] = "partial_error"
-                        recrawl_had_error = True
-                    monitor_report["recrawls"].append(entry)
-
-            # 仅当所有域名重爬都成功时才推进游标，避免失败的 meaningful 变更被永久跳过。
-            if not dry_run and not recrawl_had_error:
-                state_store.save_state(
-                    monitor_id=monitor_id,
-                    domain_name=domain_name or fallback_domain or "unknown",
-                    last_check_id=check_id,
-                    last_change_at=now_iso,
-                    last_processed_at=now_iso,
-                )
-            elif not dry_run and recrawl_had_error:
-                check_entry["cursor_advanced"] = False
-        elif trigger_recrawl and meaningful_count > 0:
-            # 有 meaningful 页面但既没解析出域名、domain_name 也为空：
-            # 这与"真正无变更"不同，不能误判并推进游标，保留旧游标以便后续重试。
-            check_entry["action"] = "unresolved_domain"
-            if not dry_run:
-                check_entry["cursor_advanced"] = False
-        else:
-            # 无任何 meaningful 页面（summary 可能只报告了非 meaningful 变更）
-            # 或确实无变更：不重爬，推进游标。
-            check_entry["action"] = "no_meaningful_change"
-            if not dry_run:
-                state_store.save_state(
-                    monitor_id=monitor_id,
-                    domain_name=domain_name or fallback_domain or "unknown",
-                    last_check_id=check_id,
-                    last_change_at=state.last_change_at if state else None,
-                    last_processed_at=state.last_processed_at if state else None,
-                )
-
+        check_entry, should_break = _process_single_check(
+            fc,
+            check,
+            context=context,
+            state_store=state_store,
+            supabase_client=supabase_client,
+            dry_run=dry_run,
+            max_crawl_pages=max_crawl_pages,
+            crawl_timeout_secs=crawl_timeout_secs,
+            llm_client=llm_client,
+            skip_apify_on_success=skip_apify_on_success,
+            min_confidence=min_confidence,
+            include_change_events=include_change_events,
+        )
+        for recrawl_entry in check_entry.pop("recrawls", []):
+            monitor_report["recrawls"].append(recrawl_entry)
+            if recrawl_entry.get("action") == "error":
+                monitor_report["status"] = "partial_error"
         monitor_report["checks_processed"].append(check_entry)
-        state = state_store.get_state(monitor_id)
-
-        # check 按时间从旧到新处理：一旦某个 check 重爬失败就停止，
-        # 不再处理更新的 check，以免游标越过失败的 check 导致其被永久跳过。
-        if check_entry.get("cursor_advanced") is False:
+        context["state"] = state_store.get_state(context["monitor_id"])
+        if should_break:
             break
 
     if not monitor_report["checks_processed"]:
-        latest = ordered[0]
+        latest = context["ordered_checks"][0]
         latest_id = latest.get("id")
         if not dry_run and latest_id:
-            state_store.save_state(
-                monitor_id=monitor_id,
-                domain_name=domain_name or fallback_domain or "unknown",
-                last_check_id=latest_id,
+            state = context["state"]
+            _save_cursor(
+                state_store,
+                monitor_id=context["monitor_id"],
+                domain_name=context["domain_name"],
+                fallback_domain=context["fallback_domain"],
+                check_id=latest_id,
                 last_change_at=state.last_change_at if state else None,
                 last_processed_at=state.last_processed_at if state else None,
             )

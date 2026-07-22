@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -26,6 +25,7 @@ from utils.offer_extraction_llm import (
     OFFER_OUTPUT_FIELDS,
     StructuredLLMClient,
     canonicalize_service_name,
+    get_standardized_service_names,
     normalize_offer_record,
     parse_json_payload,
 )
@@ -51,6 +51,9 @@ _CHANGE_EVENT_ACTIONS = {
     "insert": "insert_offer",
     "mark_ended": "mark_missing",
 }
+_RPC_PERSIST_CHANGE_EVENTS = "persist_promo_offer_change_events"
+_RPC_APPLY_OFFER_ACTION = "apply_promo_change_offer_action"
+_change_driven_rpc_verified = False
 _CONFIDENCE_NUMERIC = {"low": 0.35, "medium": 0.65, "high": 0.9}
 _CANDIDATE_FETCH_VARIANTS = [
     (
@@ -121,7 +124,6 @@ _CHANGE_EXTRACTION_FIELDS = [
     *_CHANGE_EXTRACTION_EXTRA_FIELDS,
 ]
 _CHANGE_SCHEMA_FIELDS = ", ".join(_CHANGE_EXTRACTION_FIELDS)
-_SERVICE_NAME_DICT_PATH = Path(__file__).resolve().parents[1] / "service_name_dict.json"
 
 
 def build_change_extraction_json_schema() -> Dict[str, Any]:
@@ -161,12 +163,7 @@ def _head_tail(text: str, limit: int) -> str:
     return text[:half] + "\n...[truncated middle]...\n" + text[-half:]
 
 
-def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Parse a Firecrawl check page into a compact diff payload.
-
-    Returns None when no usable diff data is present, signalling that this
-    page needs the Apify fallback.
-    """
+def _normalize_page_diff_fields(page: Dict[str, Any]) -> Dict[str, Any]:
     diff = page.get("diff") or {}
     if not isinstance(diff, dict):
         diff = {}
@@ -188,24 +185,46 @@ def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(meaningful_changes, list):
         meaningful_changes = []
 
-    judgment_reason = (judgment.get("reason") or "").strip()
-    confidence = (judgment.get("confidence") or "").strip().lower()
+    return {
+        "text_diff": text_diff,
+        "json_diff": json_diff,
+        "meaningful_changes": meaningful_changes,
+        "judgment_reason": (judgment.get("reason") or "").strip(),
+        "confidence": (judgment.get("confidence") or "").strip().lower(),
+    }
 
-    if not text_diff and not json_diff and not meaningful_changes:
-        return None
 
+def _build_diff_payload(page: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "url": (page.get("url") or "").strip(),
         "status": (page.get("status") or "").strip(),
-        "text_diff": _head_tail(text_diff, _MAX_TEXT_DIFF_CHARS) if text_diff else "",
-        "json_diff": json_diff,
-        "meaningful_changes": meaningful_changes,
-        "judgment_reason": judgment_reason,
-        "confidence": confidence,
+        "text_diff": _head_tail(fields["text_diff"], _MAX_TEXT_DIFF_CHARS)
+        if fields["text_diff"]
+        else "",
+        "json_diff": fields["json_diff"],
+        "meaningful_changes": fields["meaningful_changes"],
+        "judgment_reason": fields["judgment_reason"],
+        "confidence": fields["confidence"],
     }
     if page.get("business_id") is not None:
         payload["business_id"] = page["business_id"]
     return payload
+
+
+def extract_diff_payload(page: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Parse a Firecrawl check page into a compact diff payload.
+
+    Returns None when no usable diff data is present, signalling that this
+    page needs the Apify fallback.
+    """
+    fields = _normalize_page_diff_fields(page)
+    if (
+        not fields["text_diff"]
+        and not fields["json_diff"]
+        and not fields["meaningful_changes"]
+    ):
+        return None
+    return _build_diff_payload(page, fields)
 
 
 # ---------------------------------------------------------------------------
@@ -217,29 +236,6 @@ def _truncate_text(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
-
-
-@lru_cache(maxsize=1)
-def _load_service_name_dictionary() -> Dict[str, Any]:
-    try:
-        return json.loads(_SERVICE_NAME_DICT_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"standardized_names": [], "aliases": {}}
-
-
-@lru_cache(maxsize=1)
-def _get_standardized_service_names() -> List[str]:
-    dictionary = _load_service_name_dictionary()
-    names = [
-        str(item).strip()
-        for item in dictionary.get("standardized_names", [])
-        if str(item).strip()
-    ]
-    return names or ["Others"]
-
-
-def _normalize_service_name_from_dictionary(*candidates: Any) -> str:
-    return canonicalize_service_name(*candidates)
 
 
 def fetch_candidate_offers(
@@ -392,7 +388,7 @@ def build_change_extraction_messages(
         candidates_block = "(no existing offers)"
 
     change_body = "\n\n".join(parts)
-    allowed_service_names = json.dumps(_get_standardized_service_names(), ensure_ascii=False)
+    allowed_service_names = json.dumps(get_standardized_service_names(), ensure_ascii=False)
 
     user_content = (
         f"Domain: {domain_name}\n"
@@ -500,13 +496,10 @@ def _iter_changed_offer_pairs(json_diff: Any) -> List[Dict[str, Any]]:
     return pairs
 
 
-def _offer_change_matches(
-    previous: Any,
-    current: Any,
-    *,
+def _offer_match_targets(
     offer: Dict[str, Any],
     candidate: Dict[str, Any],
-) -> bool:
+) -> tuple[set[str], set[str]]:
     target_names = {
         _normalize_match_text(offer.get("service_name")),
         _normalize_match_text(candidate.get("service_name")),
@@ -518,19 +511,130 @@ def _offer_change_matches(
         _normalize_match_text(candidate.get("offer_raw_text")),
     }
     target_texts = {text for text in target_texts if text}
+    return target_names, target_texts
 
-    for side in (previous, current):
-        if not isinstance(side, dict):
-            continue
-        side_name = _normalize_match_text(side.get("service_name"))
-        side_text = _normalize_match_text(side.get("offer_raw_text"))
 
-        if side_name and any(side_name == target or side_name in target or target in side_name for target in target_names):
-            return True
-        if side_text and any(side_text == target or side_text in target or target in side_text for target in target_texts):
-            return True
+def _side_matches_offer_change(
+    side: Any,
+    *,
+    target_names: set[str],
+    target_texts: set[str],
+) -> bool:
+    if not isinstance(side, dict):
+        return False
+    side_name = _normalize_match_text(side.get("service_name"))
+    side_text = _normalize_match_text(side.get("offer_raw_text"))
 
+    if side_name and any(
+        side_name == target or side_name in target or target in side_name
+        for target in target_names
+    ):
+        return True
+    if side_text and any(
+        side_text == target or side_text in target or target in side_text
+        for target in target_texts
+    ):
+        return True
     return False
+
+
+def _offer_change_matches(
+    previous: Any,
+    current: Any,
+    *,
+    offer: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> bool:
+    target_names, target_texts = _offer_match_targets(offer, candidate)
+    return _side_matches_offer_change(
+        previous, target_names=target_names, target_texts=target_texts
+    ) or _side_matches_offer_change(
+        current, target_names=target_names, target_texts=target_texts
+    )
+
+
+def _find_matching_changed_pair(
+    offer: Dict[str, Any],
+    candidate: Dict[str, Any],
+    changed_pairs: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for pair in changed_pairs:
+        if _offer_change_matches(
+            pair.get("previous"),
+            pair.get("current"),
+            offer=offer,
+            candidate=candidate,
+        ):
+            return pair
+    return None
+
+
+def _resolve_update_prices_from_pair(
+    offer: Dict[str, Any],
+    candidate: Dict[str, Any],
+    pair: Dict[str, Any],
+) -> Dict[str, Any]:
+    current_regular = _parse_price(offer.get("regular_price"))
+    current_discount = _parse_price(offer.get("discount_price"))
+    if current_regular is not None and current_discount is not None:
+        return offer
+
+    previous_prices = _extract_offer_price_fields(pair.get("previous"))
+    current_prices = _extract_offer_price_fields(pair.get("current"))
+
+    if current_discount is None:
+        current_discount = (
+            current_prices["discount_price"] or current_prices["regular_price"]
+        )
+        if current_discount is None:
+            current_discount = (
+                _parse_price(candidate.get("discount_price"))
+                or _parse_price(candidate.get("regular_price"))
+                or _parse_price(candidate.get("original_price"))
+            )
+
+    if current_regular is None:
+        current_regular = (
+            previous_prices["regular_price"] or previous_prices["discount_price"]
+        )
+        if current_regular is None:
+            current_regular = (
+                _parse_price(candidate.get("regular_price"))
+                or _parse_price(candidate.get("discount_price"))
+                or _parse_price(candidate.get("original_price"))
+            )
+
+    enriched_offer = dict(offer)
+    if current_regular is not None:
+        enriched_offer["regular_price"] = _format_price_for_offer(current_regular)
+    if current_discount is not None:
+        enriched_offer["discount_price"] = _format_price_for_offer(current_discount)
+    return enriched_offer
+
+
+def _enrich_single_update_offer_with_diff_prices(
+    offer: Dict[str, Any],
+    changed_pairs: List[Dict[str, Any]],
+    candidate_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    if str(offer.get("action") or "").strip().lower() != "update":
+        return offer
+
+    matched_id = str(offer.get("matched_id") or "").strip()
+    candidate = candidate_by_id.get(matched_id, {})
+    if not candidate:
+        return offer
+
+    current_regular = _parse_price(offer.get("regular_price"))
+    current_discount = _parse_price(offer.get("discount_price"))
+    if current_regular is not None and current_discount is not None:
+        return offer
+
+    best_pair = _find_matching_changed_pair(offer, candidate, changed_pairs)
+    if best_pair is None:
+        return offer
+
+    return _resolve_update_prices_from_pair(offer, candidate, best_pair)
 
 
 def enrich_update_actions_with_diff_prices(
@@ -551,74 +655,36 @@ def enrich_update_actions_with_diff_prices(
     if not changed_pairs:
         return offers
 
-    enriched: List[Dict[str, Any]] = []
-    for offer in offers:
-        if str(offer.get("action") or "").strip().lower() != "update":
-            enriched.append(offer)
-            continue
+    return [
+        _enrich_single_update_offer_with_diff_prices(offer, changed_pairs, candidate_by_id)
+        for offer in offers
+    ]
 
-        matched_id = str(offer.get("matched_id") or "").strip()
-        candidate = candidate_by_id.get(matched_id, {})
-        if not candidate:
-            enriched.append(offer)
-            continue
 
-        current_regular = _parse_price(offer.get("regular_price"))
-        current_discount = _parse_price(offer.get("discount_price"))
-        if current_regular is not None and current_discount is not None:
-            enriched.append(offer)
-            continue
+def _standardize_single_offer_service_name(
+    offer: Dict[str, Any],
+    candidate_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    action = str(offer.get("action") or "").strip().lower()
+    if action == "mark_ended":
+        return offer
 
-        best_pair: Optional[Dict[str, Any]] = None
-        for pair in changed_pairs:
-            if _offer_change_matches(
-                pair.get("previous"),
-                pair.get("current"),
-                offer=offer,
-                candidate=candidate,
-            ):
-                best_pair = pair
-                break
-
-        if best_pair is None:
-            enriched.append(offer)
-            continue
-
-        previous_prices = _extract_offer_price_fields(best_pair.get("previous"))
-        current_prices = _extract_offer_price_fields(best_pair.get("current"))
-
-        if current_discount is None:
-            current_discount = (
-                current_prices["discount_price"]
-                or current_prices["regular_price"]
-            )
-            if current_discount is None:
-                current_discount = (
-                    _parse_price(candidate.get("discount_price"))
-                    or _parse_price(candidate.get("regular_price"))
-                    or _parse_price(candidate.get("original_price"))
-                )
-
-        if current_regular is None:
-            current_regular = (
-                previous_prices["regular_price"]
-                or previous_prices["discount_price"]
-            )
-            if current_regular is None:
-                current_regular = (
-                    _parse_price(candidate.get("regular_price"))
-                    or _parse_price(candidate.get("discount_price"))
-                    or _parse_price(candidate.get("original_price"))
-                )
-
-        enriched_offer = dict(offer)
-        if current_regular is not None:
-            enriched_offer["regular_price"] = _format_price_for_offer(current_regular)
-        if current_discount is not None:
-            enriched_offer["discount_price"] = _format_price_for_offer(current_discount)
-        enriched.append(enriched_offer)
-
-    return enriched
+    matched_id = str(offer.get("matched_id") or "").strip()
+    candidate = candidate_by_id.get(matched_id, {})
+    standardized_offer = dict(offer)
+    raw_service_name = str(
+        offer.get("raw_service_name") or offer.get("service_name") or ""
+    ).strip()
+    standardized_offer["raw_service_name"] = raw_service_name
+    standardized_offer["service_name"] = canonicalize_service_name(
+        offer.get("service_name"),
+        raw_service_name,
+        offer.get("offer_raw_text"),
+        offer.get("offer_content"),
+        candidate.get("service_name"),
+        candidate.get("offer_raw_text"),
+    )
+    return standardized_offer
 
 
 def standardize_offer_service_names(
@@ -635,33 +701,9 @@ def standardize_offer_service_names(
         if isinstance(item, dict) and str(item.get("id") or "").strip()
     }
 
-    standardized_offers: List[Dict[str, Any]] = []
-    for offer in offers:
-        action = str(offer.get("action") or "").strip().lower()
-        if action == "mark_ended":
-            standardized_offers.append(offer)
-            continue
-
-        matched_id = str(offer.get("matched_id") or "").strip()
-        candidate = candidate_by_id.get(matched_id, {})
-        standardized_offer = dict(offer)
-        raw_service_name = str(
-            offer.get("raw_service_name")
-            or offer.get("service_name")
-            or ""
-        ).strip()
-        standardized_offer["raw_service_name"] = raw_service_name
-        standardized_offer["service_name"] = _normalize_service_name_from_dictionary(
-            offer.get("service_name"),
-            raw_service_name,
-            offer.get("offer_raw_text"),
-            offer.get("offer_content"),
-            candidate.get("service_name"),
-            candidate.get("offer_raw_text"),
-        )
-        standardized_offers.append(standardized_offer)
-
-    return standardized_offers
+    return [
+        _standardize_single_offer_service_name(offer, candidate_by_id) for offer in offers
+    ]
 
 
 def normalize_change_offer_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -682,6 +724,120 @@ def normalize_change_offer_record(record: Dict[str, Any]) -> Dict[str, Any]:
         record.get("matched_candidate_index") or ""
     ).strip()
     return normalized
+
+
+def _build_mark_ended_offer(
+    matched_id: str,
+    matched_candidate_index: str,
+) -> Dict[str, Any]:
+    mark_ended_offer = {field: "" for field in _CHANGE_EXTRACTION_FIELDS}
+    mark_ended_offer["action"] = "mark_ended"
+    mark_ended_offer["matched_id"] = matched_id
+    mark_ended_offer["matched_candidate_index"] = matched_candidate_index
+    return mark_ended_offer
+
+
+def _validate_single_offer_action(
+    raw_offer: Dict[str, Any],
+    *,
+    candidate_ids: set[str],
+    candidate_id_by_index: Dict[str, str],
+    source_url: str,
+    candidates_unavailable: bool,
+) -> tuple[Optional[Dict[str, Any]], int, int]:
+    """Return (validated_offer_or_none, downgraded_delta, skipped_delta)."""
+    raw_has_content = any(
+        str(raw_offer.get(field) or "").strip()
+        for field in ("service_name", "raw_service_name", "offer_raw_text", "offer_content")
+    )
+
+    offer = normalize_change_offer_record(raw_offer)
+    action = offer["action"]
+    matched_id = offer["matched_id"]
+    matched_candidate_index = offer["matched_candidate_index"]
+    downgraded = 0
+    skipped = 0
+
+    if matched_candidate_index and matched_candidate_index in candidate_id_by_index:
+        matched_id = candidate_id_by_index[matched_candidate_index]
+
+    if action not in _VALID_ACTIONS:
+        downgraded += 1
+        log.warning(
+            "change_driven: invalid action '{action}' for {url}, downgrading to insert",
+            action=action or "<empty>",
+            url=source_url or "<unknown>",
+        )
+        action = "insert"
+        matched_id = ""
+        matched_candidate_index = ""
+
+    if candidates_unavailable and action != "insert":
+        downgraded += 1
+        log.warning(
+            "change_driven: candidates unavailable for {url}, forcing action {action} -> insert",
+            url=source_url or "<unknown>",
+            action=action,
+        )
+        action = "insert"
+        matched_id = ""
+        matched_candidate_index = ""
+
+    if action in {"update", "mark_ended"}:
+        if not matched_id:
+            downgraded += 1
+            if action == "update":
+                log.warning(
+                    "change_driven: update missing matched_id for {url}, downgrading to insert",
+                    url=source_url or "<unknown>",
+                )
+                action = "insert"
+                matched_candidate_index = ""
+            else:
+                log.warning(
+                    "change_driven: mark_ended missing matched_id for {url}, skipping",
+                    url=source_url or "<unknown>",
+                )
+                skipped += 1
+                return None, downgraded, skipped
+
+        elif matched_id not in candidate_ids:
+            downgraded += 1
+            if action == "update":
+                log.warning(
+                    "change_driven: update matched_id={mid} not found for {url}, downgrading to insert",
+                    mid=matched_id,
+                    url=source_url or "<unknown>",
+                )
+                action = "insert"
+                matched_candidate_index = ""
+            else:
+                log.warning(
+                    "change_driven: mark_ended matched_id={mid} not found for {url}, skipping",
+                    mid=matched_id,
+                    url=source_url or "<unknown>",
+                )
+                skipped += 1
+                return None, downgraded, skipped
+
+    if action == "insert":
+        matched_id = ""
+        matched_candidate_index = ""
+        if not raw_has_content:
+            skipped += 1
+            return None, downgraded, skipped
+
+    if action == "mark_ended":
+        return (
+            _build_mark_ended_offer(matched_id, matched_candidate_index),
+            downgraded,
+            skipped,
+        )
+
+    offer["action"] = action
+    offer["matched_id"] = matched_id
+    offer["matched_candidate_index"] = matched_candidate_index
+    return offer, downgraded, skipped
 
 
 def validate_offer_actions(
@@ -719,97 +875,17 @@ def validate_offer_actions(
             skipped += 1
             continue
 
-        raw_has_content = any(
-            str(raw_offer.get(field) or "").strip()
-            for field in ("service_name", "raw_service_name", "offer_raw_text", "offer_content")
+        offer, offer_downgraded, offer_skipped = _validate_single_offer_action(
+            raw_offer,
+            candidate_ids=candidate_ids,
+            candidate_id_by_index=candidate_id_by_index,
+            source_url=source_url,
+            candidates_unavailable=candidates_unavailable,
         )
-
-        offer = normalize_change_offer_record(raw_offer)
-        action = offer["action"]
-        matched_id = offer["matched_id"]
-        matched_candidate_index = offer["matched_candidate_index"]
-
-        if matched_candidate_index and matched_candidate_index in candidate_id_by_index:
-            matched_id = candidate_id_by_index[matched_candidate_index]
-
-        if action not in _VALID_ACTIONS:
-            downgraded += 1
-            log.warning(
-                "change_driven: invalid action '{action}' for {url}, downgrading to insert",
-                action=action or "<empty>",
-                url=source_url or "<unknown>",
-            )
-            action = "insert"
-            matched_id = ""
-            matched_candidate_index = ""
-
-        if candidates_unavailable and action != "insert":
-            downgraded += 1
-            log.warning(
-                "change_driven: candidates unavailable for {url}, forcing action {action} -> insert",
-                url=source_url or "<unknown>",
-                action=action,
-            )
-            action = "insert"
-            matched_id = ""
-            matched_candidate_index = ""
-
-        if action in {"update", "mark_ended"}:
-            if not matched_id:
-                downgraded += 1
-                if action == "update":
-                    log.warning(
-                        "change_driven: update missing matched_id for {url}, downgrading to insert",
-                        url=source_url or "<unknown>",
-                    )
-                    action = "insert"
-                    matched_candidate_index = ""
-                else:
-                    log.warning(
-                        "change_driven: mark_ended missing matched_id for {url}, skipping",
-                        url=source_url or "<unknown>",
-                    )
-                    skipped += 1
-                    continue
-
-            elif matched_id not in candidate_ids:
-                downgraded += 1
-                if action == "update":
-                    log.warning(
-                        "change_driven: update matched_id={mid} not found for {url}, downgrading to insert",
-                        mid=matched_id,
-                        url=source_url or "<unknown>",
-                    )
-                    action = "insert"
-                    matched_candidate_index = ""
-                else:
-                    log.warning(
-                        "change_driven: mark_ended matched_id={mid} not found for {url}, skipping",
-                        mid=matched_id,
-                        url=source_url or "<unknown>",
-                    )
-                    skipped += 1
-                    continue
-
-        if action == "insert":
-            matched_id = ""
-            matched_candidate_index = ""
-            if not raw_has_content:
-                skipped += 1
-                continue
-
-        if action == "mark_ended":
-            mark_ended_offer = {field: "" for field in _CHANGE_EXTRACTION_FIELDS}
-            mark_ended_offer["action"] = "mark_ended"
-            mark_ended_offer["matched_id"] = matched_id
-            mark_ended_offer["matched_candidate_index"] = matched_candidate_index
-            validated.append(mark_ended_offer)
-            continue
-
-        offer["action"] = action
-        offer["matched_id"] = matched_id
-        offer["matched_candidate_index"] = matched_candidate_index
-        validated.append(offer)
+        downgraded += offer_downgraded
+        skipped += offer_skipped
+        if offer is not None:
+            validated.append(offer)
 
     return {"offers": validated, "downgraded": downgraded, "skipped": skipped}
 
@@ -1220,6 +1296,136 @@ _MATCH_CANDIDATE_DB_FIELDS = {
 }
 
 
+def _is_missing_rpc_error(exc: Exception, function: str) -> bool:
+    message = f"{exc} {getattr(getattr(exc, 'response', None), 'text', '')}".lower()
+    fn = function.lower()
+    return fn in message and (
+        "could not find the function" in message
+        or "function not found" in message
+        or "pgrst202" in message
+        or "404" in message
+    )
+
+
+def _verify_change_driven_rpc(client: Any) -> None:
+    """Ensure M019 atomic RPCs exist; refuse non-atomic REST writes if missing."""
+    global _change_driven_rpc_verified
+    if _change_driven_rpc_verified:
+        return
+    try:
+        client.rpc(
+            _RPC_PERSIST_CHANGE_EVENTS,
+            {"p_events": [], "p_match_candidates": []},
+        )
+        probe = client.rpc(
+            _RPC_APPLY_OFFER_ACTION,
+            {"p_action": {"action": "__probe__"}},
+        )
+    except Exception as exc:
+        if _is_missing_rpc_error(exc, _RPC_PERSIST_CHANGE_EVENTS) or _is_missing_rpc_error(
+            exc, _RPC_APPLY_OFFER_ACTION
+        ):
+            raise RuntimeError(
+                "M019 change-driven atomic RPCs are not deployed; "
+                "apply config/sql/m019_atomic_change_driven_writes.sql before production writes"
+            ) from exc
+        raise
+    if not isinstance(probe, dict) or probe.get("error") != "invalid_action":
+        raise RuntimeError(
+            f"Unexpected probe response from {_RPC_APPLY_OFFER_ACTION}: {probe!r}"
+        )
+    _change_driven_rpc_verified = True
+
+
+def _offer_failure_summary(offer: Dict[str, Any]) -> str:
+    action = str(offer.get("action") or "insert").strip().lower()
+    if action in {"update", "mark_ended"}:
+        target = str(offer.get("matched_id") or "").strip()
+        if target:
+            return f"{action}:{target}"
+    service = str(offer.get("service_name") or "").strip()
+    if service:
+        return f"{action}:{service}"
+    text = str(offer.get("offer_raw_text") or "").strip()
+    if text:
+        return f"{action}:{text[:80]}"
+    return action or "unknown"
+
+
+def _record_offer_failure(
+    failed: List[Dict[str, Any]],
+    *,
+    offer: Dict[str, Any],
+    error: Any,
+) -> None:
+    action = str(offer.get("action") or "insert").strip().lower()
+    target_id = str(offer.get("matched_id") or "").strip() or None
+    failed.append(
+        {
+            "action": action,
+            "target_id": target_id,
+            "target_summary": _offer_failure_summary(offer),
+            "error": str(error),
+        }
+    )
+
+
+def _build_rpc_offer_action_payload(
+    offer: Dict[str, Any],
+    *,
+    offer_id: Any,
+    master_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    action = str(offer.get("action") or "insert").strip().lower()
+    payload: Dict[str, Any] = {"action": action}
+    if offer_id is not None:
+        payload["offer_id"] = offer_id
+    if master_payload is not None:
+        payload["master"] = master_payload
+    item = build_offer_item_payload(offer)
+    payload["items"] = [item] if item.get("item_name") else []
+    return payload
+
+
+def _apply_offer_action_via_rpc(
+    client: Any,
+    offer: Dict[str, Any],
+    *,
+    offer_id: Any,
+    master_payload: Optional[Dict[str, Any]],
+    now_iso: str,
+    failed: List[Dict[str, Any]],
+) -> bool:
+    rpc_payload = _build_rpc_offer_action_payload(
+        offer,
+        offer_id=offer_id,
+        master_payload=master_payload,
+    )
+    try:
+        result = client.rpc(
+            _RPC_APPLY_OFFER_ACTION,
+            {"p_action": rpc_payload, "p_now": now_iso},
+        )
+    except Exception as exc:
+        _record_offer_failure(failed, offer=offer, error=exc)
+        log.error(
+            "change_driven: RPC apply failed for {summary}: {error}",
+            summary=_offer_failure_summary(offer),
+            error=exc,
+        )
+        return False
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = (result or {}).get("error") if isinstance(result, dict) else result
+        _record_offer_failure(failed, offer=offer, error=error or "rpc_apply_failed")
+        log.error(
+            "change_driven: RPC apply rejected {summary}: {error}",
+            summary=_offer_failure_summary(offer),
+            error=error,
+        )
+        return False
+    return True
+
+
 def prepare_change_event_insert_rows(
     payloads: Dict[str, Any],
 ) -> Dict[str, List[Dict[str, Any]]]:
@@ -1280,21 +1486,53 @@ def persist_change_event_payloads(
     prepared = prepare_change_event_insert_rows(payloads)
     event_rows = prepared["change_event_rows"]
     match_rows = prepared["match_candidate_rows"]
-    result = {
+    result: Dict[str, Any] = {
         **prepared,
         "change_events_inserted": 0,
         "match_candidates_inserted": 0,
         "dry_run": dry_run,
+        "failed": [],
     }
     if dry_run:
         return result
 
-    if event_rows:
-        client.insert_rows("promo_offer_change_events", event_rows)
-        result["change_events_inserted"] = len(event_rows)
-    if match_rows:
-        client.insert_rows("promo_offer_match_candidates", match_rows)
-        result["match_candidates_inserted"] = len(match_rows)
+    _verify_change_driven_rpc(client)
+    try:
+        rpc_result = client.rpc(
+            _RPC_PERSIST_CHANGE_EVENTS,
+            {
+                "p_events": event_rows,
+                "p_match_candidates": match_rows,
+            },
+        )
+    except Exception as exc:
+        result["failed"].append(
+            {
+                "action": "persist_change_events",
+                "target_id": None,
+                "target_summary": f"events={len(event_rows)},candidates={len(match_rows)}",
+                "error": str(exc),
+            }
+        )
+        log.error("change_driven: RPC persist change events failed: {error}", error=exc)
+        return result
+
+    if not isinstance(rpc_result, dict) or not rpc_result.get("ok"):
+        error = (rpc_result or {}).get("error") if isinstance(rpc_result, dict) else rpc_result
+        result["failed"].append(
+            {
+                "action": "persist_change_events",
+                "target_id": None,
+                "target_summary": f"events={len(event_rows)},candidates={len(match_rows)}",
+                "error": str(error or "rpc_persist_failed"),
+            }
+        )
+        return result
+
+    result["change_events_inserted"] = int(rpc_result.get("change_events_inserted") or 0)
+    result["match_candidates_inserted"] = int(
+        rpc_result.get("match_candidates_inserted") or 0
+    )
     return result
 
 
@@ -1492,17 +1730,28 @@ def apply_offer_actions(
 ) -> Dict[str, Any]:
     """Apply validated change-driven actions into promo_offer_master."""
     if not offers:
-        return {"updated": 0, "inserted": 0, "ended": 0, "skipped": 0, "sql_statements": []}
+        return {
+            "updated": 0,
+            "inserted": 0,
+            "ended": 0,
+            "skipped": 0,
+            "failed": [],
+            "sql_statements": [],
+        }
 
     now_iso = datetime.now(timezone.utc).isoformat()
     updated = 0
     inserted = 0
     ended = 0
     skipped = 0
+    failed: List[Dict[str, Any]] = []
 
     promotion_id = _resolve_promotion_id(
         client, source_url=source_url, business_id=business_id
     )
+
+    if not dry_run:
+        _verify_change_driven_rpc(client)
 
     for offer in offers:
         action = str(offer.get("action") or "insert").strip().lower()
@@ -1517,16 +1766,15 @@ def apply_offer_actions(
             if dry_run:
                 updated += 1
                 continue
-            try:
-                _update_master_row(client, matched_id, payload, now_iso=now_iso)
-                _apply_offer_items(client, matched_id, offer)
+            if _apply_offer_action_via_rpc(
+                client,
+                offer,
+                offer_id=matched_id,
+                master_payload=payload,
+                now_iso=now_iso,
+                failed=failed,
+            ):
                 updated += 1
-            except Exception as exc:
-                log.error(
-                    "Failed to update master offer id={id}: {error}",
-                    id=matched_id,
-                    error=exc,
-                )
             continue
 
         if action == "mark_ended":
@@ -1537,20 +1785,15 @@ def apply_offer_actions(
             if dry_run:
                 ended += 1
                 continue
-            try:
-                _update_master_row(
-                    client,
-                    matched_id,
-                    {"is_active": False},
-                    now_iso=now_iso,
-                )
+            if _apply_offer_action_via_rpc(
+                client,
+                offer,
+                offer_id=matched_id,
+                master_payload={"is_active": False},
+                now_iso=now_iso,
+                failed=failed,
+            ):
                 ended += 1
-            except Exception as exc:
-                log.error(
-                    "Failed to end master offer id={id}: {error}",
-                    id=matched_id,
-                    error=exc,
-                )
             continue
 
         payload = build_offer_insert_payload(
@@ -1592,33 +1835,29 @@ def apply_offer_actions(
             if dry_run:
                 updated += 1
                 continue
-            try:
-                _update_master_row(client, existing_id, payload, now_iso=now_iso)
-                _apply_offer_items(client, existing_id, offer)
+            if _apply_offer_action_via_rpc(
+                client,
+                offer,
+                offer_id=existing_id,
+                master_payload=payload,
+                now_iso=now_iso,
+                failed=failed,
+            ):
                 updated += 1
-            except Exception as exc:
-                log.error(
-                    "Failed to fingerprint-update master offer id={id} for {url}: {error}",
-                    id=existing_id,
-                    url=source_url,
-                    error=exc,
-                )
             continue
 
         if dry_run:
             inserted += 1
             continue
-        try:
-            rows = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [payload])
-            new_id = int(rows[0]["id"])
-            _apply_offer_items(client, new_id, offer)
+        if _apply_offer_action_via_rpc(
+            client,
+            offer,
+            offer_id=None,
+            master_payload=payload,
+            now_iso=now_iso,
+            failed=failed,
+        ):
             inserted += 1
-        except Exception as exc:
-            log.error(
-                "Failed to insert master offer for {url}: {error}",
-                url=source_url,
-                error=exc,
-            )
 
     # SQL audit trail: render the same decisions as SQL text using the same
     # now_iso used for actual writes, so the audit statements match the writes.
@@ -1638,6 +1877,7 @@ def apply_offer_actions(
         "inserted": inserted,
         "ended": ended,
         "skipped": skipped,
+        "failed": failed,
         "sql_statements": sql_statements,
     }
 
@@ -1660,6 +1900,7 @@ def extract_and_upsert_check_pages(
     """Full change-driven pipeline for one check's meaningful changed pages."""
     pages_with_diff = 0
     pages_without_diff = 0
+    pages_with_write_failure = 0
     total_offers_extracted = 0
     total_updated = 0
     total_inserted = 0
@@ -1787,6 +2028,7 @@ def extract_and_upsert_check_pages(
             total_updated += apply_result["updated"]
             total_inserted += apply_result["inserted"]
             total_ended += apply_result["ended"]
+            write_failed = bool(apply_result.get("failed"))
             page_result = {
                 "url": url,
                 "action": "extracted",
@@ -1807,6 +2049,14 @@ def extract_and_upsert_check_pages(
                     page_result["change_event_persistence"] = persist_change_event_payloads(
                         client_db, decision_plan, dry_run=False
                     )
+                    persist_failed = page_result["change_event_persistence"].get("failed") or []
+                    if persist_failed:
+                        write_failed = True
+                        page_result.setdefault("failed", []).extend(persist_failed)
+            if write_failed:
+                pages_with_write_failure += 1
+                page_result["write_failed"] = True
+                page_result["action"] = "write_failed"
             page_results.append(page_result)
             log.info(
                 "change_driven: {url} -> {n} offers (updated={u}, inserted={i}, ended={e}, downgraded={d})",
@@ -1838,13 +2088,14 @@ def extract_and_upsert_check_pages(
     return {
         "pages_with_diff": pages_with_diff,
         "pages_without_diff": pages_without_diff,
+        "pages_with_write_failure": pages_with_write_failure,
         "total_offers_extracted": total_offers_extracted,
         "total_updated": total_updated,
         "total_inserted": total_inserted,
         "total_ended": total_ended,
         "total_auto_apply_events": total_auto_apply_events,
         "total_review_events": total_review_events,
-        "needs_apify_fallback": pages_without_diff > 0,
+        "needs_apify_fallback": pages_without_diff > 0 or pages_with_write_failure > 0,
         "candidates_unavailable": candidates_unavailable,
         "page_results": page_results,
     }
