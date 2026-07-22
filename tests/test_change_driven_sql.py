@@ -2,6 +2,9 @@
 
 Run directly:  python tests/test_change_driven_sql.py
 No test framework. All assertions raise on failure.
+
+These statements mirror apply_offer_actions decisions for monitor reports only;
+they are NOT executed against the database.
 """
 from __future__ import annotations
 

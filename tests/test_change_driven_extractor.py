@@ -132,6 +132,18 @@ class FakeDbClient:
             return {"ok": True, "action": action, "offer_id": offer_id}
 
         if action == "insert":
+            if offer_id is not None:
+                oid = str(offer_id)
+                if oid in self.fail_update_ids:
+                    raise RuntimeError(f"boom-update-{oid}")
+                self.update_calls.append(
+                    {
+                        "table": "promo_offer_master",
+                        "filters": {"id": f"eq.{oid}"},
+                        "payload": dict(master),
+                    }
+                )
+                return {"ok": True, "action": "update", "offer_id": offer_id}
             offer_raw_text = master.get("offer_raw_text")
             if offer_raw_text in self.fail_insert_offer_texts:
                 raise RuntimeError(f"boom-insert-{offer_raw_text}")
@@ -544,7 +556,7 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
                 "service_name": "Laser Hair Removal",
                 "offer_raw_text": "Laser Hair Removal $199",
                 "discount_price": "199",
-                "unit_type": "units",
+                "unit_type": "unit",
             }
         ],
         source_url=source_url,
@@ -857,12 +869,12 @@ def test_persist_change_event_payloads_dry_run_and_write_modes():
 
     assert write_result["change_events_inserted"] == 1
     assert write_result["match_candidates_inserted"] == 1
-    assert [call["table"] for call in write_client.insert_calls] == [
-        "promo_offer_change_events",
-        "promo_offer_match_candidates",
+    persist_calls = [
+        call for call in write_client.rpc_calls if call["name"] == _RPC_PERSIST
     ]
-    event_id = write_client.insert_calls[0]["rows"][0]["change_event_id"]
-    assert write_client.insert_calls[1]["rows"][0]["change_event_id"] == event_id
+    assert len(persist_calls) == 1
+    event_id = persist_calls[0]["params"]["p_events"][0]["change_event_id"]
+    assert persist_calls[0]["params"]["p_match_candidates"][0]["change_event_id"] == event_id
 
 
 def test_extract_and_upsert_check_pages_end_to_end_with_fixture():
