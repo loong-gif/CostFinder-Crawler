@@ -1780,9 +1780,10 @@ def apply_offer_actions(
             if dry_run:
                 updated += 1
                 continue
+            rpc_offer = {**offer, "action": "update", "matched_id": existing_id}
             if _apply_offer_action_via_rpc(
                 client,
-                offer,
+                rpc_offer,
                 offer_id=existing_id,
                 master_payload=payload,
                 now_iso=now_iso,

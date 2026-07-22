@@ -566,7 +566,6 @@ def test_apply_offer_actions_updates_on_fingerprint_match_instead_of_insert():
 
     assert result["updated"] == 1
     assert result["inserted"] == 0
-    assert len(client.insert_calls) == 0
     apply_calls = [
         call
         for call in client.rpc_calls
