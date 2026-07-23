@@ -163,11 +163,14 @@ def process_business(
 
         if apply and fields.regular_price is not None:
             row = seed_skeleton(client, bid, service_name)
+            source_url = report["source_urls"][0] if report.get("source_urls") else ""
             apply_fields(
                 client,
                 int(row["service_id"]),
                 fields,
                 existing_price=row.get("regular_price"),
+                existing_row=row,
+                source_url=source_url or None,
             )
             report["service_id"] = row["service_id"]
         elif apply and report["status"] == "no_price":

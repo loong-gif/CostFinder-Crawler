@@ -7,7 +7,8 @@
 
 ## 架构
 
-五表关系与数据流转说明见 [docs/data-model-pipeline.md](docs/data-model-pipeline.md)（`master_business_info` / `promo_website_staging` / `clinic_services` / `promo_offer_master` / `promo_membership_plans`）。
+五表关系与数据流转说明见 [docs/data-model-pipeline.md](docs/data-model-pipeline.md)（`master_business_info` / `promo_website_staging` / `clinic_services` / `promo_offer_master` / `promo_membership_plans`）。  
+服务目录价格防污染与历史修复记录见 [docs/service-price-lineage.md](docs/service-price-lineage.md)。
 
 改爬虫、Schema、表关系或数据流时，先读项目 Skill [`.cursor/skills/costfinder-architecture/SKILL.md`](.cursor/skills/costfinder-architecture/SKILL.md)。域级自测示例：`louloumedspa.com`（见 Skill 内 `examples/`）。
 促销服务与诊所服务目录的关联约定见 [促销服务匹配设计](docs/superpowers/specs/2026-07-18-promo-service-matching-design.md)。
@@ -230,6 +231,7 @@ python scripts/firecrawl_monitor_poll.py --monitor-id <id> --dry-run
 ```bash
 python scripts/audit_extraction_quality.py      # 五表质量审计（非零退出码 = 有 blocking 问题）
 python scripts/apply_extraction_repairs.py      # 修复计划 dry-run
+python scripts/apply_extraction_repairs.py --batch service_price_lineage  # 服务目录价溯源修复
 python scripts/apply_extraction_repairs.py --apply
 python scripts/audit_expired_promo_offers.py
 python scripts/audit_promo_offer_master.py      # legacy：仅 promo_offer_master

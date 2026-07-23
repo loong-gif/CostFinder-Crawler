@@ -195,12 +195,24 @@ def test_validate_service_requires_name_and_price() -> None:
     assert not validate_service({"regular_price": 15}, "").accepted
 
 
-def test_validate_service_accepts_without_evidence() -> None:
+def test_validate_service_rejects_market_average_without_per_unit() -> None:
     result = validate_service(
-        {"service_name": "Botox", "regular_price": 20},
+        {"service_name": "Botox", "regular_price": 20, "unit_type": "unit"},
         "Botox typically ranges from $10 to $20 per unit in Orange County.",
+        source_url="https://example.com/services",
     )
-    assert result.accepted
+    assert not result.accepted
+    assert result.reason == "market_average_not_clinic_price"
+
+
+def test_validate_service_rejects_blog_source_url() -> None:
+    result = validate_service(
+        {"service_name": "Botox", "regular_price": 10, "unit_type": "unit"},
+        "Glow Up offers Botox for $10/unit.",
+        source_url="https://glowupmedspa.com/blogs/news/botox-specials",
+    )
+    assert not result.accepted
+    assert result.reason == "ineligible_source_url"
 
 
 def test_validate_membership_requires_name_and_price() -> None:

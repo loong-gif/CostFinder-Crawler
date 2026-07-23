@@ -166,11 +166,21 @@ def _normalize_compare_text(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def validate_service(item: dict, evidence: str) -> GateDecision:
-    del evidence
-    name = str(item.get("service_name_raw") or item.get("service_name") or "").strip()
-    if not name or item.get("regular_price") is None:
-        return GateDecision(False, None, "missing_service_or_price")
+def validate_service(
+    item: dict,
+    evidence: str,
+    *,
+    source_url: str = "",
+) -> GateDecision:
+    from utils.service_price_guard import normalize_service_catalog_item
+
+    decision = normalize_service_catalog_item(
+        item,
+        source_url=source_url,
+        evidence=evidence,
+    )
+    if not decision.accepted:
+        return GateDecision(False, None, decision.reason)
     return GateDecision(True, None, "validated")
 
 

@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from urllib.parse import urlparse
 
 from utils.clinic_service_extraction import is_promo_offer
+from utils.service_price_guard import is_catalog_ineligible_url, infer_unit_count
 from utils.promo_offer_audit import (
     AuditIssue as OfferAuditIssue,
     audit_rows as audit_offer_rows,
@@ -173,6 +174,17 @@ def audit_services(
                 label=name,
             )
         source_url = _norm_url(row.get("source_url"))
+        if source_url and is_catalog_ineligible_url(row.get("source_url") or ""):
+            _add(
+                issues,
+                table="clinic_services",
+                row_id=sid,
+                severity="high",
+                issue_type="ineligible_catalog_source",
+                detail=f"博客/促销来源写入服务目录: {source_url}",
+                business_name=biz_name,
+                label=name,
+            )
         if source_url and source_url not in scrape_urls and source_url not in search_urls:
             _add(
                 issues,
@@ -185,7 +197,22 @@ def audit_services(
                 label=name,
             )
         price = parse_float(row.get("regular_price"))
-        if price is None or price <= 0:
+        unit_type = str(row.get("unit_type") or "").lower()
+        if price is not None and price > 0 and unit_type in {"session", "area", "treatment", "package"}:
+            count, upper = infer_unit_count(str(row.get("service_name_raw") or ""), price)
+            if count is not None and count >= 2:
+                _add(
+                    issues,
+                    table="clinic_services",
+                    row_id=sid,
+                    severity="high",
+                    issue_type="package_price_not_normalized",
+                    detail=f"{price} 疑似 {count} 单位套餐价"
+                    + (" (up to)" if upper else ""),
+                    business_name=biz_name,
+                    label=name,
+                )
+        if price is not None and price <= 0:
             _add(
                 issues,
                 table="clinic_services",
@@ -193,6 +220,17 @@ def audit_services(
                 severity="high",
                 issue_type="invalid_regular_price",
                 detail=f"regular_price={row.get('regular_price')}",
+                business_name=biz_name,
+                label=name,
+            )
+        elif price is None:
+            _add(
+                issues,
+                table="clinic_services",
+                row_id=sid,
+                severity="low",
+                issue_type="missing_catalog_price",
+                detail="regular_price 为空，等待常规目录价回填",
                 business_name=biz_name,
                 label=name,
             )

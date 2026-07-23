@@ -10,6 +10,11 @@ from utils.clinic_services_db import fetch_service_row
 from utils.db_rows import ClinicServiceInsertRow
 from utils.recent_raw_extraction import validate_service
 from utils.schema_contract import TABLE_CLINIC_SERVICES
+from utils.service_price_guard import (
+    normalize_source_url,
+    prepare_service_catalog_write,
+    should_replace_source_url,
+)
 
 _VALID_CATEGORIES = frozenset({"Neurotoxin", "Filler", "others"})
 _VALID_UNIT_TYPES = frozenset(
@@ -128,13 +133,27 @@ def _unit_type_rank(value: Any) -> int:
     return _UNIT_TYPE_RANK.get(unit_type, 10)
 
 
-def pick_best_service_items(items: list[dict[str, Any]], evidence: str) -> list[dict[str, Any]]:
+def pick_best_service_items(
+    items: list[dict[str, Any]],
+    evidence: str,
+    *,
+    source_url: str = "",
+) -> list[dict[str, Any]]:
     """Keep one row per canonical service_name; prefer unit/syringe/vial list prices over packages."""
     best: dict[str, dict[str, Any]] = {}
     for item in items:
-        decision = validate_service(item, evidence)
+        decision = validate_service(item, evidence, source_url=source_url)
         if not decision.accepted:
             continue
+        from utils.service_price_guard import normalize_service_catalog_item
+
+        normalized = normalize_service_catalog_item(
+            item,
+            source_url=source_url,
+            evidence=evidence,
+        )
+        if normalized.accepted and normalized.normalized_item is not None:
+            item = normalized.normalized_item
         std_name = str(item.get("service_name") or "Others").strip() or "Others"
         current = best.get(std_name)
         if current is None:
@@ -157,6 +176,74 @@ def pick_best_service_items(items: list[dict[str, Any]], evidence: str) -> list[
     return list(best.values())
 
 
+_NEUROTOXIN_BRANDS = ("Botox", "Dysport", "Daxxify", "Xeomin", "Jeuveau", "Letybo")
+
+
+def infer_service_name_for_item(
+    *,
+    offer_raw_text: str,
+    quantity: Any = None,
+    service_name: Any = None,
+    item_name: Any = None,
+    sibling_count: int = 1,
+) -> str:
+    """Best-effort canonical service name for an offer item row."""
+    from utils.offer_extraction_llm import canonicalize_service_name
+
+    del sibling_count  # retained for call-site compatibility
+    text = str(offer_raw_text or "")
+    text_cf = text.casefold()
+    qty: float | None
+    try:
+        qty = float(quantity) if quantity is not None else None
+    except (TypeError, ValueError):
+        qty = None
+
+    has_filler = "filler" in text_cf
+    has_tox = any(token in text_cf for token in ("tox", "botox", "dysport", "xeomin", "jeuveau", "daxxify"))
+    has_units = "unit" in text_cf
+
+    # Dual filler/tox offers: quantity distinguishes syringe vs unit bags.
+    if has_filler and (has_tox or has_units) and qty is not None:
+        if qty >= 10:
+            return "Botox" if "botox" in text_cf else "Neurotoxin"
+        if qty <= 2:
+            return "Dermal Filler"
+
+    # Bulk unit banks / savings without brand name still imply neurotoxin units.
+    if has_units and qty is not None and qty >= 20 and not has_filler:
+        if "botox" in text_cf:
+            return "Botox"
+        return "Neurotoxin"
+
+    name = canonicalize_service_name(service_name, item_name, text)
+    if name == "Neurotoxin":
+        for brand in _NEUROTOXIN_BRANDS:
+            if brand.casefold() in text_cf:
+                return brand
+    return name
+
+
+def resolve_service_row_for_name(
+    client: Any,
+    *,
+    business_id: int,
+    service_name: str,
+) -> dict[str, Any] | None:
+    """Fetch clinic_services row; Neurotoxin falls back to a single brand row if unique."""
+    svc = fetch_service_row(client, business_id, service_name)
+    if svc:
+        return svc
+    if service_name != "Neurotoxin":
+        return None
+    found: list[dict[str, Any]] = []
+    for brand in _NEUROTOXIN_BRANDS:
+        row = fetch_service_row(client, business_id, brand)
+        if row:
+            found.append(row)
+    return found[0] if len(found) == 1 else None
+
+
 def attach_service_ids_to_items(
     client: Any,
     *,
@@ -164,17 +251,18 @@ def attach_service_ids_to_items(
     items: list[dict[str, Any]],
     fallback_text: str = "",
 ) -> list[dict[str, Any]]:
-    from utils.offer_extraction_llm import canonicalize_service_name
-
     attached: list[dict[str, Any]] = []
+    sibling_count = len(items)
     for item in items:
         row = dict(item)
-        name = canonicalize_service_name(
-            row.get("service_name"),
-            row.get("item_name"),
-            fallback_text,
+        name = infer_service_name_for_item(
+            offer_raw_text=fallback_text,
+            quantity=row.get("quantity"),
+            service_name=row.get("service_name"),
+            item_name=row.get("item_name"),
+            sibling_count=sibling_count,
         )
-        svc = fetch_service_row(client, business_id, name)
+        svc = resolve_service_row_for_name(client, business_id=business_id, service_name=name)
         if svc:
             row["service_id"] = int(svc["service_id"])
         attached.append(row)
@@ -189,26 +277,37 @@ def upsert_extracted_service(
     source_url: str,
     evidence: str,
 ) -> dict[str, Any]:
-    decision = validate_service(item, evidence)
     std_name = str(item.get("service_name") or "Others").strip() or "Others"
+    normalized_url = normalize_source_url(source_url)
     result = {
         "business_id": business_id,
         "service_name": std_name,
-        "source_url": str(source_url or "").strip().rstrip("/"),
-        "accepted": decision.accepted,
-        "reason": decision.reason,
+        "source_url": normalized_url,
+        "accepted": False,
+        "reason": "skipped",
         "service_id": None,
         "action": "skipped",
     }
-    if not decision.accepted:
+
+    existing = fetch_service_row(client, business_id, std_name)
+    catalog = prepare_service_catalog_write(
+        item,
+        source_url=normalized_url,
+        evidence=evidence,
+        existing_source_url=(existing or {}).get("source_url"),
+    )
+    if not catalog.accepted or catalog.normalized_item is None:
+        result["reason"] = catalog.reason
         return result
+
+    item = catalog.normalized_item
+    result.update({"accepted": True, "reason": catalog.reason})
 
     price = item.get("regular_price")
     unit_type = _normalize_unit_type(item.get("unit_type"))
     category = _normalize_category(item.get("service_category"))
     raw_name = str(item.get("service_name_raw") or "").strip()
 
-    existing = fetch_service_row(client, business_id, std_name)
     if existing:
         service_id = int(existing["service_id"])
     else:
@@ -236,9 +335,10 @@ def upsert_extracted_service(
         return result
 
     payload: dict[str, Any] = {
-        "source_url": result["source_url"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if should_replace_source_url(existing.get("source_url"), normalized_url):
+        payload["source_url"] = normalized_url
     if raw_name:
         payload["service_name_raw"] = raw_name
     if item.get("service_category") is not None:

@@ -66,5 +66,5 @@ def test_upsert_extracted_service_skips_on_schema_invalid(monkeypatch: pytest.Mo
         evidence="",
     )
     assert result["accepted"] is False
-    assert result["reason"] == "schema_invalid"
+    assert result["reason"] == "missing_service_or_price"
     assert result["action"] == "skipped"

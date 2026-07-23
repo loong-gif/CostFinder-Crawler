@@ -24,6 +24,7 @@ from utils.recent_raw_extraction import (
     validate_service,
 )
 from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS, TABLE_CLINIC_PROMOTIONS, TABLE_PROMO_OFFER_MASTER
+from utils.service_price_guard import derive_offer_item_pricing
 
 RouteKind = Literal["service", "promo", "quarantine"]
 
@@ -70,6 +71,7 @@ def build_master_from_offer(
             "promo_offer_master requires discount_price, discount_percent, or discount_amount"
         )
     items_in = offer.get("items") or []
+    items_in = derive_offer_item_pricing(offer, evidence=str(offer.get("offer_raw_text") or ""))
     first = items_in[0] if items_in else {}
     service_name = canonicalize_service_name(
         first.get("service_name"),
@@ -130,9 +132,6 @@ def persist_service_item(
     source_url: str,
     evidence: str,
 ) -> dict[str, Any]:
-    decision = validate_service(item, evidence)
-    if not decision.accepted:
-        return {"accepted": False, "reason": decision.reason, "action": "skipped"}
     return upsert_extracted_service(
         client,
         business_id=business_id,
@@ -297,7 +296,7 @@ def route_and_persist_extraction(
         else:
             stats["skipped"] += 1
 
-    for item in pick_best_service_items(service_candidates, evidence):
+    for item in pick_best_service_items(service_candidates, evidence, source_url=source_url):
         write = persist_service_item(
             client,
             business_id=business_id,

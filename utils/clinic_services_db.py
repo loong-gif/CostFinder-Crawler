@@ -98,10 +98,18 @@ def apply_fields(
     force_price: bool = False,
     existing_price: Optional[Any] = None,
     existing_row: Optional[Dict[str, Any]] = None,
+    source_url: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """PATCH clinic_services; metadata can update without regular_price."""
+    from utils.service_price_guard import (
+        is_catalog_ineligible_url,
+        normalize_source_url,
+        should_replace_source_url,
+    )
+
     payload: Dict[str, Any] = {}
-    if fields.regular_price is not None:
+    ineligible_source = bool(source_url and is_catalog_ineligible_url(source_url))
+    if fields.regular_price is not None and not ineligible_source:
         if force_price or existing_price is None:
             payload["regular_price"] = _decimal_to_api(fields.regular_price)
     if fields.unit_type and not (existing_row or {}).get("unit_type"):
@@ -112,6 +120,11 @@ def apply_fields(
         payload["service_area"] = fields.service_area
     elif fields.service_area:
         payload["service_area"] = fields.service_area
+    if source_url and not ineligible_source:
+        incoming = normalize_source_url(source_url)
+        existing_url = normalize_source_url((existing_row or {}).get("source_url"))
+        if should_replace_source_url(existing_url, incoming):
+            payload["source_url"] = incoming
 
     if not payload:
         return []

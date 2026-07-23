@@ -66,6 +66,61 @@ def link_item_to_service(
     )
 
 
+def backfill_unlinked_item_service_ids(
+    client: SupabaseRestClient,
+    *,
+    business_ids: List[int] | None = None,
+) -> Dict[str, Any]:
+    """Link promo_offer_items.service_id from offer_raw_text + clinic_services."""
+    from utils.clinic_service_extraction import (
+        infer_service_name_for_item,
+        resolve_service_row_for_name,
+    )
+    from utils.schema_contract import TABLE_PROMO_OFFER_MASTER
+
+    filters: Dict[str, str] = {"is_active": "eq.true"}
+    if business_ids:
+        filters["business_id"] = f"in.({','.join(str(i) for i in business_ids)})"
+    offers = client.fetch_rows(
+        TABLE_PROMO_OFFER_MASTER,
+        "id,business_id,offer_raw_text",
+        filters=filters,
+        limit=2000,
+    )
+    linked = 0
+    skipped: List[Dict[str, Any]] = []
+    for offer in offers:
+        offer_id = int(offer["id"])
+        business_id = int(offer["business_id"])
+        hint = str(offer.get("offer_raw_text") or "")
+        items = fetch_items_for_offer(client, offer_id)
+        unlinked = [item for item in items if item.get("service_id") is None]
+        if not unlinked:
+            continue
+        for item in unlinked:
+            name = infer_service_name_for_item(
+                offer_raw_text=hint,
+                quantity=item.get("quantity"),
+                sibling_count=len(unlinked),
+            )
+            svc = resolve_service_row_for_name(
+                client, business_id=business_id, service_name=name
+            )
+            if not svc:
+                skipped.append(
+                    {
+                        "offer_item_id": item.get("offer_item_id"),
+                        "business_id": business_id,
+                        "inferred": name,
+                        "offer_raw_text": hint[:120],
+                    }
+                )
+                continue
+            link_item_to_service(client, int(item["offer_item_id"]), int(svc["service_id"]))
+            linked += 1
+    return {"linked": linked, "skipped": skipped}
+
+
 def build_item_from_offer_fields(
     offer: Dict[str, Any],
     *,

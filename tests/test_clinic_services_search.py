@@ -8,6 +8,7 @@ from utils.clinic_services_search import (
     pick_service_search_hit,
     url_path_score,
 )
+from utils.service_price_guard import is_catalog_ineligible_url
 
 
 def test_business_base_domain():
@@ -49,6 +50,14 @@ def test_pick_service_search_hit_prefers_services_menu():
     picked = pick_service_search_hit(hits, domain="calistamedspa.com")
     assert picked is not None
     assert picked["url"].endswith("/services/")
+
+
+def test_url_path_score_penalizes_promotion_pages() -> None:
+    promo = "https://laqueenmedspa.com/promotion"
+    menu = "https://laqueenmedspa.com/services"
+    assert url_path_score(menu) > url_path_score(promo)
+    assert is_catalog_ineligible_url(promo)
+    assert not is_catalog_ineligible_url(menu)
 
 
 def test_filter_service_menu_urls():

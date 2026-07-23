@@ -110,9 +110,16 @@ def canonicalize_service_name(*values: Any) -> str:
         if text in alias_by_normalized:
             return alias_by_normalized[text]
 
+    # Longer keys first so "botox" wins over "tox", "lip filler" over "filler".
+    substring_keys = sorted(
+        [(alias, canonical) for alias, canonical in alias_by_normalized.items()]
+        + [(key, name) for key, name in canonical_by_normalized.items()],
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
     for text in normalized_values:
-        for alias, canonical in alias_by_normalized.items():
-            if re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text):
+        for key, canonical in substring_keys:
+            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", text):
                 return canonical
 
     return canonical_by_normalized.get("others", "Others")

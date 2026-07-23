@@ -23,6 +23,12 @@ CostFinder 把「诊所是谁」「有哪些促销活动」「常规价多少」
 - `promo_offer_master.regular_price` / `discount_price` — **促销页**上的对照价与成交价
 - `promo_membership_plans.monthly_fee` / `annual_fee` — **订阅档位**费用，不是单次治疗价
 
+**防污染守卫（2026-07）：**
+
+- 所有 `clinic_services` 写入统一经 `utils/service_price_guard.py`：`/blog`、`/promotion` 等 URL 不得写入服务目录；套餐总价在证据含明示 `N units` 时归一化为单价。
+- 促销页套餐（如 Xeomin 50U $450/$350）只写入 `promo_offer_master` + `promo_offer_items`；读模型以 `regular_price / quantity` 派生常规单价。
+- 历史修复：`scripts/apply_extraction_repairs.py --batch service_price_lineage`（默认 dry-run）。
+
 ---
 
 

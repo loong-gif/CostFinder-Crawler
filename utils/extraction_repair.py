@@ -14,9 +14,11 @@ from utils.schema_contract import (
     TABLE_CLINIC_MEMBERSHIPS,
     TABLE_CLINIC_PROMOTIONS,
     TABLE_CLINIC_SERVICES,
+    TABLE_PROMO_OFFER_ITEMS,
     TABLE_PROMO_OFFER_MASTER,
     offer_source_url,
 )
+from utils.service_price_guard import is_catalog_ineligible_url, infer_unit_count
 
 _PERCENT_IN_TEXT = re.compile(r"\d+(?:\.\d+)?\s*%")
 
@@ -172,6 +174,146 @@ def plan_offer_quality_repairs(
     return actions
 
 
+def plan_service_price_repairs(
+    services: Sequence[Mapping[str, Any]],
+    *,
+    offers: Sequence[Mapping[str, Any]] | None = None,
+    promotions: Sequence[Mapping[str, Any]] | None = None,
+) -> List[Dict[str, Any]]:
+    """Repair confirmed polluted clinic_services rows and linked promo artifacts."""
+    del promotions  # reserved for future lineage-aware deactivations
+    actions: List[Dict[str, Any]] = []
+    by_id = {int(row["service_id"]): row for row in services if row.get("service_id") is not None}
+
+    def _update_service(service_id: int, fields: Dict[str, Any], reason: str) -> None:
+        if service_id not in by_id:
+            return
+        actions.append(
+            {
+                "batch": "service_price_lineage",
+                "action": "update",
+                "table": TABLE_CLINIC_SERVICES,
+                "id": service_id,
+                "fields": fields,
+                "reason": reason,
+            }
+        )
+
+    if 28 in by_id:
+        _update_service(
+            28,
+            {"regular_price": 12.25, "unit_type": "unit"},
+            "normalize_quiktox_245_up_to_20u",
+        )
+    if 23 in by_id:
+        _update_service(
+            23,
+            {
+                "regular_price": 12,
+                "unit_type": "unit",
+                "service_name_raw": "Botox | Dysport | Xeomin $12 per unit",
+                "service_category": "Neurotoxin",
+                "source_url": "https://alchemyfacebar.com/pages/cosmetic-injectables",
+            },
+            "alchemy_neurotoxin_12_per_unit_not_lip_flip",
+        )
+    if 33 in by_id:
+        _update_service(
+            33,
+            {"regular_price": None, "source_url": None},
+            "clear_glowup_blog_sourced_catalog_price",
+        )
+        for offer_id in (31, 32):
+            actions.append(
+                {
+                    "batch": "service_price_lineage",
+                    "action": "update",
+                    "table": TABLE_PROMO_OFFER_MASTER,
+                    "id": offer_id,
+                    "fields": {"is_active": False},
+                    "reason": "deactivate_blog_sourced_botox_offers",
+                }
+            )
+        actions.append(
+            {
+                "batch": "service_price_lineage",
+                "action": "update",
+                "table": TABLE_CLINIC_PROMOTIONS,
+                "id": 13,
+                "fields": {"is_active": False},
+                "reason": "deactivate_blog_sourced_promotion",
+            }
+        )
+    if 34 in by_id:
+        _update_service(
+            34,
+            {"regular_price": 9, "unit_type": "unit", "source_url": None},
+            "xeomin_regular_unit_450_per_50u",
+        )
+        actions.append(
+            {
+                "batch": "service_price_lineage",
+                "action": "update",
+                "table": TABLE_PROMO_OFFER_MASTER,
+                "id": 35,
+                "fields": {"regular_price": 450, "discount_price": 350},
+                "reason": "xeomin_50u_package_totals",
+            }
+        )
+        actions.append(
+            {
+                "batch": "service_price_lineage",
+                "action": "update",
+                "table": TABLE_PROMO_OFFER_ITEMS,
+                "id": 31,
+                "fields": {"quantity": 50, "unit_price": 7},
+                "reason": "xeomin_50u_derived_unit_price",
+            }
+        )
+
+    offer_rows = list(offers or [])
+    confirmed_ids = {23, 28, 33, 34}
+    for row in services:
+        sid = row.get("service_id")
+        if sid in confirmed_ids:
+            continue
+        source = str(row.get("source_url") or "")
+        if source and is_catalog_ineligible_url(source):
+            actions.append(
+                {
+                    "batch": "service_price_lineage",
+                    "action": "audit_only",
+                    "table": TABLE_CLINIC_SERVICES,
+                    "id": sid,
+                    "fields": {},
+                    "reason": f"candidate_ineligible_source:{source}",
+                }
+            )
+            continue
+        price = row.get("regular_price")
+        unit_type = str(row.get("unit_type") or "").lower()
+        if price is not None and unit_type in {"session", "area", "treatment", "package"}:
+            try:
+                amount = float(price)
+            except (TypeError, ValueError):
+                continue
+            count, _upper = infer_unit_count(str(row.get("service_name_raw") or ""), amount)
+            if count is not None and count >= 2:
+                actions.append(
+                    {
+                        "batch": "service_price_lineage",
+                        "action": "audit_only",
+                        "table": TABLE_CLINIC_SERVICES,
+                        "id": sid,
+                        "fields": {},
+                        "reason": f"candidate_package_price_not_normalized:{amount}/{count}",
+                    }
+                )
+
+    del offer_rows
+    return actions
+
+
 def build_extraction_repair_plan(
     *,
     services: Sequence[Mapping[str, Any]],
@@ -195,6 +337,11 @@ def build_extraction_repair_plan(
         scrape_markdown_by_url=scrape_markdown_by_url or {},
     )
     plans["offer_quality"] = plan_offer_quality_repairs(offers, promotions=promotions)
+    plans["service_price_lineage"] = plan_service_price_repairs(
+        services,
+        offers=offers,
+        promotions=promotions,
+    )
     return plans
 
 
@@ -206,6 +353,9 @@ def apply_repair_actions(
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for action in actions:
+        if action.get("action") == "audit_only":
+            results.append({"dry_run": dry_run, **dict(action), "applied": False})
+            continue
         table = str(action.get("table") or TABLE_PROMO_OFFER_MASTER)
         row_id = action.get("id")
         fields = dict(action.get("fields") or {})
@@ -233,4 +383,5 @@ def _pk_column(table: str) -> str:
         TABLE_CLINIC_MEMBERSHIPS: "plan_id",
         TABLE_CLINIC_PROMOTIONS: "promotion_id",
         TABLE_PROMO_OFFER_MASTER: "id",
+        TABLE_PROMO_OFFER_ITEMS: "offer_item_id",
     }.get(table, "id")

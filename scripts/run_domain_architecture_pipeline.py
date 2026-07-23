@@ -313,7 +313,7 @@ def persist_services(
         p
         for p in pages
         if not is_membership_page_url(p.url) and not PROMO_PATH_RE.search(urlparse(p.url).path or "")
-    ] or list(pages)
+    ]
     service_pages = filter_service_menu_urls(candidates, domain=domain) or candidates
     seen_names: set[str] = set()
     for page in service_pages[:4]:

@@ -106,7 +106,15 @@ def pick_winner_botox_offer(offers: Sequence[Dict[str, Any]]) -> Optional[Dict[s
 
 def offer_to_clinic_fields(offer: Dict[str, Any]) -> ClinicServiceFromOfferFields:
     """Map offer columns to clinic_services; never uses discount_price."""
+    from utils.service_price_guard import is_catalog_ineligible_url
+
     row = flatten_offer_row(offer)
+    if is_catalog_ineligible_url(str(row.get("source_url") or "")):
+        return ClinicServiceFromOfferFields(
+            regular_price=None,
+            unit_type=None,
+            service_area=None,
+        )
     unit_type = normalize_unit_type(row.get("unit_type")) or None
     service_area = normalize_service_area(row.get("service_area")) if row.get("service_area") else None
 
