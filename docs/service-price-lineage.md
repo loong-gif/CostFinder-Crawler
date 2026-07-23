@@ -1,7 +1,8 @@
 # 服务目录价格溯源与防污染
 
 > 2026-07-23 落地。守卫模块：`utils/service_price_guard.py`  
-> 修复入口：`scripts/apply_extraction_repairs.py --batch service_price_lineage`
+> 修复入口：`scripts/apply_extraction_repairs.py --batch service_price_lineage`  
+> 飞书变更记录：[CostFinder：服务目录价格防污染（2026-07-23）](https://my.feishu.cn/docx/SQmod7vjZofV80xOFoPcmNBPnef)
 
 ## 背景
 
