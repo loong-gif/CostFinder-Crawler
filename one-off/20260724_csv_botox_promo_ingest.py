@@ -1204,6 +1204,43 @@ def run(
     if apply and touched_business_ids:
         backfill = backfill_unlinked_item_service_ids(client, business_ids=sorted(touched_business_ids))
 
+    # ponytail: direct item insert for promo masters that lack items
+    if apply:
+        _now = datetime.now(timezone.utc).isoformat()
+        for _out in results:
+            if _out.get("status") not in ("promo",):
+                continue
+            _oid = (_out.get("routed") or {}).get("promo_writes", [{}])[0].get("offer_id")
+            _bid = _out.get("business_id")
+            if _bid is None or _oid is None:
+                continue
+            # Check if items exist
+            _existing = client.fetch_rows(
+                "promo_offer_items", "offer_item_id",
+                filters={"offer_id": f"eq.{_oid}"},
+                limit=1,
+            )
+            if _existing:
+                continue
+            # Find a service for this business
+            _svcs = client.fetch_rows(
+                "clinic_services", "service_id",
+                filters={"business_id": f"eq.{_bid}"},
+                limit=1,
+            )
+            if not _svcs:
+                continue
+            _sid = int(_svcs[0]["service_id"])
+            client.insert_rows("promo_offer_items", [{
+                "offer_id": _oid,
+                "service_id": _sid,
+                "quantity": 1,
+                "created_at": _now,
+                "updated_at": _now,
+            }])
+            backfill.setdefault("direct_items", 0)
+            backfill["direct_items"] += 1
+
     audit = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "apply": apply,
