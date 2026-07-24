@@ -164,6 +164,17 @@ def _parse_float(value: Any) -> float | None:
     return number if number > 0 else None
 
 
+def _parse_min_term(value: Any) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    m = re.search(r"\d+", raw)
+    if m:
+        n = int(m.group())
+        return n if n > 0 else None
+    return None
+
+
 def _parse_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
@@ -257,7 +268,7 @@ def csv_row_to_offer(row: dict[str, str]) -> dict[str, Any]:
             "service_name": sn,
             "unit_type": unit_type,
             "service_category": category,
-            "quantity": delivered / n if n > 1 else delivered,
+            "quantity": int(delivered / n) if n > 1 else int(delivered),
             "service_area": area,
         }
         for sn in service_names
@@ -885,8 +896,7 @@ def _upsert_membership(client, row: dict, business_id: int, source_url: str) -> 
         "membership_name": name,
         "membership_price": price,
         "billing_period": period,
-        "minimum_commitment_months": int(_parse_float(row.get("minimum_term")) or 0) or None,
-        "cancellation_policy": str(row.get("cancellation_policy") or "").strip() or None,
+        "minimum_commitment_months": _parse_min_term(row.get("minimum_term")),
         "source_url": source_url,
         "benefits": [],
     }])
@@ -1024,8 +1034,14 @@ def run(
             from utils.firecrawl_client import get_firecrawl_client
 
             fc = get_firecrawl_client()
+            # ponytail: FC behind SSH tunnel — skip evidence scrape if unreachable
+            _probe = __import__("urllib.request", fromlist=[""]).request
+            try:
+                _probe.urlopen(fc.api_url.rstrip("/v1") + "/health", timeout=3)
+            except Exception:
+                fc = None
         except Exception:
-            fc = None
+            pass
 
     results: list[dict[str, Any]] = []
     touched_business_ids: set[int] = set()
@@ -1085,7 +1101,7 @@ def run(
             else:
                 offer = {**offer, "is_membership_required": False}
         evidence = str(offer.get("offer_raw_text") or "")
-        if is_promo_offer(offer) and len(evidence) < 40:
+        if is_promo_offer(offer) and len(evidence) < 40 and fc is not None:
             markdown, md_source = load_markdown_for_url(client, fc, source_url)
             if markdown.strip():
                 evidence = markdown
