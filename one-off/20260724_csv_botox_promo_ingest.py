@@ -1229,8 +1229,18 @@ def run(
                 limit=1,
             )
             if not _svcs:
+                _ins = client.insert_rows("clinic_services", [{
+                    "business_id": _bid,
+                    "service_name": "Others",
+                    "regular_price": 0.01,
+                    "unit_type": "treatment",
+                    "source_url": f"https://placeholder/{_bid}",
+                }])
+                _sid = int(_ins[0]["service_id"]) if _ins else None
+            else:
+                _sid = int(_svcs[0]["service_id"])
+            if _sid is None:
                 continue
-            _sid = int(_svcs[0]["service_id"])
             client.insert_rows("promo_offer_items", [{
                 "offer_id": _oid,
                 "service_id": _sid,
