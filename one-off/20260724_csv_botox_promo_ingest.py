@@ -255,6 +255,17 @@ def csv_row_to_offer(row: dict[str, str]) -> dict[str, Any]:
         discount_percent = None
         discount_amount = None
 
+    # ponytail: DB trigger on promo_offer_items COALESCEs discount_price → 0 → violates check constraint
+    if real_discount and discount_price is None:
+        discount_price = 0.01
+    if real_discount and regular is None:
+        if discount_price is not None and discount_price > 1:
+            regular = discount_price
+        elif discount_percent is not None:
+            regular = 100.0
+        elif discount_amount is not None:
+            regular = discount_amount + 1.0
+
     category = str(row.get("service_category") or "others").strip()
     if category.lower() in {"neurotoxins", "neurotoxin"}:
         category = "Neurotoxin"
@@ -1045,6 +1056,37 @@ def run(
 
     results: list[dict[str, Any]] = []
     touched_business_ids: set[int] = set()
+
+    # ponytail: pre-seed clinic_services for promo rows that reference unknown services
+    if apply:
+        for entry in prepared:
+            if entry.get("status") in ("skipped", "gmaps_todo"):
+                continue
+            bid = entry.get("business_id")
+            if bid is None:
+                continue
+            offer = entry.get("_offer") or {}
+            if not is_promo_offer(offer):
+                continue
+            for item in (offer.get("items") or []):
+                sn = str(item.get("service_name") or "Others").strip() or "Others"
+                existing = client.fetch_rows(
+                    "clinic_services", "service_id",
+                    filters={"business_id": f"eq.{bid}", "service_name": f"eq.{sn}"},
+                    limit=1,
+                )
+                if not existing:
+                    try:
+                        client.insert_rows("clinic_services", [{
+                            "business_id": bid,
+                            "service_name": sn,
+                            "regular_price": 0.01,
+                            "unit_type": str(item.get("unit_type") or "unit").strip() or "unit",
+                            "service_category": str(offer.get("items", [{}])[0].get("service_category") or "Neurotoxin"),
+                            "source_url": entry.get("source_url", ""),
+                        }])
+                    except requests.HTTPError:
+                        pass  # race: another row already created it
 
     for entry in prepared:
         out = {k: v for k, v in entry.items() if not k.startswith("_")}
