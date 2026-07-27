@@ -5,7 +5,27 @@ import hashlib
 import re
 from typing import Any
 
-from utils.offer_evidence_segments import normalize_url
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+
+def normalize_url(url: str) -> str:
+    """Normalize source URLs before they participate in an offer fingerprint."""
+    parsed = urlparse(str(url or "").strip())
+    query = sorted(
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid"}
+    )
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse(
+        parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=parsed.netloc.lower(),
+            path=path,
+            query=urlencode(query),
+            fragment="",
+        )
+    )
 
 _UNIT_ALIASES = {"units": "unit", "unit": "unit"}
 

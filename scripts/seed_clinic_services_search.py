@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.settings import CLINIC_SERVICES_FALLBACK_CRAWL_PAGES, OUTPUT_DIR
 from crawler.promo_site_crawler import is_filtered_process_flag
-from crawler.staging_recrawl import fetch_all_rows, load_supabase_client
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 from scripts.seed_clinic_services_botox import crawl_website
 from utils.clinic_services_botox import (
     extract_botox_fields_from_pages,

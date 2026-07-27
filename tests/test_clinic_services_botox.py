@@ -29,7 +29,7 @@ def test_extract_service_area_hint():
     text = "Botox for crow's feet — $12/unit"
     fields = extract_botox_fields_from_text(text)
     assert fields.regular_price == Decimal("12")
-    assert fields.service_area == "crow's feet"
+    assert fields.service_area == "crow_feet"
 
 
 def test_no_botox_returns_empty():

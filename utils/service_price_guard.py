@@ -114,6 +114,7 @@ def derive_offer_item_pricing(
     )
     regular_total = _positive(offer.get("regular_price"))
     discount_total = _positive(offer.get("discount_price"))
+    price_is_per_unit = bool(_PER_UNIT_SIGNAL.search(blob))
     count, _upper = infer_unit_count(blob, regular_total or discount_total)
     if count is None and len(items) == 1:
         count, _upper = infer_unit_count(blob)
@@ -122,7 +123,7 @@ def derive_offer_item_pricing(
             if item.get("quantity") is None:
                 item["quantity"] = count
             if item.get("unit_price") is None and discount_total is not None:
-                item["unit_price"] = round(discount_total / count, 4)
+                item["unit_price"] = discount_total if price_is_per_unit else round(discount_total / count, 4)
     return items
 
 

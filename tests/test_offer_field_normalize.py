@@ -17,6 +17,13 @@ def test_normalize_service_area_lower():
     assert normalize_service_area("Face") == "face"
 
 
+def test_normalize_service_area_maps_synonyms_and_rejects_locations():
+    assert normalize_service_area("upper neck or double chin") == "multiple_areas"
+    assert normalize_service_area("cheeks, lips, jawline, and under-eyes") == "multiple_areas"
+    assert normalize_service_area("Denver, Boulder, Fort Collins, RiNo") is None
+    assert normalize_service_area("not specified") is None
+
+
 def test_prefer_longer_offer_raw_text_from_content():
     offer = {
         "offer_raw_text": "Botox",

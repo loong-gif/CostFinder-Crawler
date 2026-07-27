@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import OUTPUT_DIR
-from crawler.staging_recrawl import fetch_all_rows, load_supabase_client
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 from utils.clinic_services_db import apply_fields, fetch_service_row
 from utils.clinic_services_from_offers import (
     BOTOX_SERVICE_NAME,

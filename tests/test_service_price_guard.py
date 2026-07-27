@@ -113,6 +113,18 @@ def test_derive_offer_item_pricing_for_xeomin_package() -> None:
     assert items[0]["unit_price"] == 7
 
 
+def test_preserves_explicit_per_unit_offer_price() -> None:
+    items = derive_offer_item_pricing(
+        {
+            "discount_price": 11,
+            "items": [{"service_name": "Botox"}],
+        },
+        evidence="Botox $11 per unit, 20 units minimum",
+    )
+
+    assert items == [{"service_name": "Botox", "quantity": 20, "unit_price": 11}]
+
+
 def test_build_master_from_offer_carries_derived_item_pricing() -> None:
     offer = {
         "regular_price": 450,
