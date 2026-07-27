@@ -114,10 +114,12 @@ class SupabaseRestClient:
             PostgREST ``on_conflict`` column name for merge-duplicates.
         """
         headers = {"Prefer": "return=representation,resolution=merge-duplicates"}
+        params: Dict[str, str] = {}
         if on_conflict:
-            headers["Prefer"] += f",on_conflict={on_conflict}"
+            params["on_conflict"] = on_conflict
         response = self.session.post(
             f"{self.base_url}/{table}",
+            params=params,
             json=rows,
             headers=headers,
             timeout=90,

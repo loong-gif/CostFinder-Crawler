@@ -28,7 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dotenv import load_dotenv
 
-from crawler.staging_recrawl import load_supabase_client
+from utils.supabase_access import load_supabase_client
 from utils.extraction_persist import (
     persist_promotion_item,
     persist_service_item,

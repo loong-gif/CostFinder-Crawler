@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Protocol
 
 import requests
 
-from crawler.promo_site_crawler import normalize_segment_text
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
 
@@ -74,7 +73,11 @@ def _clean_text(value: Any) -> str:
 
 
 def _normalize_lookup_text(value: Any) -> str:
-    return normalize_segment_text(_clean_text(value)).lower()
+    # Keep service-name normalization independent from the crawler runtime.
+    # The former import pulled in optional Jina modules during pure LLM tests.
+    text = _clean_text(value).lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _service_dictionary_indexes() -> Dict[str, Any]:
@@ -387,6 +390,10 @@ def build_client_from_env(
             return native
 
     resolved_url = api_url or os.getenv("LLM_API_URL", "").strip()
+    if not resolved_url:
+        base_url = os.getenv("LLM_API_BASE", "").strip().rstrip("/")
+        if base_url:
+            resolved_url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
     if not (resolved_key and resolved_url and resolved_model):
         return None
     return OpenAICompatibleClient(api_url=resolved_url, api_key=resolved_key, model=resolved_model)

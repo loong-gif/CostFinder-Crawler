@@ -28,7 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.settings import FIRECRAWL_CRAWL_MAX_PAGES, FIRECRAWL_CRAWL_TIMEOUT_SECS, OUTPUT_DIR
 from crawler.promo_site_crawler import is_filtered_process_flag
-from crawler.staging_recrawl import _crawl_documents_to_items, fetch_all_rows, load_supabase_client
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 from firecrawl.v2.types import ScrapeOptions
 from utils.clinic_services_botox import extract_botox_fields_from_pages, website_to_crawl_url
 from utils.firecrawl_client import get_firecrawl_client
@@ -112,7 +112,13 @@ def crawl_website(website_url: str, *, max_pages: int, timeout_secs: int) -> Lis
         timeout=timeout_secs,
     )
     documents = getattr(crawl_job, "data", None) or []
-    return _crawl_documents_to_items(documents)
+    return [
+        {
+            "url": str(getattr(document, "url", None) or ""),
+            "markdown": str(getattr(document, "markdown", None) or ""),
+        }
+        for document in documents
+    ]
 
 
 def skeleton_row(business: Dict[str, Any]) -> Dict[str, Any]:

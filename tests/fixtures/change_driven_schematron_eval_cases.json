@@ -1,0 +1,307 @@
+[
+  {
+    "name": "insert_membership_plan",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/insert_membership_plan",
+      "status": "changed",
+      "text_diff": "+ Glow Membership $199/month with one facial and member pricing",
+      "json_diff": {
+        "offers[0]": {
+          "previous": null,
+          "current": {
+            "service_name": "Glow Membership",
+            "offer_raw_text": "Glow Membership $199/month with one facial and member pricing",
+            "membership_price": 199,
+            "billing_period": "month"
+          }
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "added",
+          "before": null,
+          "after": "Glow Membership $199/month with one facial and member pricing",
+          "reason": "A new membership plan was added."
+        }
+      ],
+      "judgment_reason": "A new membership was added to the page."
+    },
+    "candidate_offers": [],
+    "expected_offers": [
+      {
+        "action": "insert",
+        "matched_id": "",
+        "service_name": "Membership",
+        "membership_price": 199,
+        "billing_period": "month"
+      }
+    ]
+  },
+  {
+    "name": "update_botox_price_drop",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/update_botox_price_drop",
+      "status": "changed",
+      "text_diff": "- Botox $12/unit member special\n+ Botox $11/unit member special",
+      "json_diff": {
+        "offers[0]": {
+          "previous": {
+            "service_name": "Botox",
+            "offer_raw_text": "Botox $12/unit member special",
+            "discount_price": 12
+          },
+          "current": {
+            "service_name": "Botox",
+            "offer_raw_text": "Botox $11/unit member special",
+            "discount_price": 11
+          }
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "updated",
+          "before": "Botox $12/unit member special",
+          "after": "Botox $11/unit member special",
+          "reason": "The same offer now has a lower unit price."
+        }
+      ],
+      "judgment_reason": "An existing Botox offer changed from $12/unit to $11/unit."
+    },
+    "candidate_offers": [
+      {
+        "id": "offer-botox-update",
+        "service_name": "Botox",
+        "offer_raw_text": "Botox $12/unit member special",
+        "regular_price": null,
+        "discount_price": 12,
+        "original_price": null
+      }
+    ],
+    "expected_offers": [
+      {
+        "action": "update",
+        "matched_id": "offer-botox-update",
+        "service_name": "Botox",
+        "regular_price": 12,
+        "discount_price": 11
+      }
+    ]
+  },
+  {
+    "name": "mark_ended_removed_filler_offer",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/mark_ended_removed_filler_offer",
+      "status": "changed",
+      "text_diff": "- Juvederm $100 off syringe special",
+      "json_diff": {
+        "offers[0]": {
+          "previous": {
+            "service_name": "Juvederm",
+            "offer_raw_text": "Juvederm $100 off syringe special",
+            "discount_amount": 100
+          },
+          "current": null
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "removed",
+          "before": "Juvederm $100 off syringe special",
+          "after": null,
+          "reason": "The filler offer was removed from the page."
+        }
+      ],
+      "judgment_reason": "The Juvederm promo was removed from the page."
+    },
+    "candidate_offers": [
+      {
+        "id": "offer-juvederm-ended",
+        "service_name": "Juvederm",
+        "offer_raw_text": "Juvederm $100 off syringe special",
+        "regular_price": null,
+        "discount_price": null,
+        "original_price": null
+      },
+      {
+        "id": "offer-botox-still-live",
+        "service_name": "Botox",
+        "offer_raw_text": "Botox $11/unit still active",
+        "regular_price": null,
+        "discount_price": 11,
+        "original_price": null
+      }
+    ],
+    "expected_offers": [
+      {
+        "action": "mark_ended",
+        "matched_id": "offer-juvederm-ended"
+      }
+    ]
+  },
+  {
+    "name": "insert_two_new_tox_offers",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/insert_two_new_tox_offers",
+      "status": "changed",
+      "text_diff": "+ Dysport $4/unit\n+ Xeomin $10/unit",
+      "json_diff": {
+        "offers[0]": {
+          "previous": null,
+          "current": {
+            "service_name": "Dysport",
+            "offer_raw_text": "Dysport $4/unit",
+            "discount_price": 4
+          }
+        },
+        "offers[1]": {
+          "previous": null,
+          "current": {
+            "service_name": "Xeomin",
+            "offer_raw_text": "Xeomin $10/unit",
+            "discount_price": 10
+          }
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "added",
+          "before": null,
+          "after": "Dysport $4/unit",
+          "reason": "A new Dysport offer was added."
+        },
+        {
+          "type": "added",
+          "before": null,
+          "after": "Xeomin $10/unit",
+          "reason": "A new Xeomin offer was added."
+        }
+      ],
+      "judgment_reason": "Two new toxin offers were added."
+    },
+    "candidate_offers": [],
+    "expected_offers": [
+      {
+        "action": "insert",
+        "matched_id": "",
+        "service_name": "Dysport",
+        "discount_price": 4
+      },
+      {
+        "action": "insert",
+        "matched_id": "",
+        "service_name": "Xeomin",
+        "discount_price": 10
+      }
+    ]
+  },
+  {
+    "name": "update_membership_monthly_price",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/update_membership_monthly_price",
+      "status": "changed",
+      "text_diff": "- VIP Membership $249/month includes monthly facial\n+ VIP Membership $229/month includes monthly facial",
+      "json_diff": {
+        "offers[0]": {
+          "previous": {
+            "service_name": "VIP Membership",
+            "offer_raw_text": "VIP Membership $249/month includes monthly facial",
+            "membership_price": 249,
+            "billing_period": "month"
+          },
+          "current": {
+            "service_name": "VIP Membership",
+            "offer_raw_text": "VIP Membership $229/month includes monthly facial",
+            "membership_price": 229,
+            "billing_period": "month"
+          }
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "updated",
+          "before": "VIP Membership $249/month includes monthly facial",
+          "after": "VIP Membership $229/month includes monthly facial",
+          "reason": "The same membership was discounted."
+        }
+      ],
+      "judgment_reason": "An existing membership changed from $249/month to $229/month."
+    },
+    "candidate_offers": [
+      {
+        "id": "offer-vip-membership",
+        "service_name": "VIP Membership",
+        "offer_raw_text": "VIP Membership $249/month includes monthly facial",
+        "regular_price": null,
+        "discount_price": null,
+        "original_price": null
+      }
+    ],
+    "expected_offers": [
+      {
+        "action": "update",
+        "matched_id": "offer-vip-membership",
+        "service_name": "Membership",
+        "membership_price": 229,
+        "billing_period": "month"
+      }
+    ]
+  },
+  {
+    "name": "update_flash_sale_dates",
+    "domain_name": "validation.costfinder.local",
+    "payload": {
+      "url": "https://validation.costfinder.local/eval/update_flash_sale_dates",
+      "status": "changed",
+      "text_diff": "- Laser Peel $150 through June 15, 2026\n+ Laser Peel $150 through June 30, 2026",
+      "json_diff": {
+        "offers[0]": {
+          "previous": {
+            "service_name": "Laser Peel",
+            "offer_raw_text": "Laser Peel $150 through June 15, 2026",
+            "discount_price": 150,
+            "end_date": "2026-06-15"
+          },
+          "current": {
+            "service_name": "Laser Peel",
+            "offer_raw_text": "Laser Peel $150 through June 30, 2026",
+            "discount_price": 150,
+            "end_date": "2026-06-30"
+          }
+        }
+      },
+      "meaningful_changes": [
+        {
+          "type": "updated",
+          "before": "Laser Peel $150 through June 15, 2026",
+          "after": "Laser Peel $150 through June 30, 2026",
+          "reason": "The end date of the same promo was extended."
+        }
+      ],
+      "judgment_reason": "The same Laser Peel promo now runs through June 30, 2026."
+    },
+    "candidate_offers": [
+      {
+        "id": "offer-laser-peel",
+        "service_name": "Laser Peel",
+        "offer_raw_text": "Laser Peel $150 through June 15, 2026",
+        "regular_price": null,
+        "discount_price": 150,
+        "original_price": null
+      }
+    ],
+    "expected_offers": [
+      {
+        "action": "update",
+        "matched_id": "offer-laser-peel",
+        "service_name": "Chemical Peel",
+        "discount_price": 150,
+        "end_date": "2026-06-30"
+      }
+    ]
+  }
+]

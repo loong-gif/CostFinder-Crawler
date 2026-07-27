@@ -23,7 +23,7 @@ def normalize_raw_page_item(
     default_name: Optional[str] = None,
     default_source_type: str = "markdown",
 ) -> Optional[Dict[str, Any]]:
-    """Convert a raw crawler record into a promo_website_staging-shaped payload."""
+    """Convert a raw crawler record into the normalized crawler payload."""
     subpage_url = str(item.get("subpage_url") or item.get("url") or "").strip()
     raw_content = _extract_raw_content(item)
     if not subpage_url or not raw_content:

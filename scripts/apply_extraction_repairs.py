@@ -63,7 +63,6 @@ def main() -> int:
     promotions = fetch_rows(client, TABLE_CLINIC_PROMOTIONS, CLINIC_PROMOTION_SELECT)
     offers = fetch_rows(client, TABLE_PROMO_OFFER_MASTER, OFFER_MASTER_WITH_ITEMS_SELECT)
     master_rows = fetch_rows(client, "master_business_info", "business_id,name,website")
-    staging_rows = fetch_rows(client, "promo_website_staging", "business_id,subpage_url,domain_name")
     scrape_rows = fetch_rows(client, TABLE_FIRECRAWL_SCRAPE_RAW, "source_url,markdown")
     scrape_markdown = {
         str(row.get("source_url") or "").strip().rstrip("/").lower(): str(row.get("markdown") or "")
@@ -77,7 +76,7 @@ def main() -> int:
         promotions=promotions,
         offers=offers,
         master_rows=master_rows,
-        staging_rows=staging_rows,
+        staging_rows=[],
         scrape_markdown_by_url=scrape_markdown,
     )
     selected = plans.get(args.batch, []) if args.batch else [action for batch in plans.values() for action in batch]

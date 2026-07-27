@@ -24,7 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.settings import OUTPUT_DIR
-from crawler.staging_recrawl import fetch_all_rows, load_supabase_client
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 from utils.extraction_persist import (
     build_master_from_offer,
     persist_promotion_item,
@@ -518,7 +518,6 @@ def build_actual_trace(
             },
         ],
         "forbidden": {
-            "legacy_membership_table": "promo_membership_plans",
             "master_service_id_column": "service_id",
         },
     }

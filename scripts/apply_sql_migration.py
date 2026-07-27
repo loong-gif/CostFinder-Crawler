@@ -5,7 +5,7 @@ Requires SUPABASE_DB_URL (postgresql://...) in environment or .env.
 Falls back to printing instructions when no DB URL is configured.
 
 Usage:
-    python scripts/apply_sql_migration.py config/sql/promo_membership_plans.sql
+    python scripts/apply_sql_migration.py config/sql/m020_promo_offer_item_unit_price_semantics.sql
 """
 from __future__ import annotations
 

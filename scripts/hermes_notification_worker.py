@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from crawler.staging_recrawl import load_supabase_client
+from utils.supabase_access import load_supabase_client
 from utils.hermes_adapter import HermesAdapter, HermesOutboxWorker, SubprocessHermesTransport
 from utils.notification_outbox import NotificationOutboxRecord, NotificationSeverity
 from utils.notification_repository import SupabaseNotificationRepository

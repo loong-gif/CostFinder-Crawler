@@ -12,6 +12,31 @@ from utils.supabase_rest import SupabaseRestClient
 
 TABLE = TABLE_CLINIC_SERVICES
 
+_NEUROTOXIN_SERVICE_NAMES = frozenset(
+    {"Botox", "Dysport", "Daxxify", "Letybo", "Xeomin", "Jeuveau", "Neurotoxin"}
+)
+_FILLER_SERVICE_NAMES = frozenset(
+    {
+        "Dermal Filler",
+        "Juvéderm",
+        "Restylane",
+        "Belotero",
+        "Radiesse",
+        "PRFM Injections",
+        "Sculptra",
+        "Kybella",
+        "Skinvive",
+    }
+)
+
+
+def _skeleton_service_category(service_name: str) -> str:
+    if service_name in _NEUROTOXIN_SERVICE_NAMES:
+        return "Neurotoxin"
+    if service_name in _FILLER_SERVICE_NAMES:
+        return "Filler"
+    return "others"
+
 
 def fetch_service_row(
     client: SupabaseRestClient,
@@ -79,7 +104,13 @@ def seed_skeleton(
         return existing
     inserted = client.insert_rows(
         TABLE,
-        [{"business_id": business_id, "service_name": service_name}],
+        [
+            {
+                "business_id": business_id,
+                "service_name": service_name,
+                "service_category": _skeleton_service_category(service_name),
+            }
+        ],
     )
     return inserted[0]
 

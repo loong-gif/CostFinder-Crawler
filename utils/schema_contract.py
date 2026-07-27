@@ -97,17 +97,9 @@ CLINIC_PROMOTION_COLUMNS = (
 
 CLINIC_PROMOTION_SELECT = ",".join(CLINIC_PROMOTION_COLUMNS)
 
-# Legacy names still seen in old rows / prompts
-LEGACY_MEMBERSHIP_TABLE = "promo_membership_plans"
-LEGACY_OFFER_STATUS_ACTIVE = "active"
-LEGACY_OFFER_STATUS_ENDED = "ended"
-
-
 def offer_is_active(row: dict) -> bool:
-    """True when row uses is_active or legacy status=active."""
-    if "is_active" in row:
-        return bool(row.get("is_active"))
-    return str(row.get("status") or "").strip().lower() == LEGACY_OFFER_STATUS_ACTIVE
+    """Return the current schema's activity flag."""
+    return bool(row.get("is_active"))
 
 
 def offer_item_name(row: dict, *, service_lookup: dict | None = None) -> str:
