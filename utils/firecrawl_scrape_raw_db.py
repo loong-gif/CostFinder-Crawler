@@ -70,6 +70,7 @@ def scrape_response_to_row_fields(response: Optional[Dict[str, Any]]) -> Dict[st
         markdown = prepare_scrape_markdown(str(markdown))
 
     row: Dict[str, Any] = {
+        "response_json": response,
         "markdown": markdown,
         "html": data.get("html"),
         "raw_html": data.get("rawHtml") or data.get("raw_html"),

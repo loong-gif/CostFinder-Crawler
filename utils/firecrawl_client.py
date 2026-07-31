@@ -183,10 +183,4 @@ def scrape_page_markdown(fc: Any, url: str) -> tuple[str, dict[str, Any]]:
         if isinstance(data, dict):
             raw_md = str(data.get("markdown") or "")
     md = prepare_scrape_markdown(raw_md)
-    if isinstance(body, dict):
-        body = dict(body)
-        body["markdown"] = md
-        data = body.get("data")
-        if isinstance(data, dict):
-            body["data"] = {**data, "markdown": md}
     return md, body

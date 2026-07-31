@@ -418,7 +418,15 @@ class SagKnowledgeEngine:
                 if isinstance(section, dict):
                     sections.append(section)
                 else:
-                    sections.append({"content": str(section)})
+                    sections.append(
+                        {
+                            "source_id": getattr(section, "source_id", ""),
+                            "chunk_id": getattr(section, "chunk_id", ""),
+                            "score": getattr(section, "score", None),
+                            "heading": getattr(section, "heading", ""),
+                            "content": getattr(section, "content", str(section)),
+                        }
+                    )
 
         log.debug(
             "SAG search: query={q!r}, strategy={s}, results={n}".format(

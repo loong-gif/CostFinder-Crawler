@@ -37,5 +37,6 @@ opentelemetry-instrumentation-logging>=0.63b0
 
 # SAG knowledge engine (event-entity retrieval)
 zleap-sag>=0.7.1
+psycopg[binary]>=3.2,<4
 
 # 浏览器诊断/补抓依赖已拆分到 requirements_browser_tools.txt

@@ -14,7 +14,8 @@ _SKIP_LINE_PREFIXES = (
 _NOISE_SECTION_HEADING = re.compile(
     r"^(?:growth99\+?|tracking debug|lead capture form|recaptcha|"
     r"how could we have made your experience|captcha verification failed|"
-    r"any questions\?|thank you!|unable to submit form)$",
+    r"any questions\?|thank you!|unable to submit form|cookie preferences|"
+    r"privacy preferences|subscribe to (?:our )?newsletter|newsletter signup|footer)$",
     re.IGNORECASE,
 )
 
