@@ -35,6 +35,11 @@ python scripts/run_domain_architecture_pipeline.py --domain example.com --apply
 
 # Populate normal-service rows from current offer records
 python scripts/backfill_clinic_services_from_offers.py --dry-run
+
+# Build the internal persistent SAG pilot from structured Tucson records
+# Uses the local OpenAI-compatible server at 192.168.1.189:1234 by default;
+# requires SAG_DATABASE_URL for direct server-side PostgreSQL access.
+python scripts/sag_persistent_pilot.py --city Tucson --clinic-limit 20
 ```
 
 Run the test suite with `python -m pytest`.
@@ -44,3 +49,4 @@ Run the test suite with `python -m pytest`.
 - `schema/live_schema_snapshot.json` is a checked-in contract of the live database.
 - Historical migration material is retained only where it remains compatible with the live schema; Git history contains retired schema designs.
 - `scripts/one_off/` contains isolated operational utilities and is not a production entrypoint.
+- `sag` is an unexposed, server-only Supabase schema for the rebuildable SAG projection.

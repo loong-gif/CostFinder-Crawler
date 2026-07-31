@@ -1,0 +1,588 @@
+master_id	问题类型	详情	offer_raw_text
+1297	discount_price 不在文本中	dp=200, 文本金额=[10.0]	new injection clients— receive toxins at $10/unit during your first treatment at Alchemy when you ge
+1298	item_unit_price outlier	iup=5, dp=10, qty=1, dp/qty=10.0000	Botox Sale Price: $10.00 Original Price: $13.00 Sale
+1298	item_unit_price outlier	iup=5, dp=10, qty=1, dp/qty=10.0000	Botox Sale Price: $10.00 Original Price: $13.00 Sale
+1300	discount_price 不在文本中	dp=10, 文本金额=[300.0]	30UNITS BOTOX $300
+1300	discount_price 不在文本中	dp=10, 文本金额=[300.0]	30UNITS BOTOX $300
+1301	discount_price 不在文本中	dp=10, 文本金额=[200.0]	20units Botox $200
+1304	discount_price 不在文本中	dp=10.45, 文本金额=[209.0]	Purchase 20 units of Botox $209
+1312	discount_price 缺失 (有 rp)	rp=12.32	12% off Botox / Dysport ($12.32/unit Botox & $3.96/unit Dysport!)
+1315	discount_price 不在文本中	dp=13, 文本金额=[1.0]	For the best pricing on our services, including $1 off per unit of tox, become a Mōv Money Member.
+1319	price_model 疑似错误	model=total, dp=159 似为单价 (qty=20, 文本有 159 无 3180)	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+1321	price_model 疑似错误	model=total, dp=200 似为单价 (qty=20, 文本有 200 无 4000)	20UNITS BOTOX $200
+1322	price_model 疑似错误	model=total, dp=300 似为单价 (qty=30, 文本有 300 无 9000)	30UNITS BOTOX $300
+1324	price_model 疑似错误	model=total, dp=336 似为单价 (qty=24, 文本有 336 无 8064)	Crow’s feet... FDA recommended dosing 24 units ~$336+
+1326	price_model 疑似错误	model=total, dp=450 似为单价 (qty=40, 文本有 450 无 18000)	Botox: 40 units for $450
+1328	discount_price 不在文本中	dp=460, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+1330	price_model 疑似错误	model=total, dp=768 似为单价 (qty=64, 文本有 768 无 49152)	BOTOX 64u $768.00
+1335	discount_price 不在文本中	dp=1400, 文本金额=[1.0]	Botox – 100 Units | $1,400
+1336	discount_price 缺失 (有 rp)	rp=66	SAVE $65 ON BOTOX - first time allē or botox clients
+1337	discount_price 缺失 (有 rp)	rp=100	includes an annual loyalty reward of 20 free Botox units on the 1-year anniversa
+1338	discount_price 缺失 (有 rp)	rp=100	Enjoy 20% OFF On Your First Visit With Us.
+1339	discount_price 缺失 (有 rp)	rp=100	Members enjoy a significant 26% discount on all neurotoxin treatments—Botox, Xeo
+1340	discount_price 缺失 (有 rp)	rp=101	SAVE $100 ON YOUR NEXT BOTOX TREATMENT WHEN YOU PURCHASE 40 UNITS OR MORE
+1341	discount_price 缺失 (有 rp)	rp=100	Botox Injection 20% off from regular price for first time patient .
+1342	discount_price 缺失 (有 rp)	rp=66	NEW TO BOTOX® COSMETIC? $65 OFF FOR A LIMITED TIME! Allē Members who have not lo
+1344	item_unit_price outlier	iup=150, dp=300, qty=1, dp/qty=300.0000	Filler Removal $300 - $750
+1344	item_unit_price outlier	iup=150, dp=300, qty=1, dp/qty=300.0000	Filler Removal $300 - $750
+1346	discount_price 不在文本中	dp=455, 文本金额=[650.0]	Now enjoy 30% off (regularly $650 per syringe).
+1347	discount_price 不在文本中	dp=475, 文本金额=[75.0, 550.0]	$75 OFF Each Filler Treatment (starts at $550+)
+1347	item_unit_price outlier	iup=237.5, dp=475, qty=1, dp/qty=475.0000	$75 OFF Each Filler Treatment (starts at $550+)
+1347	discount_price 不在文本中	dp=475, 文本金额=[75.0, 550.0]	$75 OFF Each Filler Treatment (starts at $550+)
+1347	item_unit_price outlier	iup=237.5, dp=475, qty=1, dp/qty=475.0000	$75 OFF Each Filler Treatment (starts at $550+)
+1348	discount_price 不在文本中	dp=500, 文本金额=[50.0, 550.0]	$50 OFF Each Filler Treatment (starts at $550+)
+1348	item_unit_price outlier	iup=250, dp=500, qty=1, dp/qty=500.0000	$50 OFF Each Filler Treatment (starts at $550+)
+1348	discount_price 不在文本中	dp=500, 文本金额=[50.0, 550.0]	$50 OFF Each Filler Treatment (starts at $550+)
+1348	item_unit_price outlier	iup=250, dp=500, qty=1, dp/qty=500.0000	$50 OFF Each Filler Treatment (starts at $550+)
+1353	discount_price 不在文本中	dp=700, 文本金额=[2.0]	3 syringes | $2,100
+1353	discount_price 不在文本中	dp=700, 文本金额=[2.0]	3 syringes | $2,100
+1354	discount_price 不在文本中	dp=700, 文本金额=[1400.0]	2 for $1400
+1354	item_unit_price outlier	iup=175, dp=700, qty=2, dp/qty=350.0000	2 for $1400
+1354	discount_price 不在文本中	dp=700, 文本金额=[1400.0]	2 for $1400
+1354	item_unit_price outlier	iup=175, dp=700, qty=2, dp/qty=350.0000	2 for $1400
+1356	discount_price 不在文本中	dp=750, 文本金额=[1.0]	2 syringes | $1,500
+1356	discount_price 不在文本中	dp=750, 文本金额=[1.0]	2 syringes | $1,500
+1357	item_unit_price outlier	iup=103.125, dp=825, qty=4, dp/qty=206.2500	PRFM Filler (yields 4 syringes) | $825
+1357	price_model 疑似错误	model=total, dp=825 似为单价 (qty=4, 文本有 825 无 3300)	PRFM Filler (yields 4 syringes) | $825
+1357	item_unit_price outlier	iup=103.125, dp=825, qty=4, dp/qty=206.2500	PRFM Filler (yields 4 syringes) | $825
+1357	price_model 疑似错误	model=total, dp=825 似为单价 (qty=4, 文本有 825 无 3300)	PRFM Filler (yields 4 syringes) | $825
+1358	discount_price 不在文本中	dp=1500, 文本金额=[1.0]	2 syringes $1,500
+1358	discount_price 不在文本中	dp=1500, 文本金额=[1.0]	2 syringes $1,500
+1359	discount_price 不在文本中	dp=1500, 文本金额=[1.0]	Hand Fillers | $1,500
+1360	discount_price 不在文本中	dp=1900, 文本金额=[1.0, 300.0]	Facial Harmony Trio Price $1,900. This holistic aesthetic package includes the precise administratio
+1360	discount_price 不在文本中	dp=1900, 文本金额=[1.0, 300.0]	Facial Harmony Trio Price $1,900. This holistic aesthetic package includes the precise administratio
+1361	discount_price 不在文本中	dp=1950, 文本金额=[400.0]	3.5 SYRINGE SPECIAL PRICING PACKAGE SAVES YOU $400
+1361	item_unit_price outlier	iup=487.5, dp=1950, qty=3, dp/qty=650.0000	3.5 SYRINGE SPECIAL PRICING PACKAGE SAVES YOU $400
+1361	discount_price 不在文本中	dp=1950, 文本金额=[400.0]	3.5 SYRINGE SPECIAL PRICING PACKAGE SAVES YOU $400
+1361	item_unit_price outlier	iup=487.5, dp=1950, qty=1, dp/qty=1950.0000	3.5 SYRINGE SPECIAL PRICING PACKAGE SAVES YOU $400
+1362	discount_price 不在文本中	dp=2100, 文本金额=[2.0]	3 syringes $2,100
+1362	discount_price 不在文本中	dp=2100, 文本金额=[2.0]	3 syringes $2,100
+1363	discount_price 不在文本中	dp=2250, 文本金额=[2.0]	V line Chin | $2,250
+1363	discount_price 不在文本中	dp=2250, 文本金额=[2.0]	V line Chin | $2,250
+1364	discount_price 缺失 (有 rp)	rp=26	NEW PATIENTS: $25 OFF your first filler service!
+1365	discount_price 缺失 (有 rp)	rp=101	Dermal Fillers & Sculptra $100 off per syringe or vial
+1366	discount_price 缺失 (有 rp)	rp=100	10% of Dermal Fillers and Sculptra
+1367	discount_price 缺失 (有 rp)	rp=101	Filler Special $100 off all fillers
+1368	discount_price 缺失 (有 rp)	rp=100	Year-End Special UPTO 75% OFF Lip Filler
+1369	discount_price 缺失 (有 rp)	rp=100	The Essentials: 5% off Dermal Filler. Amanda excluded from dermal filler promoti
+1370	discount_price 缺失 (有 rp)	rp=201	$200 OFF 2 Syringes of Juvéderm Family Fillers (must be purchased and used the s
+1372	discount_price 缺失 (有 rp)	rp=100	5% off All Dermal Filler
+1373	discount_price 缺失 (有 rp)	rp=100	20% Discount on Dermal Filler (Botox and BioTe Pellets not included)
+1374	discount_price 缺失 (有 rp)	rp=100	Dermal Filler Injection 20% off from regular price for first time patient.
+1375	discount_price 缺失 (有 rp)	rp=3.6	TLC Black Card: 20% off Botox / Dysport ($3.60/unit Dysport)
+1376	discount_percent 错误	实际=15%, 应为=0.0% (rp=4.04, dp=4.04)	Membership Pricing $4.04 per unit. Discounted rate available exclusively for act
+1378	item_unit_price outlier	iup=4.5, dp=9, qty=1, dp/qty=9.0000	Dysport Sale Price: $9.00 Original Price: $12.00 Sale
+1378	item_unit_price outlier	iup=4.5, dp=9, qty=1, dp/qty=9.0000	Dysport Sale Price: $9.00 Original Price: $12.00 Sale
+1389	discount_price 不在文本中	dp=460, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+1390	discount_price 不在文本中	dp=466, 文本金额=[4.3, 50.0]	Purchase Dysport $4.30 per unit Get $50 off (minimum 120 units)
+1390	discount_price 不在文本中	dp=466, 文本金额=[4.3, 50.0]	Purchase Dysport $4.30 per unit Get $50 off (minimum 120 units)
+1391	discount_price 缺失 (有 rp)	rp=100	Enjoy 20% OFF On Your First Visit With Us.
+1392	discount_price 缺失 (有 rp)	rp=100	Members enjoy a significant 26% discount on all neurotoxin treatments—Botox, Xeo
+1393	discount_price 缺失 (有 rp)	rp=301	Patients who purchase 450 units of Dysport ahead of time save $300.
+1394	discount_price 缺失 (有 rp)	rp=100	15% OFF ANY INJECTABLE OR SKINCARE TREATMENT
+1395	discount_price 不在文本中	dp=8, 文本金额=[40.0, 40.0]	$40 Discount for Patients Doing Jeuveau Again - get $40 discount when you get 20 units Jeuveau after
+1395	discount_price 不在文本中	dp=8, 文本金额=[40.0, 40.0]	$40 Discount for Patients Doing Jeuveau Again - get $40 discount when you get 20 units Jeuveau after
+1396	price_model 疑似错误	model=total, dp=800 似为单价 (qty=100, 文本有 800 无 80000)	100 Units of Jeuveau for $8/unit = $800
+1397	discount_price 不在文本中	dp=240, 文本金额=[8.0]	New Patients $8.00 minimum 30 units
+1397	regular_price 缺失 (有 dp)	dp=240	New Patients $8.00 minimum 30 units
+1398	price_model 疑似错误	model=total, dp=510 似为单价 (qty=60, 文本有 510 无 30600)	60 Units of Jeuveau for $8.50/unit = $510
+1399	price_model 疑似错误	model=total, dp=360 似为单价 (qty=40, 文本有 360 无 14400)	40 Units of Jeuveau for $9.00/unit = $360
+1400	price_model 疑似错误	model=total, dp=9 似为单价 (qty=30, 文本有 9 无 270)	Returning Patients $9.00 minimum 30 units
+1401	discount_price 不在文本中	dp=380, 文本金额=[9.5, 2.5]	Botox/Jeuveau - Staff $9.50 per unit with 40 unit minimum Save $2.50 per unit off regular price
+1405	discount_price 不在文本中	dp=600, 文本金额=[12.0]	50+ units | $12 per unit
+1406	discount_price 不在文本中	dp=480, 文本金额=[12.0, 2.0]	Botox/Jeuveau - Doctor $12.00 per unit with 40 unit minimum Save $2.00 per unit off regular price
+1408	discount_price 缺失 (有 rp)	rp=41	$40 Discount for Patients Doing Jeuveau Again; Minimum 20 units required
+1411	item_unit_price outlier	iup=360, dp=720, qty=1, dp/qty=720.0000	Juvéderm | $800/syringe | $720/syringe
+1411	item_unit_price outlier	iup=360, dp=720, qty=1, dp/qty=720.0000	Juvéderm | $800/syringe | $720/syringe
+1412	discount_price 缺失 (有 rp)	rp=201	$200 OFF 2 Syringes of Juvéderm Family Fillers (must be purchased and used the s
+1414	discount_price 不在文本中	dp=624.75, 文本金额=[2.0]	KYBELLA 4 Vials in Same Session $2,499
+1415	price_model 疑似错误	model=total, dp=789 似为单价 (qty=2, 文本有 789 无 1578)	Get rid of double chin with Kybella ONLY $789 (2 vials minimum) (REG. $980)
+1417	price_model 疑似错误	model=total, dp=2100 似为单价 (qty=4, 文本有 2100 无 8400)	4 vials of Kybella $2100
+1418	discount_price 不在文本中	dp=9, 文本金额=[360.0]	Purchase 40 unit of Letybo $360
+1422	price_model 疑似错误	model=total, dp=159 似为单价 (qty=20, 文本有 159 无 3180)	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+1424	discount_price 不在文本中	dp=400, 文本金额=[8.0]	50 units of tox at $8/unit
+1425	discount_price 不在文本中	dp=160, 文本金额=[8.0]	First Tox $8.00/unit* *minimum 20 Units
+1426	discount_price 不在文本中	dp=180, 文本金额=[9.0]	Tox Regulars $9.00/unit* *minimum 20 Units
+1429	discount_price 不在文本中	dp=600, 文本金额=[12.0]	50+ units | $12 per unit
+1430	price_model 疑似错误	model=total, dp=213 似为单价 (qty=50, 文本有 213 无 10650)	50 units of Tox = $12/unit, $600. Day of Tox 15% savings = $10.20/unit. Use bank
+1433	price_model 疑似错误	model=total, dp=360 似为单价 (qty=30, 文本有 360 无 10800)	Masseter (TMJ)/Face Slimming STARTS AT $360
+1436	discount_price 缺失 (有 rp)	rp=41	For a limited time and while supplies last, get $40 discount when you get 20 uni
+1437	discount_price 缺失 (有 rp)	rp=100	Year-End Special UPTO 75% OFF Tox
+1439	discount_price 缺失 (有 rp)	rp=100	The Essentials: 10% off Neurotoxins
+1440	discount_price 缺失 (有 rp)	rp=100	Members enjoy a significant 26% discount on all neurotoxin treatments—Botox, Xeo
+1442	discount_price 缺失 (有 rp)	rp=51	$50 off all other injectables (per syringe, vial, etc. – excludes Mini Lip)
+1444	discount_price 不在文本中	dp=2000, 文本金额=[400.0, 2.0]	Ultimate Collagen Boost Package with Sculptra - Buy 2, Get 1 Half Off - Savings of $400. Price $2,00
+1445	discount_price 不在文本中	dp=2400, 文本金额=[2.0, 500.0]	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduction, and Lip Rejuve
+1446	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+1448	discount_price 不在文本中	dp=2700, 文本金额=[2.0, 3.0]	Sculptra: Buy 3 get one Cheek Filler (Lyft or Contour) Free $2,700 ($3,500 Value)
+1449	discount_price 不在文本中	dp=2900, 文本金额=[2.0, 700.0]	Natural Glow Price $2,900. All-encompassing package includes targeted treatments for the jawline, ch
+1450	discount_price 不在文本中	dp=3150, 文本金额=[3.0]	4 Vial Package $3,150
+1451	discount_price 不在文本中	dp=3500, 文本金额=[3.0, 1.0]	The Better Than Ever Package Price $3,500. Includes targeted treatments for the jawline, cheeks, chi
+1452	discount_price 不在文本中	dp=719.67, 文本金额=[2.0]	PRF Package of 3 $2,159
+1453	discount_price 不在文本中	dp=800, 文本金额=[2.0]	Series of 3 | $2,400
+1453	discount_price 不在文本中	dp=800, 文本金额=[2.0]	Series of 3 | $2,400
+1454	discount_price 不在文本中	dp=833, 文本金额=[2.0]	3 PRF GEL injections 3 sessions $2,500.00
+1454	discount_price 不在文本中	dp=833, 文本金额=[2.0]	3 PRF GEL injections 3 sessions $2,500.00
+1455	discount_price 不在文本中	dp=900, 文本金额=[2.0]	PRF EzGel / Package of 3 $2,700
+1456	discount_price 缺失 (有 rp)	rp=151	Save $150 on a treatment of PRF Liquid or PRF Gel + Receive a FREE Microbiome Ey
+1458	discount_price 不在文本中	dp=766.67, 文本金额=[2300.0]	Package of 3 PRFM under eyes $2300
+1459	price_model 疑似错误	model=total, dp=825 似为单价 (qty=4, 文本有 825 无 3300)	PRFM Filler (yields 4 syringes) | $825
+1460	discount_price 不在文本中	dp=900, 文本金额=[2700.0]	Package of 3 PRFM gel $2700
+1464	item_unit_price outlier	iup=360, dp=720, qty=1, dp/qty=720.0000	Restylane | $800/syringe | $720/syringe
+1464	item_unit_price outlier	iup=360, dp=720, qty=1, dp/qty=720.0000	Restylane | $800/syringe | $720/syringe
+1465	discount_price 不在文本中	dp=519.9, 文本金额=[5.0]	Two FREE vials with the purchase of 8 vials for ONLY $5,199
+1466	discount_price 不在文本中	dp=666.67, 文本金额=[400.0]	LOU LOU Med Spa – Ultimate Collagen Boost Package with Sculptra – Buy 2, Get 1 Half Off – Savings of
+1466	discount_price 不在文本中	dp=666.67, 文本金额=[400.0]	LOU LOU Med Spa – Ultimate Collagen Boost Package with Sculptra – Buy 2, Get 1 Half Off – Savings of
+1467	discount_price 不在文本中	dp=699.5, 文本金额=[1.0]	Face Rejuvenation for ONLY $1,399 (2 vials)
+1468	discount_price 不在文本中	dp=749.75, 文本金额=[2.0]	Black Card Members Package Price: Package of 4+ vials $2,999
+1468	discount_price 不在文本中	dp=749.75, 文本金额=[2.0]	Black Card Members Package Price: Package of 4+ vials $2,999
+1469	item_unit_price outlier	iup=382.5, dp=765, qty=1, dp/qty=765.0000	Sculptra | $850/vial | $765/vial
+1469	item_unit_price outlier	iup=382.5, dp=765, qty=1, dp/qty=765.0000	Sculptra | $850/vial | $765/vial
+1470	discount_price 不在文本中	dp=787.5, 文本金额=[3.0]	Price: Package of 4+ vials $3,150.
+1470	item_unit_price outlier	iup=98.4375, dp=787.5, qty=4, dp/qty=196.8750	Price: Package of 4+ vials $3,150.
+1470	discount_price 不在文本中	dp=787.5, 文本金额=[3.0]	Price: Package of 4+ vials $3,150.
+1470	item_unit_price outlier	iup=98.4375, dp=787.5, qty=4, dp/qty=196.8750	Price: Package of 4+ vials $3,150.
+1471	item_unit_price outlier	iup=395.55, dp=791.1, qty=1, dp/qty=791.1000	Black Card Members Price: $791.10 per vial
+1471	item_unit_price outlier	iup=395.55, dp=791.1, qty=1, dp/qty=791.1000	Black Card Members Price: $791.10 per vial
+1472	discount_price 不在文本中	dp=799.5, 文本金额=[1.0]	Black Card Members Price: $1,599 for 2 vials
+1472	item_unit_price outlier	iup=199.875, dp=799.5, qty=2, dp/qty=399.7500	Black Card Members Price: $1,599 for 2 vials
+1472	discount_price 不在文本中	dp=799.5, 文本金额=[1.0]	Black Card Members Price: $1,599 for 2 vials
+1472	item_unit_price outlier	iup=199.875, dp=799.5, qty=2, dp/qty=399.7500	Black Card Members Price: $1,599 for 2 vials
+1473	discount_price 不在文本中	dp=800, 文本金额=[3.0]	4 Vials | $3,200
+1473	discount_price 不在文本中	dp=800, 文本金额=[3.0]	4 Vials | $3,200
+1474	discount_price 不在文本中	dp=825, 文本金额=[1.0]	2 Vials | $1,650
+1474	discount_price 不在文本中	dp=825, 文本金额=[1.0]	2 Vials | $1,650
+1475	discount_price 不在文本中	dp=1650, 文本金额=[1.0]	2 Vials in Same Session $1,650
+1475	item_unit_price outlier	iup=412.5, dp=1650, qty=2, dp/qty=825.0000	2 Vials in Same Session $1,650
+1475	discount_price 不在文本中	dp=1650, 文本金额=[1.0]	2 Vials in Same Session $1,650
+1475	item_unit_price outlier	iup=412.5, dp=1650, qty=2, dp/qty=825.0000	2 Vials in Same Session $1,650
+1476	discount_price 缺失 (有 rp)	rp=101	Dermal Fillers & Sculptra $100 off per syringe or vial
+1477	discount_price 缺失 (有 rp)	rp=100	10% of Dermal Fillers and Sculptra
+1481	discount_price 不在文本中	dp=350, 文本金额=[700.0, 100.0]	Enjoy two syringes at $700 ($100 savings)
+1482	price_model 疑似错误	model=total, dp=800 似为单价 (qty=2, 文本有 800 无 1600)	Skinvive $800/2 syringes
+1483	discount_price 缺失 (有 rp)	rp=101	SkinVive $100 off / treatment
+1487	item_unit_price outlier	iup=7, dp=14, qty=1, dp/qty=14.0000	XEOMIN $14
+1487	item_unit_price outlier	iup=7, dp=14, qty=1, dp/qty=14.0000	XEOMIN $14
+1489	discount_price 缺失 (有 rp)	rp=100	Members enjoy a significant 26% discount on all neurotoxin treatments—Botox, Xeo
+1490	regular_price 缺失 (有 dp)	dp=8	Botox at just $8 per unit, exclusively for new patients.
+1491	regular_price 缺失 (有 dp)	dp=8	BOTOX TREATMENT Starting at $8.00
+1493	regular_price 缺失 (有 dp)	dp=10	new injection clients— receive toxins at $10/unit during your first treatment at
+1494	regular_price 缺失 (有 dp)	dp=9	Botox $9/Unit
+1495	regular_price 缺失 (有 dp)	dp=9	Toxin Friday’s are officially HERE. Botox: $9/unit
+1497	regular_price 缺失 (有 dp)	dp=10	Typically, the cost of the service is $10 per unit, but the final price is deter
+1499	discount_price 不在文本中	dp=10, 文本金额=[200.0]	20units Botox $200
+1499	regular_price 缺失 (有 dp)	dp=10	20units Botox $200
+1500	regular_price 缺失 (有 dp)	dp=10	We also offer NEW CLIENT SPECIAL FOR BOTOX Cosmetic for $10/unit.
+1501	regular_price 缺失 (有 dp)	dp=10	Smooth out wrinkles with Botox at just $10/unit
+1502	regular_price 缺失 (有 dp)	dp=10.2	$10.20/unit Botox all year long
+1504	regular_price 缺失 (有 dp)	dp=11	$11 per unit Botox, Xeomin, Dysport & Letybo
+1505	regular_price 缺失 (有 dp)	dp=11	$11.00 Botox Unit
+1507	discount_price 不在文本中	dp=10.45, 文本金额=[209.0]	Purchase 20 units of Botox $209
+1507	regular_price 缺失 (有 dp)	dp=10.45	Purchase 20 units of Botox $209
+1508	regular_price 缺失 (有 dp)	dp=10.5	$10.50 Botox Unit
+1512	regular_price 缺失 (有 dp)	dp=11.5	$11.50 Botox Unit
+1513	discount_amount 错误	实际=1, 应为=0 (rp=14, dp=14)	The cost of Botox is currently $14 per unit. For the best pricing on our service
+1517	regular_price 缺失 (有 dp)	dp=15	Botox | $15 / unit
+1519	discount_percent 错误	实际=33.3%, 应为=0.0% (rp=100, dp=100)	Buy $100 Allē gift card and get an additional $50, for a limited time starting 5
+1530	discount_price 不在文本中	dp=1200, 文本金额=[1.0]	Deltoid Botox AKA Arm Slimming: $1,200.00
+1531	discount_price 不在文本中	dp=1500, 文本金额=[1.0]	Botox for Migraine Relief $1,500.00
+1539	discount_price 不在文本中	dp=7.95, 文本金额=[159.0]	Botox / Letybo: 20 units $159 (min. 40)
+1539	regular_price 缺失 (有 dp)	dp=7.95	Botox / Letybo: 20 units $159 (min. 40)
+1546	regular_price 缺失 (有 dp)	dp=9	New Patient Daxxify Injections STARTS AT $9 PER UNIT
+1547	regular_price 缺失 (有 dp)	dp=15	Daxxify | $15 / unit
+1548	regular_price 缺失 (有 dp)	dp=12	Existing Patient Daxxify Injections STARTS AT $12 PER UNIT
+1550	regular_price 缺失 (有 dp)	dp=8	Daxxify Starting at $8.00
+1551	regular_price 缺失 (有 dp)	dp=9	All New Patients Receive $9 per Unit on Daxxify, Dysport, or Jeuveau during thei
+1551	regular_price 缺失 (有 dp)	dp=9	All New Patients Receive $9 per Unit on Daxxify, Dysport, or Jeuveau during thei
+1551	regular_price 缺失 (有 dp)	dp=9	All New Patients Receive $9 per Unit on Daxxify, Dysport, or Jeuveau during thei
+1552	discount_price 不在文本中	dp=10, 文本金额=[500.0]	50 Units of Daxxify $500
+1565	regular_price 缺失 (有 dp)	dp=499	Lip Filler ONLY $499
+1575	regular_price 缺失 (有 dp)	dp=375	$14/UNIT $375+ Dermal filler is an injectable cosmetic treatment that helps alle
+1578	item_unit_price outlier	iup=199.5, dp=399, qty=1, dp/qty=399.0000	Half Syringe for $399 + FREE Lip Flip
+1578	regular_price 缺失 (有 dp)	dp=399	Half Syringe for $399 + FREE Lip Flip
+1578	item_unit_price outlier	iup=199.5, dp=399, qty=1, dp/qty=399.0000	Half Syringe for $399 + FREE Lip Flip
+1578	regular_price 缺失 (有 dp)	dp=399	Half Syringe for $399 + FREE Lip Flip
+1581	regular_price 缺失 (有 dp)	dp=350	Dermal Fillers Starting at $350
+1596	discount_price 不在文本中	dp=1300, 文本金额=[1.0]	Cheek Filler Starts at $1,300 + Dermal filler is employed to elevate and sculpt the contours of the
+1597	discount_price 不在文本中	dp=1000, 文本金额=[1.0]	Under Eye Filler: Price starts at $1,000 +
+1603	discount_price 不在文本中	dp=1300, 文本金额=[1.0]	Cheek Filler: Starts at $1,300 +
+1605	discount_price 不在文本中	dp=1650, 文本金额=[1.0]	JAW LINES $1,650 each treatment
+1608	discount_price 不在文本中	dp=1650, 文本金额=[1.0]	Featured Offer: Under Eyes & Cheeks Combo $1,650 per treatment
+1608	regular_price 缺失 (有 dp)	dp=1650	Featured Offer: Under Eyes & Cheeks Combo $1,650 per treatment
+1619	regular_price 缺失 (有 dp)	dp=3.72	Members Price: $3.72 per unit
+1620	regular_price 缺失 (有 dp)	dp=3.6	TLC Black Card: 20% off Botox / Dysport ($3.60/unit Dysport)
+1624	regular_price 缺失 (有 dp)	dp=4.04	Membership Pricing $4.04 per unit. Discounted rate available exclusively for act
+1627	regular_price 缺失 (有 dp)	dp=3.7	Dysport $ 3.70 Per Unit
+1628	regular_price 缺失 (有 dp)	dp=10.5	$10.50 Dysport Unit
+1629	regular_price 缺失 (有 dp)	dp=11.5	$11.50 Dysport Unit
+1630	regular_price 缺失 (有 dp)	dp=4.66	Price: $4.66 per unit (60 unit minimum)
+1631	regular_price 缺失 (有 dp)	dp=4.3	Purchase Dysport $4.30 per unit
+1632	regular_price 缺失 (有 dp)	dp=10	$10.00 Dysport Unit
+1644	discount_price 不在文本中	dp=1000, 文本金额=[1.0]	Large Area Hylenex $1,000
+1645	regular_price 缺失 (有 dp)	dp=14	Dysport | $14 / unit
+1650	regular_price 缺失 (有 dp)	dp=8	100 Units of Jeuveau for $8/unit = $800
+1651	regular_price 缺失 (有 dp)	dp=8.5	60 Units of Jeuveau for $8.50/unit = $510
+1652	regular_price 缺失 (有 dp)	dp=8	New Patients $8.00 minimum 30 units
+1653	regular_price 缺失 (有 dp)	dp=9	40 Units of Jeuveau for $9.00/unit = $360
+1658	regular_price 缺失 (有 dp)	dp=10	$10/unit Jeuveau tox
+1661	regular_price 缺失 (有 dp)	dp=9	Returning Patients $9.00 minimum 30 units
+1662	regular_price 缺失 (有 dp)	dp=13	Jeuveau | $13 / unit
+1663	discount_amount 错误	实际=1, 应为=0 (rp=12, dp=12)	The cost of Jeuveau is currently $12 per unit. For the best pricing on our servi
+1671	price_model 疑似错误	model=total, dp=789 似为单价 (qty=2, 文本有 789 无 1578)	Get rid of double chin with Kybella ONLY $789 (2 vials minimum) (REG. $980)
+1676	discount_price 不在文本中	dp=624.75, 文本金额=[2.0]	KYBELLA 4 Vials in Same Session $2,499
+1677	price_model 疑似错误	model=total, dp=2100 似为单价 (qty=4, 文本有 2100 无 8400)	4 vials of Kybella $2100
+1678	regular_price 缺失 (有 dp)	dp=9.5	Letybo: Smooth out dynamic wrinkles ($9.50/unit).
+1679	discount_price 不在文本中	dp=9, 文本金额=[360.0]	Purchase 40 unit of Letybo $360
+1679	regular_price 缺失 (有 dp)	dp=9	Purchase 40 unit of Letybo $360
+1683	item_unit_price outlier	iup=325, dp=650, qty=1, dp/qty=650.0000	Lip Filler + FREE Lip Flip — $650 ✨ $100 off filler ✨ Complimentary lip flip ✨ $
+1683	item_unit_price outlier	iup=325, dp=650, qty=1, dp/qty=650.0000	Lip Filler + FREE Lip Flip — $650 ✨ $100 off filler ✨ Complimentary lip flip ✨ $
+1690	regular_price 缺失 (有 dp)	dp=8	50 units of tox at $8/unit
+1691	regular_price 缺失 (有 dp)	dp=8	First Tox $8.00/unit* *minimum 20 Units
+1692	regular_price 缺失 (有 dp)	dp=9.99	NakedMD TOX Membership Regular price $9.99 Sale price Regular price $9.99
+1696	regular_price 缺失 (有 dp)	dp=150	The Refresh $150/month: 4 Full Correction Neurotoxin Treatments/Year (1 every 90
+1696	price_model 疑似错误	model=total, dp=150 似为单价 (qty=4, 文本有 150 无 600)	The Refresh $150/month: 4 Full Correction Neurotoxin Treatments/Year (1 every 90
+1696	regular_price 缺失 (有 dp)	dp=150	The Refresh $150/month: 4 Full Correction Neurotoxin Treatments/Year (1 every 90
+1696	price_model 疑似错误	model=total, dp=150 似为单价 (qty=60, 文本有 150 无 9000)	The Refresh $150/month: 4 Full Correction Neurotoxin Treatments/Year (1 every 90
+1698	regular_price 缺失 (有 dp)	dp=8.99	Enjoy our wrinkle relaxer injectables for only $8.99/unit with our special. Offe
+1699	regular_price 缺失 (有 dp)	dp=7	Neurotoxin $7 per unit
+1700	regular_price 缺失 (有 dp)	dp=9	Tox Membership $9/unit all year long
+1702	regular_price 缺失 (有 dp)	dp=12	Existing Patient tox STARTS AT $12 PER UNIT
+1704	regular_price 缺失 (有 dp)	dp=9	Tox Regulars $9.00/unit* *minimum 20 Units
+1705	regular_price 缺失 (有 dp)	dp=9	$9/unit all month
+1706	regular_price 缺失 (有 dp)	dp=50	Lip Flip $50
+1707	regular_price 缺失 (有 dp)	dp=9	New Patient tox Starts at $9 per unit
+1719	price_model 疑似错误	model=total, dp=360 似为单价 (qty=30, 文本有 360 无 10800)	Masseter (TMJ)/Face Slimming STARTS AT $360
+1727	discount_price 不在文本中	dp=1100, 文本金额=[1.0]	Price: from $1,100 with either product
+1729	discount_price 不在文本中	dp=1000, 文本金额=[1.0]	Hyperhidrosis Starts at $1,000
+1731	discount_price 不在文本中	dp=2400, 文本金额=[2.0, 500.0]	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduction, and Lip Rejuve
+1731	item_unit_price outlier	iup=800, dp=2400, qty=1, dp/qty=2400.0000	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduc
+1731	discount_price 不在文本中	dp=2400, 文本金额=[2.0, 500.0]	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduction, and Lip Rejuve
+1731	item_unit_price outlier	iup=800, dp=2400, qty=1, dp/qty=2400.0000	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduc
+1731	discount_price 不在文本中	dp=2400, 文本金额=[2.0, 500.0]	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduction, and Lip Rejuve
+1731	item_unit_price outlier	iup=800, dp=2400, qty=1, dp/qty=2400.0000	Youthful Essence Price $2,400. Includes Cheek Enhancement, Nasolabial Fold Reduc
+1732	discount_price 不在文本中	dp=3150, 文本金额=[3.0]	4 Vial Package $3,150
+1733	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+1733	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+1733	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+1735	discount_price 不在文本中	dp=2000, 文本金额=[400.0, 2.0]	Ultimate Collagen Boost Package with Sculptra - Buy 2, Get 1 Half Off - Savings of $400. Price $2,00
+1736	discount_price 不在文本中	dp=2700, 文本金额=[2.0, 3.0]	Sculptra: Buy 3 get one Cheek Filler (Lyft or Contour) Free $2,700 ($3,500 Value)
+1736	item_unit_price outlier	iup=675, dp=2700, qty=3, dp/qty=900.0000	Sculptra: Buy 3 get one Cheek Filler (Lyft or Contour) Free $2,700 ($3,500 Value
+1736	discount_price 不在文本中	dp=2700, 文本金额=[2.0, 3.0]	Sculptra: Buy 3 get one Cheek Filler (Lyft or Contour) Free $2,700 ($3,500 Value)
+1736	item_unit_price outlier	iup=675, dp=2700, qty=1, dp/qty=2700.0000	Sculptra: Buy 3 get one Cheek Filler (Lyft or Contour) Free $2,700 ($3,500 Value
+1738	discount_price 不在文本中	dp=2900, 文本金额=[2.0, 700.0]	Natural Glow Price $2,900. All-encompassing package includes targeted treatments for the jawline, ch
+1743	discount_price 不在文本中	dp=719.67, 文本金额=[2.0]	PRF Package of 3 $2,159
+1744	discount_price 不在文本中	dp=900, 文本金额=[2.0]	PRF EzGel / Package of 3 $2,700
+1747	discount_price 不在文本中	dp=3500, 文本金额=[3.0, 1.0]	The Better Than Ever Package Price $3,500. Includes targeted treatments for the jawline, cheeks, chi
+1747	discount_price 不在文本中	dp=3500, 文本金额=[3.0, 1.0]	The Better Than Ever Package Price $3,500. Includes targeted treatments for the jawline, cheeks, chi
+1750	regular_price 缺失 (有 dp)	dp=250	Platelet Rich Plasma Injection $250/Vial
+1752	discount_price 不在文本中	dp=766.67, 文本金额=[2300.0]	Package of 3 PRFM under eyes $2300
+1755	discount_price 不在文本中	dp=900, 文本金额=[2700.0]	Package of 3 PRFM gel $2700
+1758	discount_price 不在文本中	dp=1250, 文本金额=[1.0]	Sculptra Injectable | $1,250
+1761	price_model 疑似错误	model=total, dp=200 似为单价 (qty=2, 文本有 200 无 400)	Buy 2 vials of Sculptra, get a FREE ZO Growth Factor Serum ($200 value)
+1765	discount_price 不在文本中	dp=699.5, 文本金额=[1.0]	Face Rejuvenation for ONLY $1,399 (2 vials)
+1765	regular_price 缺失 (有 dp)	dp=699.5	Face Rejuvenation for ONLY $1,399 (2 vials)
+1766	discount_price 不在文本中	dp=519.9, 文本金额=[5.0]	Two FREE vials with the purchase of 8 vials for ONLY $5,199
+1766	regular_price 缺失 (有 dp)	dp=519.9	Two FREE vials with the purchase of 8 vials for ONLY $5,199
+1768	regular_price 缺失 (有 dp)	dp=8	Xeomin $8/Unit
+1771	price_model 疑似错误	model=total, dp=800 似为单价 (qty=2, 文本有 800 无 1600)	Skinvive $800/2 syringes
+1772	regular_price 缺失 (有 dp)	dp=9.5	$9.50/Unit Xeomin
+1781	discount_price 不在文本中	dp=350, 文本金额=[700.0, 100.0]	Enjoy two syringes at $700 ($100 savings)
+1783	regular_price 缺失 (有 dp)	dp=900	Sculptra® Injections Starting at $900 per treatment
+1793	discount_price 不在文本中	dp=6.85, 文本金额=[147.0, 137.0, 294.0, 274.0, 441.0, 411.0]	Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $441 $411. Deal ends
+1793	business_id 缺失		Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1793	regular_price 缺失 (有 dp)	dp=6.85	Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1793	活跃 offer 缺 promotion_id		Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1794	discount_price 不在文本中	dp=7.48, 文本金额=[299.0]	40 Units Botox! Limited Time Offer Only $299
+1794	business_id 缺失		40 Units Botox! Limited Time Offer Only $299
+1794	regular_price 缺失 (有 dp)	dp=7.48	40 Units Botox! Limited Time Offer Only $299
+1794	活跃 offer 缺 promotion_id		40 Units Botox! Limited Time Offer Only $299
+1795	discount_price 不在文本中	dp=7.98, 文本金额=[399.0]	50 Units Botox! Introductory Offer Only $399!
+1795	business_id 缺失		50 Units Botox! Introductory Offer Only $399!
+1795	regular_price 缺失 (有 dp)	dp=7.98	50 Units Botox! Introductory Offer Only $399!
+1795	活跃 offer 缺 promotion_id		50 Units Botox! Introductory Offer Only $399!
+1796	discount_price 不在文本中	dp=8.32, 文本金额=[499.0]	60 Units Botox! Introductory Offer Only $499!
+1796	business_id 缺失		60 Units Botox! Introductory Offer Only $499!
+1796	regular_price 缺失 (有 dp)	dp=8.32	60 Units Botox! Introductory Offer Only $499!
+1796	活跃 offer 缺 promotion_id		60 Units Botox! Introductory Offer Only $499!
+1797	business_id 缺失		Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1797	regular_price 缺失 (有 dp)	dp=137	Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1797	活跃 offer 缺 promotion_id		Botox® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units $
+1798	discount_price 不在文本中	dp=159, 文本金额=[240.0, 169.0, 8.45, 10.0]	20 Units of Botox $240 $169 $8.45 per unit Take $10 OFF using coupon code: PEACHLOVE
+1798	business_id 缺失		20 Units of Botox $240 $169 $8.45 per unit Take $10 OFF using coupon code: PEACH
+1798	regular_price 缺失 (有 dp)	dp=159	20 Units of Botox $240 $169 $8.45 per unit Take $10 OFF using coupon code: PEACH
+1798	活跃 offer 缺 promotion_id		20 Units of Botox $240 $169 $8.45 per unit Take $10 OFF using coupon code: PEACH
+1799	business_id 缺失		The cost for BOTOX in Arizona ranges from about $300 to $500 per treatment
+1799	regular_price 缺失 (有 dp)	dp=300	The cost for BOTOX in Arizona ranges from about $300 to $500 per treatment
+1799	活跃 offer 缺 promotion_id		The cost for BOTOX in Arizona ranges from about $300 to $500 per treatment
+1800	business_id 缺失		For a limited time Avant Dermatology & Aesthetics is offering $50 off 20 units o
+1800	活跃 offer 缺 promotion_id		For a limited time Avant Dermatology & Aesthetics is offering $50 off 20 units o
+1801	business_id 缺失		Evolysse® — 1.0 ml. 1.0 ml syringe $500 $295.
+1801	regular_price 缺失 (有 dp)	dp=295	Evolysse® — 1.0 ml. 1.0 ml syringe $500 $295.
+1801	活跃 offer 缺 promotion_id		Evolysse® — 1.0 ml. 1.0 ml syringe $500 $295.
+1802	business_id 缺失		Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1802	regular_price 缺失 (有 dp)	dp=325	Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1802	活跃 offer 缺 promotion_id		Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1803	business_id 缺失		For a limited time Avant Dermatology & Aesthetics is offering $75 off lip filler
+1803	活跃 offer 缺 promotion_id		For a limited time Avant Dermatology & Aesthetics is offering $75 off lip filler
+1804	business_id 缺失		Get your Dysport refresh for just $10.50/unit! To lock in this rate, we’re offer
+1804	regular_price 缺失 (有 dp)	dp=10.5	Get your Dysport refresh for just $10.50/unit! To lock in this rate, we’re offer
+1804	活跃 offer 缺 promotion_id		Get your Dysport refresh for just $10.50/unit! To lock in this rate, we’re offer
+1805	discount_price 不在文本中	dp=653.33, 文本金额=[980.0]	buy 2 syringes of Juvederm (Volbella, Volux, Voluma, Juvederm Ultra) and get 1 FREE (up to $980 valu
+1805	business_id 缺失		buy 2 syringes of Juvederm (Volbella, Volux, Voluma, Juvederm Ultra) and get 1 F
+1805	regular_price 缺失 (有 dp)	dp=653.33	buy 2 syringes of Juvederm (Volbella, Volux, Voluma, Juvederm Ultra) and get 1 F
+1805	活跃 offer 缺 promotion_id		buy 2 syringes of Juvederm (Volbella, Volux, Voluma, Juvederm Ultra) and get 1 F
+1807	business_id 缺失		Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1807	regular_price 缺失 (有 dp)	dp=325	Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1807	活跃 offer 缺 promotion_id		Versa® — 1.2 ml. 1.2 ml syringe $500 $325. Deal ends 5/15
+1808	business_id 缺失		Xeomin® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units
+1808	regular_price 缺失 (有 dp)	dp=137	Xeomin® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units
+1808	活跃 offer 缺 promotion_id		Xeomin® — 20, 40, or 60 units. 20 units $147 $137. 40 units $294 $274. 60 units
+1809	discount_price 不在文本中	dp=139, 文本金额=[240.0, 159.0, 7.95, 20.0]	20 Units of Xeomin $240 $159 $7.95 per unit Take $20 OFF using coupon code: PEACHPICK
+1809	business_id 缺失		20 Units of Xeomin $240 $159 $7.95 per unit Take $20 OFF using coupon code: PEAC
+1809	regular_price 缺失 (有 dp)	dp=139	20 Units of Xeomin $240 $159 $7.95 per unit Take $20 OFF using coupon code: PEAC
+1809	活跃 offer 缺 promotion_id		20 Units of Xeomin $240 $159 $7.95 per unit Take $20 OFF using coupon code: PEAC
+1814	discount_price 不在文本中	dp=10, 文本金额=[12.0, 2.0]	Botox/Jeuveau - Doctor $12.00 per unit with 40 unit minimum Save $2.00 per unit off regular price
+1833	discount_price 不在文本中	dp=11.2, 文本金额=[3.6]	TLC Black Card: 20% off Botox / Dysport ($3.60/unit Dysport)
+1834	discount_price 不在文本中	dp=3.73, 文本金额=[3.6]	TLC Black Card: 20% off Botox / Dysport ($3.60/unit Dysport)
+1840	discount_price 不在文本中	dp=558, 文本金额=[12.0, 2.0]	Botox/Jeuveau - Doctor $12.00 per unit with 40 unit minimum Save $2.00 per unit off regular price
+1845	discount_price 不在文本中	dp=477.5, 文本金额=[9.5, 2.5]	Botox/Jeuveau - Staff $9.50 per unit with 40 unit minimum Save $2.50 per unit off regular price
+1872	discount_price 不在文本中	dp=4.1, 文本金额=[12.32, 3.96]	12% off Botox / Dysport ($12.32/unit Botox & $3.96/unit Dysport!)
+1916	discount_price 不在文本中	dp=10, 文本金额=[12.0, 2.0]	Botox/Jeuveau - Doctor $12.00 per unit with 40 unit minimum Save $2.00 per unit off regular price
+1973	discount_price 不在文本中	dp=380, 文本金额=[9.5, 2.5]	Botox/Jeuveau - Staff $9.50 per unit with 40 unit minimum Save $2.50 per unit off regular price
+1974	discount_price 不在文本中	dp=380, 文本金额=[9.5, 2.5]	Botox/Jeuveau - Staff $9.50 per unit with 40 unit minimum Save $2.50 per unit off regular price
+1998	regular_price 缺失 (有 dp)	dp=11.5	$11.50/u Dysport or Botox ($13/u for non-members)
+1999	regular_price 缺失 (有 dp)	dp=11.5	$11.50/u Dysport or Botox ($13/u for non-members)
+2000	regular_price 缺失 (有 dp)	dp=159	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2001	regular_price 缺失 (有 dp)	dp=159	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2002	discount_price 不在文本中	dp=460, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+2002	regular_price 缺失 (有 dp)	dp=460	New patients receive $100 off when they purchase 40 or more units of Botox or Dy
+2009	regular_price 缺失 (有 dp)	dp=10.5	$10.50/u Jeuveau, Letybo, or Xeomin ($12/u for non-members)
+2010	regular_price 缺失 (有 dp)	dp=10.5	$10.50/u Jeuveau, Letybo, or Xeomin ($12/u for non-members)
+2011	regular_price 缺失 (有 dp)	dp=10.5	$10.50/u Jeuveau, Letybo, or Xeomin ($12/u for non-members)
+2019	regular_price 缺失 (有 dp)	dp=10	$10/u Jeuveau, Letybo, or Xeomin ($12/u for non members)
+2020	regular_price 缺失 (有 dp)	dp=10	$10/u Jeuveau, Letybo, or Xeomin ($12/u for non members)
+2021	regular_price 缺失 (有 dp)	dp=10	$10/u Jeuveau, Letybo, or Xeomin ($12/u for non members)
+2025	regular_price 缺失 (有 dp)	dp=175	Brow Lift Botox® I Dysport®: $175 (lasts 3 6 months)
+2026	regular_price 缺失 (有 dp)	dp=175	Brow Lift Botox® I Dysport®: $175 (lasts 3 6 months)
+2027	regular_price 缺失 (有 dp)	dp=250	Glabellar Line (frown lines) Botox® I Dysport®: $250 (lasts 3 6 months)
+2028	regular_price 缺失 (有 dp)	dp=250	Glabellar Line (frown lines) Botox® I Dysport®: $250 (lasts 3 6 months)
+2029	regular_price 缺失 (有 dp)	dp=275	CROWS FEET Botox® I Dysport®: $275 (lasts 3 6 months)
+2030	regular_price 缺失 (有 dp)	dp=275	CROWS FEET Botox® I Dysport®: $275 (lasts 3 6 months)
+2031	regular_price 缺失 (有 dp)	dp=11	$11 per unit Botox, Xeomin, Dysport & Letybo
+2032	regular_price 缺失 (有 dp)	dp=11	$11 per unit Botox, Xeomin, Dysport & Letybo
+2033	regular_price 缺失 (有 dp)	dp=11	$11 per unit Botox, Xeomin, Dysport & Letybo
+2034	regular_price 缺失 (有 dp)	dp=11	$11 per unit Botox, Xeomin, Dysport & Letybo
+2035	regular_price 缺失 (有 dp)	dp=14	We offer tiered pricing based on the number of units purchased. Botox and Dyspor
+2036	regular_price 缺失 (有 dp)	dp=14	We offer tiered pricing based on the number of units purchased. Botox and Dyspor
+2037	regular_price 缺失 (有 dp)	dp=9	All New Patients Receive $9 per Unit on Daxxify, Dysport, or Jeuveau during thei
+2038	regular_price 缺失 (有 dp)	dp=9	All New Patients Receive $9 per Unit on Daxxify, Dysport, or Jeuveau during thei
+2041	discount_price 不在文本中	dp=7.95, 文本金额=[159.0]	Botox / Letybo: 20 units $159 (min. 40)
+2041	regular_price 缺失 (有 dp)	dp=7.95	Botox / Letybo: 20 units $159 (min. 40)
+2042	regular_price 缺失 (有 dp)	dp=14	We offer tiered pricing based on the number of units purchased. Botox and Dyspor
+2043	regular_price 缺失 (有 dp)	dp=14	We offer tiered pricing based on the number of units purchased. Botox and Dyspor
+2058	discount_price 不在文本中	dp=240, 文本金额=[12.0, 20.0]	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit minimum. Choice of B
+2058	regular_price 缺失 (有 dp)	dp=240	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit
+2059	discount_price 不在文本中	dp=240, 文本金额=[12.0, 20.0]	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit minimum. Choice of B
+2059	regular_price 缺失 (有 dp)	dp=240	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit
+2060	discount_price 不在文本中	dp=240, 文本金额=[12.0, 20.0]	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit minimum. Choice of B
+2060	regular_price 缺失 (有 dp)	dp=240	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit
+2061	discount_price 不在文本中	dp=240, 文本金额=[12.0, 20.0]	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit minimum. Choice of B
+2061	regular_price 缺失 (有 dp)	dp=240	We are extending our member pricing on Botox $12/unit (regularly $20) | 20 unit
+2066	regular_price 缺失 (有 dp)	dp=7.5	Jeuveau is a modern neurotoxin similar to Botox and Xeomin. 50 units - $375 ($7.
+2067	regular_price 缺失 (有 dp)	dp=7.5	Jeuveau is a modern neurotoxin similar to Botox and Xeomin. 50 units - $375 ($7.
+2068	regular_price 缺失 (有 dp)	dp=7.5	Jeuveau is a modern neurotoxin similar to Botox and Xeomin. 50 units - $375 ($7.
+2074	discount_price 不在文本中	dp=460, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+2074	regular_price 缺失 (有 dp)	dp=460	New patients receive $100 off when they purchase 40 or more units of Botox or Dy
+2075	discount_price 不在文本中	dp=420, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+2077	regular_price 缺失 (有 dp)	dp=159	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2077	price_model 疑似错误	model=total, dp=159 似为单价 (qty=40, 文本有 159 无 6360)	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2078	regular_price 缺失 (有 dp)	dp=159	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2078	price_model 疑似错误	model=total, dp=159 似为单价 (qty=40, 文本有 159 无 6360)	NEW CLIENT SPECIAL: FIRST 20 UNITS OF BOTOX OR LETYBO $159. MINIMUM PURCHASE 40
+2085	discount_price 不在文本中	dp=420, 文本金额=[100.0]	New patients receive $100 off when they purchase 40 or more units of Botox or Dysport.
+2085	regular_price 缺失 (有 dp)	dp=420	New patients receive $100 off when they purchase 40 or more units of Botox or Dy
+2086	regular_price 缺失 (有 dp)	dp=13.98	Dysport price of $13.98 per unit also shown to show Botox equivalent pricing.
+2087	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+2087	regular_price 缺失 (有 dp)	dp=2499	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+2088	discount_price 不在文本中	dp=2499, 文本金额=[2.0]	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+2088	regular_price 缺失 (有 dp)	dp=2499	Luxe Lift $2,499 (3 vials of filler + 20u Botox or 60u Dysport)
+2089	活跃 offer 缺 promotion_id		10% off Neurotoxins
+2090	活跃 offer 缺 promotion_id		5% off Dermal Filler
+2244	活跃 offer 缺 promotion_id		10% off dermal fillers and Sculptra
+2245	活跃 offer 缺 promotion_id		10% Off Dermal Filler
+2246	活跃 offer 缺 promotion_id		$11/unit Botox (regularly $13.50/unit)
+2247	活跃 offer 缺 promotion_id		$11/equivalent dosing Dysport (regularly $13.50/unit)
+2248	discount_price 缺失 (有 rp)	rp=900	$75 OFF Each Syringe of Biostimulator (starts at $900+)
+2248	活跃 offer 缺 promotion_id		$75 OFF Each Syringe of Biostimulator (starts at $900+)
+2249	discount_price 缺失 (有 rp)	rp=450	SKIN QUALITY TREATMENTS – 15% OFF Chemical Peels (regularly $350) Microneedling
+2249	活跃 offer 缺 promotion_id		SKIN QUALITY TREATMENTS – 15% OFF Chemical Peels (regularly $350) Microneedling
+2250	活跃 offer 缺 promotion_id		$11/u Dysport or Botox ($13/u for non-members)
+2251	活跃 offer 缺 promotion_id		$10/u Jeuveau, Letybo, or Xeomin ($12/u for non-members)
+2252	活跃 offer 缺 promotion_id		$75 off all other injectables (per syringe, vial, etc. – excludes Mini Lip)
+2253	活跃 offer 缺 promotion_id		$11.50/unit Botox (regularly $13.50/unit)
+2254	活跃 offer 缺 promotion_id		$11.50/equivalent dosing Dysport (regularly $13.50/unit)
+2255	discount_price 缺失 (有 rp)	rp=900	$50 OFF Each Syringe of Biostimulator (starts at $900+)
+2255	活跃 offer 缺 promotion_id		$50 OFF Each Syringe of Biostimulator (starts at $900+)
+2256	discount_price 缺失 (有 rp)	rp=450	SkinVive (regularly $450)
+2256	活跃 offer 缺 promotion_id		SkinVive (regularly $450)
+2257	活跃 offer 缺 promotion_id		$11/u Dysport or Botox ($13/u for non-members)
+2258	活跃 offer 缺 promotion_id		$10/u Jeuveau, Letybo, or Xeomin ($12/u for non-members)
+2259	活跃 offer 缺 promotion_id		15% off all other aesthetic services (excludes Mini Lip)
+2260	活跃 offer 缺 promotion_id		15% off all services & products from day one
+2261	regular_price 缺失 (有 dp)	dp=9	VIP pricing: tox as low as $9/unit
+2261	活跃 offer 缺 promotion_id		VIP pricing: tox as low as $9/unit
+2262	活跃 offer 缺 promotion_id		15% off Neurotoxins
+2263	活跃 offer 缺 promotion_id		10% off Dermal Filler
+2264	regular_price 缺失 (有 dp)	dp=12	Botox at $12/unit
+2264	活跃 offer 缺 promotion_id		Botox at $12/unit
+2265	活跃 offer 缺 promotion_id		Up to 20% off select treatments incl. Results Driven Dermal Filler packages
+2266	regular_price 缺失 (有 dp)	dp=9	Member Botox pricing (approx. $9/unit)
+2266	活跃 offer 缺 promotion_id		Member Botox pricing (approx. $9/unit)
+2267	regular_price 缺失 (有 dp)	dp=13.5	Botox/Dysport $13.50/unit
+2267	活跃 offer 缺 promotion_id		Botox/Dysport $13.50/unit
+2268	regular_price 缺失 (有 dp)	dp=12.8	Botox/Dysport $12.80/unit
+2268	活跃 offer 缺 promotion_id		Botox/Dysport $12.80/unit
+2269	活跃 offer 缺 promotion_id		Save 10%-30% on top treatments. Applies to Fillers, Botox, PRF, Chemical Peels,
+2270	活跃 offer 缺 promotion_id		15% off all products and services every day
+2271	活跃 offer 缺 promotion_id		2 guest passes per year (guest receives 15% off all products and services)
+2272	regular_price 缺失 (有 dp)	dp=9	Exclusive Tox VIP Pricing (Jeuveau - $9.00/unit, Botox - $9.50/unit)
+2272	活跃 offer 缺 promotion_id		Exclusive Tox VIP Pricing (Jeuveau - $9.00/unit, Botox - $9.50/unit)
+2273	regular_price 缺失 (有 dp)	dp=6.99	TOX treatments at $6.99 per unit (Xeomin, Dysport, Letybo)
+2273	活跃 offer 缺 promotion_id		TOX treatments at $6.99 per unit (Xeomin, Dysport, Letybo)
+2274	regular_price 缺失 (有 dp)	dp=79	TOX specialty areas at $79 per area
+2274	活跃 offer 缺 promotion_id		TOX specialty areas at $79 per area
+2275	regular_price 缺失 (有 dp)	dp=279	Filler member pricing (e.g., Lip Filler Versa $279/syringe)
+2275	活跃 offer 缺 promotion_id		Filler member pricing (e.g., Lip Filler Versa $279/syringe)
+2276	活跃 offer 缺 promotion_id		$50 off Dermal Fillers
+2277	活跃 offer 缺 promotion_id		$1 off Botox or any neuromodulator
+2278	活跃 offer 缺 promotion_id		15% off services
+2279	活跃 offer 缺 promotion_id		20% off filler & biostimulators
+2280	regular_price 缺失 (有 dp)	dp=9	$9/unit on all neurotoxins (Botox, Dysport, Jeuveau, Daxxify, Xeomin)
+2280	活跃 offer 缺 promotion_id		$9/unit on all neurotoxins (Botox, Dysport, Jeuveau, Daxxify, Xeomin)
+2281	regular_price 缺失 (有 dp)	dp=10	$10/unit on neurotoxins
+2281	活跃 offer 缺 promotion_id		$10/unit on neurotoxins
+2282	活跃 offer 缺 promotion_id		10% off filler
+2283	regular_price 缺失 (有 dp)	dp=9	$9/unit on neurotoxins
+2283	活跃 offer 缺 promotion_id		$9/unit on neurotoxins
+2284	活跃 offer 缺 promotion_id		15% off filler
+2285	regular_price 缺失 (有 dp)	dp=11	$11 a unit Botox
+2285	活跃 offer 缺 promotion_id		$11 a unit Botox
+2286	活跃 offer 缺 promotion_id		$50 off a full syringe of filler
+2287	regular_price 缺失 (有 dp)	dp=11	$11 a unit Botox
+2287	活跃 offer 缺 promotion_id		$11 a unit Botox
+2288	活跃 offer 缺 promotion_id		$50 off a full syringe of filler
+2289	regular_price 缺失 (有 dp)	dp=11	$11 a unit Botox
+2289	活跃 offer 缺 promotion_id		$11 a unit Botox
+2290	活跃 offer 缺 promotion_id		$50 off a full syringe of filler
+2291	regular_price 缺失 (有 dp)	dp=11	$11 a unit Botox
+2291	活跃 offer 缺 promotion_id		$11 a unit Botox
+2292	活跃 offer 缺 promotion_id		$50 off a full syringe of filler
+2293	活跃 offer 缺 promotion_id		$50 OFF each syringe of Filler (unlimited use)
+2294	活跃 offer 缺 promotion_id		$75 OFF each syringe of Filler (unlimited use)
+2295	活跃 offer 缺 promotion_id		$100 OFF each syringe of Filler (unlimited use)
+2296	regular_price 缺失 (有 dp)	dp=9	$9 per unit on Botox/Dysport/Jeuveau/Daxxify & Xeomin
+2296	活跃 offer 缺 promotion_id		$9 per unit on Botox/Dysport/Jeuveau/Daxxify & Xeomin
+2297	regular_price 缺失 (有 dp)	dp=10	$10 per unit on Botox/Dysport/Jeuveau/Daxxify
+2297	活跃 offer 缺 promotion_id		$10 per unit on Botox/Dysport/Jeuveau/Daxxify
+2298	活跃 offer 缺 promotion_id		10% off filler
+2299	regular_price 缺失 (有 dp)	dp=9	$9 per unit on Botox/Dysport/Jeuveau/Daxxify
+2299	活跃 offer 缺 promotion_id		$9 per unit on Botox/Dysport/Jeuveau/Daxxify
+2300	活跃 offer 缺 promotion_id		15% off filler
+2301	活跃 offer 缺 promotion_id		15% off other products and services
+2302	regular_price 缺失 (有 dp)	dp=10.5	$10.50 per unit Botox
+2302	活跃 offer 缺 promotion_id		$10.50 per unit Botox
+2303	regular_price 缺失 (有 dp)	dp=4	$4 per unit Dysport
+2303	活跃 offer 缺 promotion_id		$4 per unit Dysport
+2304	活跃 offer 缺 promotion_id		$75 off filler
+2305	活跃 offer 缺 promotion_id		$75 off Sculptra or Radiesse
+2306	活跃 offer 缺 promotion_id		10% off injectables
+2307	活跃 offer 缺 promotion_id		Botox & Fillers 15% OFF
+2308	regular_price 缺失 (有 dp)	dp=10	Special Tox Pricing: $10/unit
+2308	活跃 offer 缺 promotion_id		Special Tox Pricing: $10/unit
+2309	活跃 offer 缺 promotion_id		$50 off filler treatments (per syringe)
+2310	regular_price 缺失 (有 dp)	dp=9	Special Tox Pricing: $9/unit
+2310	活跃 offer 缺 promotion_id		Special Tox Pricing: $9/unit
+2311	活跃 offer 缺 promotion_id		$100 off filler treatments (per syringe)
+2312	活跃 offer 缺 promotion_id		Neurotoxin $12 per unit with Mika and Ami (Reg. $13 per unit)
+2313	活跃 offer 缺 promotion_id		$13 per unit with Dr. Tsay (Reg. $14 per unit)
+2314	活跃 offer 缺 promotion_id		$100 off each syringe of filler
+2315	活跃 offer 缺 promotion_id		$11/unit of Botox (reg $12)
+2316	discount_price 缺失 (有 rp)	rp=120	10 UNITS of Birthday Botox ($120 value)
+2316	活跃 offer 缺 promotion_id		10 UNITS of Birthday Botox ($120 value)
+2317	活跃 offer 缺 promotion_id		$10/unit of Botox (reg $12)
+2318	discount_price 缺失 (有 rp)	rp=220	20 UNITS of Birthday Botox ($220 value)
+2318	活跃 offer 缺 promotion_id		20 UNITS of Birthday Botox ($220 value)
+2319	活跃 offer 缺 promotion_id		10% off all Services including Lasers & Fillers
+2320	活跃 offer 缺 promotion_id		$1 Off each unit of DAXXI or Xeomin
+2321	discount_price 缺失 (有 rp)	rp=2700	3 Upper Face Tox Areas 3 Times Per Year ($2,700 Value)
+2321	活跃 offer 缺 promotion_id		3 Upper Face Tox Areas 3 Times Per Year ($2,700 Value)
+2322	discount_price 缺失 (有 rp)	rp=150	1 Enhancement area + 10% Off Additional Tox Areas ($150 Value)
+2322	活跃 offer 缺 promotion_id		1 Enhancement area + 10% Off Additional Tox Areas ($150 Value)
+2323	discount_price 缺失 (有 rp)	rp=1000	1 Filler Boost or 1 Sculptra Vial (Up to $1,000 Value)
+2323	活跃 offer 缺 promotion_id		1 Filler Boost or 1 Sculptra Vial (Up to $1,000 Value)
+2324	活跃 offer 缺 promotion_id		Tox Treatments $1 off per unit
+2325	活跃 offer 缺 promotion_id		Dysport $0.50 off per unit
+2326	活跃 offer 缺 promotion_id		Injectables $50 off
+2327	活跃 offer 缺 promotion_id		Tox Treatments $2 off per unit
+2328	活跃 offer 缺 promotion_id		Dysport $1 off per unit
+2329	活跃 offer 缺 promotion_id		Injectables $100 off
+2330	活跃 offer 缺 promotion_id		15% off injectables
+2331	regular_price 缺失 (有 dp)	dp=10.99	Botox $10.99/unit
+2331	活跃 offer 缺 promotion_id		Botox $10.99/unit
+2332	regular_price 缺失 (有 dp)	dp=3.15	Dysport $3.15/unit
+2332	活跃 offer 缺 promotion_id		Dysport $3.15/unit
+2333	regular_price 缺失 (有 dp)	dp=14	$14/unit on Botox
+2333	活跃 offer 缺 promotion_id		$14/unit on Botox
+2334	regular_price 缺失 (有 dp)	dp=14	$14/unit on Botox
+2334	活跃 offer 缺 promotion_id		$14/unit on Botox
+2335	regular_price 缺失 (有 dp)	dp=14	$14/unit on Botox
+2335	活跃 offer 缺 promotion_id		$14/unit on Botox
+2336	活跃 offer 缺 promotion_id		25% Off Fillers
+2337	regular_price 缺失 (有 dp)	dp=14	$14/unit on Botox
+2337	活跃 offer 缺 promotion_id		$14/unit on Botox
+2338	活跃 offer 缺 promotion_id		25% Off Aesthetic Injectables
+2339	regular_price 缺失 (有 dp)	dp=14	$14/unit on Botox
+2339	活跃 offer 缺 promotion_id		$14/unit on Botox
+2340	活跃 offer 缺 promotion_id		25% Off Aesthetic Injectables
+2341	活跃 offer 缺 promotion_id		10% off Botox and $50 off all Dermal Fillers
+2342	活跃 offer 缺 promotion_id		Access to member-only pricing for Botox, Dysport, Xeomin, and Daxxify (Save $2 p
+2343	活跃 offer 缺 promotion_id		Access to member-only pricing (save $2 per unit)
+2344	活跃 offer 缺 promotion_id		$100 off any face filler during membership visit
+2345	活跃 offer 缺 promotion_id		$100 off all fillers, exosomes, and (2) SkinVive/Salmon DNA treatments
+2346	活跃 offer 缺 promotion_id		$100 off Skin Boosters (SkinVive, Exosomes, Salmon DNA)
+2347	活跃 offer 缺 promotion_id		$100 off any face filler during membership visit
+2348	活跃 offer 缺 promotion_id		15% savings on all neurotoxin treatments (Botox®, Dysport®, Daxxify®)
+2349	活跃 offer 缺 promotion_id		10% savings on dermal filler artistry
+2350	regular_price 缺失 (有 dp)	dp=11	Exclusive Injectable Pricing: Botox Cosmetic - $11/unit (40-unit minimum)
+2350	活跃 offer 缺 promotion_id		Exclusive Injectable Pricing: Botox Cosmetic - $11/unit (40-unit minimum)
+2351	regular_price 缺失 (有 dp)	dp=11	Exclusive Injectable Pricing: Dysport - $11/unit (40-unit minimum)
+2351	活跃 offer 缺 promotion_id		Exclusive Injectable Pricing: Dysport - $11/unit (40-unit minimum)
+2352	regular_price 缺失 (有 dp)	dp=9	Preferred Botox® pricing at $9 a unit
+2352	活跃 offer 缺 promotion_id		Preferred Botox® pricing at $9 a unit
+2353	regular_price 缺失 (有 dp)	dp=11	$11/unit Botox & Dysport
+2353	活跃 offer 缺 promotion_id		$11/unit Botox & Dysport
+2354	活跃 offer 缺 promotion_id		10% off all regular-priced services
+2355	regular_price 缺失 (有 dp)	dp=10	$10/unit Botox & Dysport
+2355	活跃 offer 缺 promotion_id		$10/unit Botox & Dysport
+2356	活跃 offer 缺 promotion_id		15% off all regular-priced services
+2357	活跃 offer 缺 promotion_id		15% off additional services and products
+2358	活跃 offer 缺 promotion_id		15% off additional services and products
+2359	活跃 offer 缺 promotion_id		$13/unit Botox (regularly $14/unit)
+2360	活跃 offer 缺 promotion_id		$13/unit Daxxify (regularly $14/unit)
+2361	活跃 offer 缺 promotion_id		$5/unit Dysport (regularly $5.50/unit)
+2362	活跃 offer 缺 promotion_id		$12/unit Botox (regularly $14/unit)
+2363	活跃 offer 缺 promotion_id		$12/unit Daxxify (regularly $14/unit)
+2364	活跃 offer 缺 promotion_id		$4.50/unit Dysport (regularly $5.50/unit)
+2365	discount_price 缺失 (有 rp)	rp=700	$50 OFF Each Syringe of Filler (starting at $700)
+2365	活跃 offer 缺 promotion_id		$50 OFF Each Syringe of Filler (starting at $700)
+2366	活跃 offer 缺 promotion_id		10% OFF Additional Injectables (SkinVive, Sculptra)
+2367	活跃 offer 缺 promotion_id		$11/unit Botox (regularly $14/unit)
+2368	活跃 offer 缺 promotion_id		$11/unit Daxxify (regularly $14/unit)
+2369	活跃 offer 缺 promotion_id		$4/unit Dysport (regularly $5.50/unit)
+2370	活跃 offer 缺 promotion_id		$75 OFF Each Syringe of Filler
+2371	活跃 offer 缺 promotion_id		15% OFF Additional Injectables (SkinVive, Sculptra)
+2372	活跃 offer 缺 promotion_id		10% OFF any regular priced injectable (Fillers, Sculptra, Radiesse, PCDC)
+2373	活跃 offer 缺 promotion_id		Botox $10.50/unit (reg. $12.50/unit)
+2374	活跃 offer 缺 promotion_id		Dysport $3.75/unit (reg. $4.75/unit)
+2375	活跃 offer 缺 promotion_id		Xeomin $9/unit (reg. $11/unit)
+2376	regular_price 缺失 (有 dp)	dp=20	$20 neurotoxins rebook discount
+2376	活跃 offer 缺 promotion_id		$20 neurotoxins rebook discount

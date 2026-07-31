@@ -1,6 +1,7 @@
 """Tests for firecrawl_scrape_raw_db helpers."""
 from utils.firecrawl_scrape_raw_db import (
     canonical_scrape_url,
+    save_scrape_response,
     scrape_request_fingerprint,
     scrape_response_to_row_fields,
 )
@@ -43,6 +44,7 @@ def test_scrape_response_to_row_fields_api_envelope() -> None:
     assert row["metadata"]["title"] == "Hi"
     assert row["scrape_job_id"] == "job-1"
     assert row["credits_used"] == 2
+    assert row["response_json"]["id"] == "job-1"
 
 
 def test_scrape_response_to_row_fields_cli_body() -> None:
@@ -55,3 +57,22 @@ def test_scrape_response_to_row_fields_cli_body() -> None:
     )
     assert row["markdown"] == "body"
     assert row["metadata"]["sourceURL"] == "https://example.com/"
+
+
+def test_save_scrape_response_persists_complete_response_json() -> None:
+    class Client:
+        def fetch_rows(self, *_args, **_kwargs):
+            return []
+
+        def insert_rows(self, _table, rows):
+            return [{"id": 42, **rows[0]}]
+
+    response = {"success": True, "id": "job-1", "data": {"markdown": "# hi"}}
+    rows = save_scrape_response(
+        Client(),
+        scrape_request_fingerprint("https://example.com/specials"),
+        "https://example.com/specials",
+        response,
+    )
+
+    assert rows[0]["response_json"] == response

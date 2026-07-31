@@ -34,6 +34,20 @@ class _FakeEngine:
         self.extract_calls += 1
         return _ExtractResult()
 
+    async def search(self, query: str, *, strategy: str, top_k: int):
+        section = type(
+            "Section",
+            (),
+            {
+                "source_id": "source-1",
+                "chunk_id": "chunk-1",
+                "score": 0.9,
+                "heading": "Pricing",
+                "content": "Botox is $12 per unit.",
+            },
+        )()
+        return type("SearchResult", (), {"sections": [section]})()
+
 
 def test_build_engine_config_honors_explicit_model_overrides(monkeypatch):
     monkeypatch.setenv("SAG_LLM_API_KEY", "test-key")
@@ -73,6 +87,25 @@ def test_ingest_batch_extracts_each_page(tmp_path: Path):
     assert fake.extract_calls == 2
     assert len(fake.ingested_paths) == 2
     assert all(path.suffix == ".md" for path in fake.ingested_paths)
+
+
+def test_search_preserves_provenance_fields(tmp_path: Path):
+    engine = SagKnowledgeEngine(data_dir=tmp_path / "index", auto_extract=False)
+    engine._data_dir.mkdir(parents=True)
+    engine._engine = _FakeEngine()
+    engine._started = True
+
+    sections = asyncio.run(engine.search("Botox", strategy="multi", top_k=5))
+
+    assert sections == [
+        {
+            "source_id": "source-1",
+            "chunk_id": "chunk-1",
+            "score": 0.9,
+            "heading": "Pricing",
+            "content": "Botox is $12 per unit.",
+        }
+    ]
 
 
 @pytest.mark.skipif(
