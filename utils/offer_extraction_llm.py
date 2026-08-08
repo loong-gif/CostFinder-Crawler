@@ -3,6 +3,7 @@ LLM-driven offer extraction helpers.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -352,6 +353,64 @@ class GeminiNativeClient:
                 "Content-Type": "application/json",
                 "x-goog-api-key": self.api_key,
             },
+            json=body,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            raise RuntimeError("Gemini response missing candidates")
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+        if not text.strip():
+            raise RuntimeError("Gemini response missing text")
+        return parse_json_payload(text, {})
+
+    def create_json_response_with_image(
+        self,
+        prompt: str,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        json_schema: Optional[Dict[str, Any]] = None,
+        system_instruction: str = "",
+    ) -> Dict[str, Any]:
+        """Return structured Gemini output grounded in one inline image.
+
+        Callers must still validate the returned text against their own evidence
+        policy; this method only transports a bounded image to Gemini.
+        """
+        if not image_bytes:
+            raise ValueError("image_bytes must not be empty")
+        if not str(mime_type or "").startswith("image/"):
+            raise ValueError("mime_type must be an image MIME type")
+        generation_config: Dict[str, Any] = {"responseMimeType": "application/json"}
+        if json_schema:
+            generation_config["responseJsonSchema"] = _schema_for_gemini(json_schema)
+        if not self._is_reasoning_model():
+            generation_config["temperature"] = 0
+
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+        body: Dict[str, Any] = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"inline_data": {"mime_type": mime_type, "data": image_data}},
+                        {"text": str(prompt or "")},
+                    ],
+                }
+            ],
+            "generationConfig": generation_config,
+        }
+        if system_instruction.strip():
+            body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
+
+        model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
+        response = requests.post(
+            f"{self.base_url}/{model_path}:generateContent",
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             json=body,
             timeout=self.timeout,
         )

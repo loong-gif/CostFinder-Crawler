@@ -30,10 +30,21 @@ def canonical_scrape_url(url: str) -> str:
     return urlunparse((parsed.scheme.lower() or "https", host, path, "", "", ""))
 
 
+def _fingerprint_format(value: Any) -> str:
+    """Return a stable representation for a Firecrawl format configuration."""
+    if isinstance(value, str):
+        return value.strip()
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    raise TypeError(f"unsupported Firecrawl format: {type(value).__name__}")
+
+
 def scrape_request_fingerprint(
     url: str,
     *,
-    formats: Sequence[str] | None = None,
+    formats: Sequence[Any] | None = None,
     only_main_content: bool = True,
     block_ads: bool = True,
 ) -> str:
@@ -41,7 +52,11 @@ def scrape_request_fingerprint(
     canonical = canonical_scrape_url(url)
     if not canonical:
         raise ValueError("url is required")
-    fmt = sorted(f.strip() for f in (formats or DEFAULT_SCRAPE_FORMATS) if str(f).strip())
+    fmt = sorted(
+        rendered
+        for rendered in (_fingerprint_format(item) for item in (formats or DEFAULT_SCRAPE_FORMATS))
+        if rendered
+    )
     payload = {
         "url": canonical,
         "formats": fmt,
