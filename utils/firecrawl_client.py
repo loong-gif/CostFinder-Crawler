@@ -113,7 +113,6 @@ def get_firecrawl_client(*, project_root: Path | None = None):
     )
 
 
-
 def get_firecrawl_cloud_client(*, project_root: Path | None = None):
     """Initialize Firecrawl Cloud without inheriting a self-hosted API URL."""
     load_firecrawl_env(project_root)

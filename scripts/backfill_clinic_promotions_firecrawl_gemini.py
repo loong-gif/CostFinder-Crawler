@@ -40,8 +40,6 @@ SCREENSHOT_FORMAT = ScreenshotFormat(
     quality=80,
 )
 SCRAPE_FORMATS: tuple[Any, ...] = ("markdown", "links", SCREENSHOT_FORMAT)
-# ponytail: fingerprint uses string tokens; SDK ScreenshotFormat is not str()-stable
-FINGERPRINT_FORMATS: tuple[str, ...] = ("markdown", "links", "screenshot@fullPage")
 TARGET_SELECT = "promotion_id,business_id,source_url,promotion_content,scrape_id"
 LINKED_RAW_SELECT = "id,success,markdown,markdown_ocr,metadata,screenshot"
 _PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
@@ -122,7 +120,7 @@ def _persist_raw_and_link(
     error_message: str | None,
 ) -> int:
     source_url = str(target.get("source_url") or "").strip()
-    fingerprint = scrape_request_fingerprint(source_url, formats=FINGERPRINT_FORMATS)
+    fingerprint = scrape_request_fingerprint(source_url, formats=SCRAPE_FORMATS)
     rows = save_scrape_response(
         db,
         fingerprint,
