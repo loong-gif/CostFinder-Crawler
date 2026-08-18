@@ -57,25 +57,45 @@ def _download_image(url: str, *, session: requests.Session | None = None) -> byt
     return resp.content
 
 
-def _ocr_lines(image_bytes: bytes, *, ocr_engine: object | None = None) -> list[str]:
+def _make_engine() -> object:
     from paddleocr import PaddleOCR
 
-    engine = ocr_engine or PaddleOCR(lang="en")
-    with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as tmp:
+    try:  # paddleocr 3.x: doc-*/mkldnn kwargs (mkldnn off = PIR bug workaround)
+        return PaddleOCR(
+            lang="en",
+            enable_mkldnn=False,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+    except TypeError:  # paddleocr 2.x: no doc-* kwargs
+        return PaddleOCR(lang="en")
+
+
+def _ocr_lines(image_bytes: bytes, *, ocr_engine: object | None = None) -> list[str]:
+    engine = ocr_engine or _make_engine()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp.write(image_bytes)
         path = tmp.name
     try:
-        result = engine.ocr(path)
+        if hasattr(engine, "predict"):  # paddleocr 3.x: predict() -> rec_texts
+            result = engine.predict(path)
+            lines = []
+            for r in result or []:
+                txts = r.get("rec_texts") if isinstance(r, dict) else getattr(r, "rec_texts", None)
+                lines.extend(txts or [])
+        else:  # paddleocr 2.x: ocr() -> [[box, (text, conf)], ...]
+            result = engine.ocr(path)
+            lines = []
+            for block in result or []:
+                for item in block or []:
+                    if not item or len(item) < 2:
+                        continue
+                    text = str(item[1][0] or "").strip()
+                    if text:
+                        lines.append(text)
     finally:
         Path(path).unlink(missing_ok=True)
-    lines: list[str] = []
-    for block in result or []:
-        for item in block or []:
-            if not item or len(item) < 2:
-                continue
-            text = str(item[1][0] or "").strip()
-            if text:
-                lines.append(text)
     return lines
 
 
@@ -90,9 +110,7 @@ def build_markdown_ocr(image_urls: Sequence[str], *, ocr_engine: object | None =
         try:
             data = _download_image(url, session=session)
             if engine is None:
-                from paddleocr import PaddleOCR
-
-                engine = PaddleOCR(lang="en")
+                engine = _make_engine()
             lines = _ocr_lines(data, ocr_engine=engine)
         except Exception as exc:  # noqa: BLE001
             meta.append({"url": url, "file": name, "error": str(exc)})
