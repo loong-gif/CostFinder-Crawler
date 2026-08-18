@@ -1216,12 +1216,15 @@ def run(
                 continue
             # Check if items exist
             _existing = client.fetch_rows(
-                "promo_offer_items", "offer_item_id",
+                "promo_offer_items", "offer_item_id,service_id",
                 filters={"offer_id": f"eq.{_oid}"},
                 limit=1,
             )
-            if _existing:
+            if _existing and _existing[0].get("service_id") is not None:
                 continue
+            # Delete stale items with null service_id, then re-insert
+            if _existing:
+                client.delete_rows("promo_offer_items", {"offer_id": f"eq.{_oid}"})
             # Find a service for this business
             _svcs = client.fetch_rows(
                 "clinic_services", "service_id",

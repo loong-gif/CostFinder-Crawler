@@ -229,7 +229,17 @@ def persist_promo_offer(
         items=items,
         fallback_text=str(offer.get("offer_raw_text") or ""),
     )
-    upsert_offer_items(client, offer_id, linked_items)
+    try:
+        upsert_offer_items(client, offer_id, linked_items)
+    except Exception as exc:
+        return {
+            "accepted": True,
+            "action": "inserted_master_only",
+            "offer_id": offer_id,
+            "items": 0,
+            "items_error": str(exc),
+            "offer_fingerprint": fp,
+        }
     if seen_fingerprints is not None and fp:
         seen_fingerprints.add(fp)
     return {
@@ -297,13 +307,16 @@ def route_and_persist_extraction(
             stats["skipped"] += 1
 
     for item in pick_best_service_items(service_candidates, evidence, source_url=source_url):
-        write = persist_service_item(
-            client,
-            business_id=business_id,
-            item=item,
-            source_url=source_url,
-            evidence=evidence,
-        )
+        try:
+            write = persist_service_item(
+                client,
+                business_id=business_id,
+                item=item,
+                source_url=source_url,
+                evidence=evidence,
+            )
+        except Exception as exc:
+            write = {"accepted": False, "reason": f"persist_error:{exc}", "action": "skipped"}
         stats["service_writes"].append(write)
         if write.get("accepted") and write.get("service_id"):
             stats["services"] += 1

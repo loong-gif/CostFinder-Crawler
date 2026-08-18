@@ -34,20 +34,28 @@ def upsert_offer_items(
     now = datetime.now(timezone.utc).isoformat()
     rows: List[Dict[str, Any]] = []
     for item in items:
-        row: Dict[str, Any] = {
-            "offer_id": offer_id,
-            "created_at": now,
-            "updated_at": now,
-        }
-        if item.get("service_id") is not None:
-            row["service_id"] = item["service_id"]
-        if item.get("quantity") is not None:
-            row["quantity"] = item["quantity"]
-        if item.get("unit_price") is not None:
-            row["unit_price"] = item["unit_price"]
-        rows.append(row)
+        # PostgREST bulk insert requires identical keys on every object.
+        rows.append(
+            {
+                "offer_id": offer_id,
+                "service_id": item.get("service_id"),
+                "quantity": item.get("quantity"),
+                "unit_price": item.get("unit_price"),
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
     if not rows:
-        rows = [{"offer_id": offer_id, "created_at": now, "updated_at": now}]
+        rows = [
+            {
+                "offer_id": offer_id,
+                "service_id": None,
+                "quantity": None,
+                "unit_price": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ]
     return client.insert_rows(TABLE_PROMO_OFFER_ITEMS, rows)
 
 
