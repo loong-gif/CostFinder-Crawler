@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse, urlunparse
 
-import requests
 from dotenv import load_dotenv
-from utils.supabase_rest import get_supabase_writer_key
+from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 from firecrawl.v2.types import ScrapeOptions
 
 from config.settings import FIRECRAWL_CRAWL_MAX_PAGES, FIRECRAWL_CRAWL_TIMEOUT_SECS
@@ -53,73 +52,6 @@ class SyncTarget:
     name: str
     master_id: Optional[int]
     business_id: Optional[int]
-
-class SupabaseRestClient:
-    """Minimal Supabase PostgREST client for staging recrawl workflows."""
-
-    def __init__(self, base_url: str, service_role_key: str):
-        self.base_url = base_url.rstrip("/") + "/rest/v1"
-        self.service_role_key = service_role_key
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def fetch_rows(
-        self,
-        table: str,
-        select: str,
-        *,
-        filters: Optional[Dict[str, str]] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        order: Optional[str] = None) -> List[Dict[str, Any]]:
-        params: Dict[str, str] = {"select": select}
-        if filters:
-            params.update(filters)
-        if limit is not None:
-            params["limit"] = str(limit)
-        if offset is not None:
-            params["offset"] = str(offset)
-        if order:
-            params["order"] = order
-        response = self.session.get(f"{self.base_url}/{table}", params=params, timeout=60)
-        response.raise_for_status()
-        return response.json()
-
-    def update_row(self, table: str, filters: Dict[str, str], payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        response = self.session.patch(
-            f"{self.base_url}/{table}",
-            params=filters,
-            headers={"Prefer": "return=representation"},
-            json=payload,
-            timeout=60)
-        response.raise_for_status()
-        return response.json()
-
-    def insert_rows(self, table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        response = self.session.post(
-            f"{self.base_url}/{table}",
-            headers={"Prefer": "return=representation"},
-            json=rows,
-            timeout=60)
-        response.raise_for_status()
-        return response.json()
-
-    def upsert_rows(self, table: str, rows: List[Dict[str, Any]], *, on_conflict: str) -> List[Dict[str, Any]]:
-        response = self.session.post(
-            f"{self.base_url}/{table}",
-            params={"on_conflict": on_conflict},
-            headers={"Prefer": "resolution=merge-duplicates,return=representation"},
-            json=rows,
-            timeout=60)
-        response.raise_for_status()
-        return response.json()
 
 def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestClient:
     root = project_root or Path(__file__).resolve().parents[1]
