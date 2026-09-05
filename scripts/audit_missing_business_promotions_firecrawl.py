@@ -55,16 +55,6 @@ _EXPLICIT_PROMOTION_PATTERNS = (
     re.compile(r"\bbuy\b.{0,80}\bget\b.{0,40}\bfree\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"\bfree\b.{0,80}\b(?:with|when|purchase|buy)\b", re.IGNORECASE | re.DOTALL),
 )
-_TEMPORAL_PATTERN = re.compile(
-    r"\b(?:"
-    r"january|february|march|april|may|june|july|august|september|october|november|december|"
-    r"spring|summer|fall|autumn|winter|holiday|christmas|thanksgiving|halloween|"
-    r"valentine(?:'s)?|mother(?:'s)?\s+day|father(?:'s)?\s+day|labor\s+day|memorial\s+day|"
-    r"today|tonight|weekend|limited[- ]time|valid|expires?|through|thru|until|ends?"
-    r")\b",
-    re.IGNORECASE,
-)
-_YEAR_TEMPORAL_PATTERN = re.compile(r"(?<![$€£])\b(?:19|20)\d{2}\b")
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 
 
@@ -129,11 +119,6 @@ def activity_from_dates(
             "is_active": start <= current_day <= end,
             "date_review_required": False,
         }
-    temporal_evidence = str(evidence or "")
-    if _TEMPORAL_PATTERN.search(temporal_evidence) or _YEAR_TEMPORAL_PATTERN.search(
-        temporal_evidence
-    ):
-        return {"is_active": None, "date_review_required": True}
     return {"is_active": True, "date_review_required": False}
 
 
