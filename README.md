@@ -30,6 +30,14 @@ Configure `SUPABASE_URL` plus an appropriate server-side credential, along with 
 # Discover and persist normal service records from Firecrawl evidence
 python scripts/run_clinic_services_firecrawl.py --business_id 1001 --dry_run
 
+# Audit businesses missing clinic_promotions with self-hosted Firecrawl.
+# This writes only firecrawl_scrape_raw; clinic_promotions remains unchanged.
+python scripts/audit_missing_business_promotions_firecrawl.py --limit 3 --write-raw
+
+# When Supabase is connected through MCP, provide the live target snapshot on stdin.
+# Raw scrape rows are spooled locally for the MCP orchestrator to import and reconcile.
+python scripts/audit_missing_business_promotions_firecrawl.py --mcp-stdin --write-raw < mcp_business_targets.json
+
 # Search, scrape, extract, and persist a single business domain
 python scripts/run_domain_architecture_pipeline.py --domain example.com --apply
 
