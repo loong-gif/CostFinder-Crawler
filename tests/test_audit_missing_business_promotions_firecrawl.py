@@ -69,10 +69,10 @@ def test_activity_uses_an_inclusive_current_date_range() -> None:
     ) == {"is_active": False, "date_review_required": False}
 
 
-def test_activity_marks_incomplete_seasonal_dates_for_review() -> None:
+def test_activity_allows_promotions_without_dates() -> None:
     assert activity_from_dates(
         None, None, "Celebrate our Labor Day special", today=date(2026, 9, 5)
-    ) == {"is_active": None, "date_review_required": True}
+    ) == {"is_active": True, "date_review_required": False}
     assert activity_from_dates(
         None, "2026-09-30", "Valid through September 30, 2026", today=date(2026, 9, 5)
     ) == {"is_active": None, "date_review_required": True}
@@ -81,13 +81,13 @@ def test_activity_marks_incomplete_seasonal_dates_for_review() -> None:
     ) == {"is_active": True, "date_review_required": False}
 
 
-def test_activity_marks_year_only_campaign_for_review() -> None:
+def test_activity_allows_year_only_campaign_without_structured_dates() -> None:
     assert activity_from_dates(
         None,
         None,
         "Exclusive 2026 promotion: save $200 per month",
         today=date(2026, 9, 5),
-    ) == {"is_active": None, "date_review_required": True}
+    ) == {"is_active": True, "date_review_required": False}
 
 
 def test_assign_businesses_requires_unique_identity_on_shared_host() -> None:
@@ -262,7 +262,7 @@ def test_audit_classifies_scrape_and_gemini_failures_separately() -> None:
     assert gemini_results[0]["status"] == "gemini_failed"
 
 
-def test_audit_marks_shared_and_incomplete_date_results_for_review() -> None:
+def test_audit_marks_shared_results_unresolved_and_allows_undated_promotions() -> None:
     shared = [
         {"business_id": 11, "name": "North Spa", "city": "North", "website": "https://shared.example"},
         {"business_id": 12, "name": "South Spa", "city": "South", "website": "https://shared.example"},
@@ -297,8 +297,8 @@ def test_audit_marks_shared_and_incomplete_date_results_for_review() -> None:
         db=object(), firecrawl=Firecrawl(), gemini=Gemini(), targets=[shared[0]],
         all_businesses=[shared[0]], write_raw=False,
     )
-    assert dated[0]["status"] == "date_review_required"
-    assert dated[0]["promotions"][0]["is_active"] is None
+    assert dated[0]["status"] == "promotion_found"
+    assert dated[0]["promotions"][0]["is_active"] is True
 
 
 def test_audit_treats_nonexistent_fallback_pages_as_no_qualifying_promotion() -> None:
