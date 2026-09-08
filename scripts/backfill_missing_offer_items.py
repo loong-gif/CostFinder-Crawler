@@ -39,6 +39,10 @@ def sql_literal(value: Any) -> str:
 
 
 def quantity_from_text(text: str) -> int | None:
+    number_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+    word_match = re.search(r"\b(one|two|three|four|five)\s*(?:syringes?|vials?)\b", text, re.IGNORECASE)
+    if word_match:
+        return number_words[word_match.group(1).lower()]
     patterns = [
         r"\b(\d+)\s*(?:u\b|units?\b)",
         r"\b(\d+)\s*(?:syringes?\b|vials?\b)",
@@ -70,7 +74,10 @@ def explicit_names(text: str) -> set[str]:
         "prfm": "PRFM Injections",
     }
     result = {canonical for token, canonical in aliases.items() if re.search(rf"\b{re.escape(token)}\b", value)}
-    if re.search(r"\bdermal\s+filler\b", value) or re.search(r"\bfiller\s+treatment\b", value):
+    if (
+        re.search(r"\bdermal\s+filler\b", value)
+        or re.search(r"\bfiller(?:\s+treatment)?\b", value)
+    ):
         result.add("Dermal Filler")
     return result
 
@@ -81,7 +88,10 @@ def build_plan() -> dict[str, Any]:
     items = fetch_all_rows(client, "promo_offer_items", "offer_item_id,offer_id", order="offer_id.asc")
     services = fetch_all_rows(client, "clinic_services", SERVICE_SELECT, order="service_id.asc")
     existing_offer_ids = {int(row["offer_id"]) for row in items}
-    targets = [row for row in offers if row.get("regular_price") is None and int(row["id"]) not in existing_offer_ids]
+    targets = [
+        row for row in offers
+        if row.get("is_active") is True and int(row["id"]) not in existing_offer_ids
+    ]
     services_by_business: dict[int, list[dict[str, Any]]] = {}
     for service in services:
         services_by_business.setdefault(int(service["business_id"]), []).append(service)
@@ -110,7 +120,9 @@ def build_plan() -> dict[str, Any]:
         item_specs = [
             {"service_id": int(service["service_id"]), "quantity": quantity}
             for service in sorted(matches, key=lambda row: int(row["service_id"]))
-        ] or [{"service_id": None, "quantity": quantity}]
+        ]
+        if not item_specs:
+            continue
         planned.append(
             {
                 "offer_id": int(offer["id"]),
@@ -120,7 +132,7 @@ def build_plan() -> dict[str, Any]:
                 "match_names": sorted(names),
                 "matched_service_ids": [int(service["service_id"]) for service in matches],
                 "items": item_specs,
-                "resolution": "matched" if matches else "unresolved",
+                "resolution": "matched",
             }
         )
 
