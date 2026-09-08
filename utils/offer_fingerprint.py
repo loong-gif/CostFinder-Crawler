@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from typing import Any
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -53,7 +54,9 @@ def normalize_price(value: Any) -> str:
 
 
 def normalize_offer_raw_text(value: Any) -> str:
-    text = str(value or "").strip().lower()
+    text = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    text = re.sub(r"\$(\d[\d,]*)(?:\.0+)(?!\d)", r"$\1", text)
+    text = re.sub(r"[‐‑‒–—−]", "-", text)
     text = re.sub(r"\s+", " ", text)
     return text[:240]
 
@@ -66,6 +69,11 @@ def offer_fingerprint_key(
     regular_price: Any = None,
     discount_price: Any = None,
     offer_raw_text: str = "",
+    business_id: Any = None,
+    promotion_id: Any = None,
+    membership_plan_id: Any = None,
+    discount_percent: Any = None,
+    discount_amount: Any = None,
 ) -> str:
     return "|".join(
         [
@@ -75,6 +83,11 @@ def offer_fingerprint_key(
             normalize_price(regular_price),
             normalize_price(discount_price),
             normalize_offer_raw_text(offer_raw_text),
+            normalize_price(business_id),
+            normalize_price(promotion_id),
+            normalize_price(membership_plan_id),
+            normalize_price(discount_percent),
+            normalize_price(discount_amount),
         ]
     )
 
@@ -87,6 +100,11 @@ def compute_offer_fingerprint(
     regular_price: Any = None,
     discount_price: Any = None,
     offer_raw_text: str = "",
+    business_id: Any = None,
+    promotion_id: Any = None,
+    membership_plan_id: Any = None,
+    discount_percent: Any = None,
+    discount_amount: Any = None,
 ) -> str:
     key = offer_fingerprint_key(
         source_url=source_url,
@@ -95,5 +113,10 @@ def compute_offer_fingerprint(
         regular_price=regular_price,
         discount_price=discount_price,
         offer_raw_text=offer_raw_text,
+        business_id=business_id,
+        promotion_id=promotion_id,
+        membership_plan_id=membership_plan_id,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
     )
     return hashlib.sha1(key.encode("utf-8")).hexdigest()

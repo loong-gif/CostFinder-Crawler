@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Literal, Optional
 
 from utils.clinic_promotions_db import upsert_promotion
@@ -51,9 +52,14 @@ def route_offer(offer: dict[str, Any]) -> RouteKind:
 
 def infer_price_model(offer: dict[str, Any]) -> str:
     raw = str(offer.get("offer_raw_text") or "").lower()
-    if "/unit" in raw or "per unit" in raw:
+    # These signals describe the price semantics, not merely the presence of
+    # a quantity.  A phrase such as "2 syringes for $900" remains a total.
+    if re.search(
+        r"(?:/|per)\s*(?:unit|units|syringe|syringes|vial|vials|session|sessions|treatment|treatments)\b",
+        raw,
+    ):
         return "per_unit"
-    if "starting at" in raw or "from " in raw:
+    if re.search(r"\b(?:starting\s+at|starts?\s+(?:at|from)|from)\s+\$", raw):
         return "from"
     return "total"
 
@@ -105,6 +111,11 @@ def build_master_from_offer(
         regular_price=master.get("regular_price"),
         discount_price=master.get("discount_price"),
         offer_raw_text=raw_text,
+        business_id=business_id,
+        promotion_id=promotion_id,
+        membership_plan_id=membership_plan_id,
+        discount_percent=master.get("discount_percent"),
+        discount_amount=master.get("discount_amount"),
     )
     item_rows: list[dict[str, Any]] = []
     for raw in items_in:
@@ -211,6 +222,32 @@ def persist_promo_offer(
 ) -> dict[str, Any]:
     if route_offer(offer) != "promo":
         return {"accepted": False, "reason": exclude_reason(offer) or "not_promo", "action": "skipped"}
+
+    # Validate ownership and promotion lifecycle before writing anything.  A
+    # bad upstream link must be quarantined instead of becoming a cross-clinic
+    # offer or an active offer attached to an explicitly ended campaign.
+    promotion_rows = client.fetch_rows(
+        TABLE_CLINIC_PROMOTIONS,
+        "promotion_id,business_id,campaign_end_date",
+        filters={"promotion_id": f"eq.{promotion_id}"},
+        limit=1,
+    )
+    if promotion_rows:
+        promotion = promotion_rows[0]
+        if promotion.get("business_id") is not None and int(promotion["business_id"]) != int(business_id):
+            return {"accepted": False, "reason": "promotion_business_mismatch", "action": "quarantined"}
+        end_date = promotion.get("campaign_end_date")
+        if end_date and str(end_date) < datetime.now(timezone.utc).date().isoformat():
+            return {"accepted": False, "reason": "promotion_expired", "action": "quarantined"}
+    if membership_plan_id is not None:
+        membership_rows = client.fetch_rows(
+            TABLE_CLINIC_MEMBERSHIPS,
+            "plan_id,business_id",
+            filters={"plan_id": f"eq.{membership_plan_id}"},
+            limit=1,
+        )
+        if membership_rows and membership_rows[0].get("business_id") is not None and int(membership_rows[0]["business_id"]) != int(business_id):
+            return {"accepted": False, "reason": "membership_business_mismatch", "action": "quarantined"}
     master, items = build_master_from_offer(
         offer,
         business_id=business_id,
@@ -218,17 +255,27 @@ def persist_promo_offer(
         source_url=source_url,
         membership_plan_id=membership_plan_id,
     )
-    fp = str(master.get("offer_fingerprint") or "")
-    if seen_fingerprints is not None and fp and fp in seen_fingerprints:
-        return {"accepted": False, "reason": "duplicate_fingerprint", "action": "skipped", "offer_fingerprint": fp}
-    inserted = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [master])
-    offer_id = int(inserted[0]["id"])
     linked_items = attach_service_ids_to_items(
         client,
         business_id=business_id,
         items=items,
         fallback_text=str(offer.get("offer_raw_text") or ""),
     )
+    service_ids = [item.get("service_id") for item in linked_items if item.get("service_id") is not None]
+    if service_ids:
+        services = client.fetch_rows(
+            "clinic_services",
+            "service_id,business_id",
+            filters={"service_id": f"in.({','.join(str(int(value)) for value in service_ids)})"},
+            limit=len(service_ids),
+        )
+        if any(int(row["business_id"]) != int(business_id) for row in services if row.get("business_id") is not None):
+            return {"accepted": False, "reason": "service_business_mismatch", "action": "quarantined"}
+    fp = str(master.get("offer_fingerprint") or "")
+    if seen_fingerprints is not None and fp and fp in seen_fingerprints:
+        return {"accepted": False, "reason": "duplicate_fingerprint", "action": "skipped", "offer_fingerprint": fp}
+    inserted = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [master])
+    offer_id = int(inserted[0]["id"])
     upsert_offer_items(client, offer_id, linked_items)
     if seen_fingerprints is not None and fp:
         seen_fingerprints.add(fp)

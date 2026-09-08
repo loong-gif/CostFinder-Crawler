@@ -37,6 +37,7 @@ reports/
 *.log
 *.csv
 *.json
+!config/firecrawl_monitor_migration.json
 *.xlsx
 screenshots/
 

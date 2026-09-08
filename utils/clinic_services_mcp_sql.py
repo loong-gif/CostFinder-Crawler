@@ -35,16 +35,16 @@ def render_mcp_operations(operations: Iterable[dict[str, Any]]) -> str:
             + _sql_json(inserts)
             + """::jsonb) as r(
     business_id bigint, service_name text, service_name_raw text, regular_price numeric,
-    unit_type text, service_category text, service_area text, source_url text
+    unit_type text, service_category text, service_area text, source_url text, checked boolean
   )
 )
 insert into public.clinic_services (
   business_id, service_name, service_name_raw, regular_price, unit_type,
-  service_category, service_area, source_url, updated_at
+  service_category, service_area, source_url, "check", updated_at
 )
 select business_id, service_name, service_name_raw, regular_price,
   unit_type::public.unit_type_enum, service_category::public.service_category_enum,
-  service_area::public.service_area_enum, source_url, now()
+  service_area::public.service_area_enum, checked, now()
 from rows
 where not exists (
   select 1 from public.clinic_services c
@@ -59,7 +59,8 @@ where not exists (
             + _sql_json(updates)
             + """::jsonb) as r(
     service_id bigint, business_id bigint, service_name text, service_name_raw text,
-    regular_price numeric, unit_type text, service_category text, service_area text, source_url text
+    regular_price numeric, unit_type text, service_category text, service_area text, source_url text,
+    checked boolean
   )
 )
 update public.clinic_services c
@@ -71,6 +72,7 @@ set business_id = r.business_id,
     service_category = r.service_category::public.service_category_enum,
     service_area = r.service_area,
     source_url = r.source_url,
+    "check" = r.checked,
     updated_at = now()
 from rows r
 where c.service_id = r.service_id;"""
