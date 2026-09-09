@@ -1,0 +1,492 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-10T00:00:00Z",
+  "source": "firecrawl_cloud",
+  "destination_api_url": "http://72.52.161.65:3002",
+  "parallel_validation": true,
+  "send_notifications": false,
+  "baseline_mode": "local_rebaseline",
+  "monitors": {
+    "daily_01": {
+      "source_monitor_id": "019fe42b-7e30-731d-8a19-d2719377bf28",
+      "name": "costfinder_clinic_promotions_price_daily_01",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "id": "019fe42b-7e30-731d-8a19-ccc116a81895",
+          "type": "scrape",
+          "urls": [
+            "http://veritasmedispa.com/medi-spa-specials",
+            "https://acemedspa.com/promotions",
+            "https://acquablumedicalspa.com/blog/12-days-christmas-spa-la-la-specials",
+            "https://acquablumedicalspa.com/specials",
+            "https://advancedaesthetics.com/fall-specials",
+            "https://advancedaesthetics.com/specials",
+            "https://advancedaesthetics.com/specials-staging",
+            "https://alchemy43.com/specialty-services",
+            "https://alchemy43.com/specialty-services/special-event-prep",
+            "https://alchemyfacebar.com/pages/promos",
+            "https://amoderm.com/product/special-offers/sculpsure-buy-1-get-2nd-half",
+            "https://amoderm.com/special-offers",
+            "https://averebeauty.com/fall-promo",
+            "https://averebeauty.com/fall-promotion",
+            "https://averebeauty.com/post/questions-to-ask-before-first-laser-hair-removal-appointment-pittsburgh-especially-disliked-waxing",
+            "https://averebeauty.com/summer-promo",
+            "https://babyfacebeautywellness.com/promotion",
+            "https://balancedskin.com/specials",
+            "https://bbeautifulmedspa.com/specials",
+            "https://bbspamed.com/special-offers",
+            "https://beautyboostmedspa.com/current-promotion",
+            "https://beautybungalowsculpting.com/eon-laser-special-offer",
+            "https://beautybungalowsculpting.com/promos-page",
+            "https://beautybungalowsculpting.com/promos-page-discounted-ga",
+            "https://beautyfix.co/promos",
+            "https://beautysolutionsmedspa.com/monthly-specials",
+            "https://beautywithamission.com/pages/our-specials",
+            "https://beautywithbubbly.com/botox-special",
+            "https://beautywithbubbly.com/bring-a-friend-special-2",
+            "https://beautywithbubbly.com/diamondglow_special",
+            "https://beautywithbubbly.com/juvederm-filler-special",
+            "https://beautywithbubbly.com/laser-hair-special-2",
+            "https://beautywithbubbly.com/microneedling-special-2",
+            "https://belleamemedspa.com/november-specials",
+            "https://belleamemedspa.com/specials",
+            "https://belleroseaesthetics.net/promotions",
+            "https://belleviemedical.com/black-friday-specials",
+            "https://belleviemedical.com/monthly-special",
+            "https://belleviemedical.com/monthly-specials",
+            "https://belleviemedical.com/special",
+            "https://belleviemedical.com/special-offer",
+            "https://belleviemedical.com/specials/june-specials",
+            "https://belleviemedical.com/specials/may-special-2",
+            "https://belvisolashstudio.com/f/february-specials",
+            "https://bespokebeautyusa.com/promotions",
+            "https://bespokebeautyusa.com/specialties",
+            "https://biorevivespa.com/collections/special-offers-best-deals",
+            "https://biorevivespa.com/es/collections/special-offers-best-deals",
+            "https://biorevivespa.com/products/cool-peel-laser-treatment-for-face-399-promo-regular-800",
+            "https://biorevivespa.com/products/microneedling-exosome-promo-newport-beach"
+          ],
+          "scrapeOptions": {
+            "formats": [
+              {
+                "type": "changeTracking",
+                "modes": [
+                  "json"
+                ],
+                "prompt": "Extract promotion name, service or treatment, regular price, sale price, discount amount, discount percentage, package quantity, membership price, and expiration date. Preserve numeric values as numbers when possible and use null when absent.",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string"
+                    },
+                    "salePrice": {
+                      "type": "number"
+                    },
+                    "regularPrice": {
+                      "type": "number"
+                    },
+                    "promotionName": {
+                      "type": "string"
+                    },
+                    "discountAmount": {
+                      "type": "number"
+                    },
+                    "expirationDate": {
+                      "type": "string"
+                    },
+                    "discountPercent": {
+                      "type": "number"
+                    },
+                    "membershipPrice": {
+                      "type": "number"
+                    },
+                    "packageQuantity": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "goal": "Mark a change as meaningful only when an explicit monetary amount, price range, unit price, package quantity, membership price, regular price, original price, discounted price, discount amount, or discount percentage is added, removed, or changed. Ignore navigation, styling, and copy changes that are not tied to a price.",
+      "webhook": {
+        "url": "https://flows.brandrap.co/webhook/69ea77e7-eac0-456a-80b0-f72e39c1b63d",
+        "events": [
+          "monitor.page",
+          "monitor.check.completed"
+        ],
+        "headers": {},
+        "metadata": {}
+      },
+      "notification": {},
+      "retentionDays": 30,
+      "judgeEnabled": true
+    },
+    "daily_02": {
+      "source_monitor_id": "019fe42b-c318-717a-9726-8053fb885fc7",
+      "name": "costfinder_clinic_promotions_price_daily_02",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "id": "019fe42b-c318-717a-9726-7c5fc9e70876",
+          "type": "scrape",
+          "urls": [
+            "https://biorevivespa.com/products/promo-laser-hair-removal",
+            "https://bmedspa.com/special-occasions",
+            "https://bmedspa.com/specials",
+            "https://bouldermedicalcenter.com/specialty-care",
+            "https://boulderskinbar.com/resources/specials",
+            "https://calabasasdermcenter.com/about/specials",
+            "https://calabasasmedspa.com/patient-resources/specials",
+            "https://californiacosmetics.com/collections/current-specials",
+            "https://californiacosmetics.com/pages/current-specials",
+            "https://californiacosmetics.com/pages/eii-current-specials-12-days-of-christmas",
+            "https://californiacosmetics.com/pages/eii-specials-check-back-soon",
+            "https://californiacosmetics.com/pages/promotions",
+            "https://contouramedspa.com/pages/specials-memberships",
+            "https://danmillsmd.com/about/special-offers",
+            "https://dermanimedspa.com/fort-myers-fl/specials",
+            "https://drlaserla.com/product-category/monthly-promotions/first-time-customer-deals",
+            "https://excellatelier.com/specials",
+            "https://facesplus.com/about/specials",
+            "https://facesplus.com/about/specials/new-patient-special",
+            "https://fixmedspa.com/specials",
+            "https://genesismedlaser.com/specials",
+            "https://glowupmedspa.com/pages/monthly-specials",
+            "https://greenspringaesthetics.com/october-specials",
+            "https://greenspringaesthetics.com/specials",
+            "https://heavenlyplasticsurgery.com/specials",
+            "https://hkbeautylagunahills.com/promotion",
+            "https://ibeautyirvine.com/promotions",
+            "https://iconiquemedspa.com/shop/promotions",
+            "https://jtnaesthetics.com/collections/mothers-day-specials",
+            "https://jtnaesthetics.com/pages/mothers-day-specials",
+            "https://jtnaesthetics.com/pages/specials",
+            "https://jtnaesthetics.com/products/july-special-xeomin-100-units-copy",
+            "https://labelleoc.com/specials",
+            "https://labelleviemedspa.com/promo",
+            "https://laqueenmedspa.com/promotion",
+            "https://laqueenmedspa.com/year-end-specials",
+            "https://laserlightsc.com/specials",
+            "https://liquidbeauty.com/category/special-news",
+            "https://livaestheticsandwellness.com/pages/monthly-specials",
+            "https://longevityok.com/pages/specials-page",
+            "https://louloumedspa.com/monthly-specials",
+            "https://luxeroomcosmetic.com/botox-specials-denver-boulder",
+            "https://luxurymedicalspa.com/promotions.html",
+            "https://magnoliamedspaok.com/monthly-promo",
+            "https://med-laser-aesthetics.com/holiday-specials",
+            "https://med-laser-aesthetics.com/july-melasma-special",
+            "https://med-laser-aesthetics.com/laser-aesthetics-monthly-specials",
+            "https://med-laser-aesthetics.com/september-aesthetics-special",
+            "https://med-laser-aesthetics.com/specials",
+            "https://mybiospa.com/claim-special-offers"
+          ],
+          "scrapeOptions": {
+            "formats": [
+              {
+                "type": "changeTracking",
+                "modes": [
+                  "json"
+                ],
+                "prompt": "Extract promotion name, service or treatment, regular price, sale price, discount amount, discount percentage, package quantity, membership price, and expiration date. Preserve numeric values as numbers when possible and use null when absent.",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string"
+                    },
+                    "salePrice": {
+                      "type": "number"
+                    },
+                    "regularPrice": {
+                      "type": "number"
+                    },
+                    "promotionName": {
+                      "type": "string"
+                    },
+                    "discountAmount": {
+                      "type": "number"
+                    },
+                    "expirationDate": {
+                      "type": "string"
+                    },
+                    "discountPercent": {
+                      "type": "number"
+                    },
+                    "membershipPrice": {
+                      "type": "number"
+                    },
+                    "packageQuantity": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "goal": "Mark a change as meaningful only when an explicit monetary amount, price range, unit price, package quantity, membership price, regular price, original price, discounted price, discount amount, or discount percentage is added, removed, or changed. Ignore navigation, styling, and copy changes that are not tied to a price.",
+      "webhook": {
+        "url": "https://flows.brandrap.co/webhook/69ea77e7-eac0-456a-80b0-f72e39c1b63d",
+        "events": [
+          "monitor.page",
+          "monitor.check.completed"
+        ],
+        "headers": {},
+        "metadata": {}
+      },
+      "notification": {},
+      "retentionDays": 30,
+      "judgeEnabled": true
+    },
+    "daily_03": {
+      "source_monitor_id": "019fe430-8483-745d-9c5f-aa1521a7ddd0",
+      "name": "costfinder_clinic_promotions_price_daily_03",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "id": "019fe430-8483-745d-9c5f-a63980b31314",
+          "type": "scrape",
+          "urls": [
+            "https://mybiospa.com/claim-special-offers/thank-you",
+            "https://mybiospa.com/specials-events",
+            "https://mybiospa.com/specials-events/holiday-beauty-day",
+            "https://mybiospa.com/thank-you-specials",
+            "https://mybiospa.com/treatments/specialty-skin-rejuvenation/intraceuticals-oxygen",
+            "https://mybiospa.com/treatments/specialty-skin-rejuvenation/oxygen-facials",
+            "https://mybiospa.com/treatments/specialty-skin-rejuvenation/radiant-peel",
+            "https://myenve.com/alle-promos",
+            "https://newlookskincenter.com/monthly-specials",
+            "https://newlookskincenter.com/monthly-specials/",
+            "https://nobhillaesthetics.com/pages/specials",
+            "https://ocskincarecenter.com/pages/specials",
+            "https://omahapmc.com/specials",
+            "https://omahapmc.com/specials/black-diamond-botox-membership",
+            "https://omahapmc.com/specials/black-diamond-laser-membership",
+            "https://omahapmc.com/specials/laser-hair-removal-packages",
+            "https://omahapmc.com/specials/personal-shopper",
+            "https://omahapmc.com/specials/weight-loss-management-membership",
+            "https://pchmedspa.com/special-offer",
+            "https://pchmedspa.com/specials",
+            "https://pchmedspa.com/specials/boat-party-2023",
+            "https://pimaderm.com/specials",
+            "https://polishedbeautybar.com/specialists",
+            "https://radiancemedspalouisville.com/new-patient-specials",
+            "https://radiancemedspalouisville.com/promotions",
+            "https://radiancemedspalouisville.com/shop/black-friday-specials",
+            "https://radiancemedspalouisville.com/specials/botox-2",
+            "https://radiancemedspalouisville.com/specials/botox-for-men",
+            "https://radskinoc.com/promotions",
+            "https://radskinoc.com/specials",
+            "https://relivehendersonville.com/portfolio-category/specials",
+            "https://robertmarkley.com/specials",
+            "https://robertmarkley.com/specials/broadway-new-guest-offer",
+            "https://salonsbyjc.com/salons/shizen-japanese-facial-specialist",
+            "https://skinperfectmedical.com/contact-specials",
+            "https://skinperfectmedical.com/promotion",
+            "https://skinperfectmedical.com/promotions/costa-mesa-location/costa-mesa-promotions",
+            "https://skinperfectmedical.com/promotions/glendora-location/glendora-promotions",
+            "https://skinperfectmedical.com/promotions/lancaster-location/lancaster-promotions",
+            "https://skinperfectmedical.com/promotions/rancho-cucamonga-location/rancho-cucamonga-promotions",
+            "https://skinperfectmedical.com/promotions/west-hollywood-location/west-hollywood-promotions",
+            "https://skinperfectmedical.com/promotions/whittier-location/whittier-promotions",
+            "https://skinstudiookc.com/specials",
+            "https://skinzonemedical.com/specials",
+            "https://socalderm.org/announcements/cosmetic-promotion",
+            "https://socalderm.org/specials",
+            "https://spaclinic.net/promotions-events",
+            "https://sskplasticsurgery.com/specials",
+            "https://symmetrynorman.com/specials",
+            "https://thebeautyfixmedspa.com/specials"
+          ],
+          "scrapeOptions": {
+            "formats": [
+              {
+                "type": "changeTracking",
+                "modes": [
+                  "json"
+                ],
+                "prompt": "Extract promotion name, service or treatment, regular price, sale price, discount amount, discount percentage, package quantity, membership price, and expiration date. Preserve numeric values as numbers when possible and use null when absent.",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string"
+                    },
+                    "salePrice": {
+                      "type": "number"
+                    },
+                    "regularPrice": {
+                      "type": "number"
+                    },
+                    "promotionName": {
+                      "type": "string"
+                    },
+                    "discountAmount": {
+                      "type": "number"
+                    },
+                    "expirationDate": {
+                      "type": "string"
+                    },
+                    "discountPercent": {
+                      "type": "number"
+                    },
+                    "membershipPrice": {
+                      "type": "number"
+                    },
+                    "packageQuantity": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "goal": "Mark a change as meaningful only when an explicit monetary amount, price range, unit price, package quantity, membership price, regular price, original price, discounted price, discount amount, or discount percentage is added, removed, or changed. Ignore navigation, styling, and copy changes that are not tied to a price.",
+      "webhook": {
+        "url": "https://flows.brandrap.co/webhook/69ea77e7-eac0-456a-80b0-f72e39c1b63d",
+        "events": [
+          "monitor.page",
+          "monitor.check.completed"
+        ],
+        "headers": {},
+        "metadata": {}
+      },
+      "notification": {},
+      "retentionDays": 30,
+      "judgeEnabled": true
+    },
+    "daily_04": {
+      "source_monitor_id": "019fe430-a3b0-71a7-a706-ccb514f0f00d",
+      "name": "costfinder_clinic_promotions_price_daily_04",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "id": "019fe430-a3b0-71a7-a706-cbf8afe8fcfb",
+          "type": "scrape",
+          "urls": [
+            "https://thefixstudios.com/pages/botox-specials-cincinnati",
+            "https://themedspotla.com/special-offers",
+            "https://theoceanclinic.com/plastic-surgery-dermatology-office-newport-beach/special-offers",
+            "https://theskincentermd.com/about-us/specials-packages",
+            "https://thetreatmentroomokc.com/monthly-treatment-specials",
+            "https://topangabeauty.com/specials",
+            "https://vasuskinsolutions.com/skincare-specials-boulder",
+            "https://veinandaestheticsoftucson.com/specials",
+            "https://vivadayspa.com/news-tips/21st-anniversary-specials",
+            "https://vivadayspa.com/specials",
+            "https://vivadayspa.com/specials/anniversary",
+            "https://vivadayspa.com/specials/holiday-spa-specials-and-packages",
+            "https://vivadayspa.com/specials/holiday-spa-specials-and-packages/brighten-tighten-holiday-medspa-package",
+            "https://vivadayspa.com/specials/holiday-spa-specials-and-packages/merry-bright-medspa-package",
+            "https://vivadayspa.com/specials/mothers-day",
+            "https://vivadayspa.com/specials/treatment-series",
+            "https://vivadayspa.com/specials/valentines-day",
+            "https://vivadayspa.com/treatments/massage/anniversary-special",
+            "https://www.acemedspa.com/promotions",
+            "https://www.acquablumedicalspa.com/specials",
+            "https://www.agelessandbeautiful.com/special-offers",
+            "https://www.alluremedspa.com/monthly-specials",
+            "https://www.amoderm.com/cosmedical-treatments-special-offers-ultherapy",
+            "https://www.amoderm.com/special-offers",
+            "https://www.beautyandhealthbyliz.com/med-spa-specials-tucson",
+            "https://www.bellaluceokc.com/specials",
+            "https://www.belleroseaesthetics.net/promotions",
+            "https://www.bespokebeautyusa.com/promotions",
+            "https://www.dermfx.com/specials",
+            "https://www.luxeroomcosmetic.com/botox-specials-denver-boulder",
+            "https://www.nakedmd.com/collections/specials",
+            "https://www.radiancemedspalouisville.com/new-patient-specials",
+            "https://www.richlandmd.com/promotions",
+            "https://www.skinjectables.com/specials",
+            "https://www.skinzonemedical.com/specials",
+            "https://www.southcoastmedspa.com/specials",
+            "https://www.vivadayspa.com/specials",
+            "https://www.westmedspa.com/specials",
+            "https://zenaestheticsandwellness.com/specials"
+          ],
+          "scrapeOptions": {
+            "formats": [
+              {
+                "type": "changeTracking",
+                "modes": [
+                  "json"
+                ],
+                "prompt": "Extract promotion name, service or treatment, regular price, sale price, discount amount, discount percentage, package quantity, membership price, and expiration date. Preserve numeric values as numbers when possible and use null when absent.",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "service": {
+                      "type": "string"
+                    },
+                    "salePrice": {
+                      "type": "number"
+                    },
+                    "regularPrice": {
+                      "type": "number"
+                    },
+                    "promotionName": {
+                      "type": "string"
+                    },
+                    "discountAmount": {
+                      "type": "number"
+                    },
+                    "expirationDate": {
+                      "type": "string"
+                    },
+                    "discountPercent": {
+                      "type": "number"
+                    },
+                    "membershipPrice": {
+                      "type": "number"
+                    },
+                    "packageQuantity": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "goal": "Mark a change as meaningful only when an explicit monetary amount, price range, unit price, package quantity, membership price, regular price, original price, discounted price, discount amount, or discount percentage is added, removed, or changed. Ignore navigation, styling, and copy changes that are not tied to a price.",
+      "webhook": {
+        "url": "https://flows.brandrap.co/webhook/69ea77e7-eac0-456a-80b0-f72e39c1b63d",
+        "events": [
+          "monitor.page",
+          "monitor.check.completed"
+        ],
+        "headers": {},
+        "metadata": {}
+      },
+      "notification": {},
+      "retentionDays": 30,
+      "judgeEnabled": true
+    }
+  }
+}

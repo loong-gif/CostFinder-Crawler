@@ -38,6 +38,7 @@ from utils.membership_plans import find_existing_plan_id
 from utils.schema_contract import (
     TABLE_CLINIC_MEMBERSHIPS,
     TABLE_CLINIC_PROMOTIONS,
+    TABLE_CLINIC_SERVICES,
     TABLE_PROMO_OFFER_ITEMS,
     TABLE_PROMO_OFFER_MASTER,
 )
@@ -132,7 +133,7 @@ def insert_offer_items_live(
     offer_id: int,
     items: List[dict[str, Any]],
 ) -> int:
-    """Insert offer items using live promo_offer_items columns (no item_name)."""
+    """Insert offer items with an extracted name and optional service link."""
     now = datetime.now(timezone.utc).isoformat()
     existing = client.fetch_rows(
         TABLE_PROMO_OFFER_ITEMS,
@@ -143,6 +144,21 @@ def insert_offer_items_live(
     if existing:
         return 0
     rows: List[dict[str, Any]] = []
+    service_ids = sorted(
+        {
+            int(item["service_id"])
+            for item in items
+            if item.get("service_id") is not None
+        }
+    )
+    services_by_id: dict[int, str] = {}
+    if service_ids:
+        services = client.fetch_rows(
+            TABLE_CLINIC_SERVICES,
+            "service_id,service_name",
+            filters={"service_id": f"in.({','.join(str(value) for value in service_ids)})"},
+        )
+        services_by_id = {int(row["service_id"]): row["service_name"] for row in services}
     for item in items:
         row: dict[str, Any] = {
             "offer_id": offer_id,
@@ -150,14 +166,22 @@ def insert_offer_items_live(
             "updated_at": now,
         }
         if item.get("service_id") is not None:
-            row["service_id"] = item["service_id"]
+            service_id = int(item["service_id"])
+            if service_id not in services_by_id:
+                raise ValueError(f"service_id {service_id} does not resolve to clinic_services")
+            row["service_id"] = service_id
+            row["item_name"] = services_by_id[service_id]
+        elif item.get("item_name") is not None:
+            row["item_name"] = str(item["item_name"]).strip()
+        elif item.get("service_name") is not None:
+            row["item_name"] = str(item["service_name"]).strip()
         if item.get("quantity") is not None:
             row["quantity"] = item["quantity"]
         if item.get("unit_price") is not None:
             row["unit_price"] = item["unit_price"]
         rows.append(row)
     if not rows:
-        rows = [{"offer_id": offer_id, "created_at": now, "updated_at": now}]
+        return 0
     client.insert_rows(TABLE_PROMO_OFFER_ITEMS, rows)
     return len(rows)
 

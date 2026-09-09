@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Promotion Offer Extraction Schema",
+  "type": "object",
+  "properties": {
+    "explanation": {
+      "type": "string",
+      "description": "Brief evidence-based summary: what was found, ambiguities, and why nulls were used. Write before filling offers."
+    },
+    "offers": {
+      "type": "array",
+      "description": "仅提取诊所实际可购买的报价。排除标为 example、typical、comparison、estimated 的示例或假设价格，即使其中包含具体金额。",
+      "items": {
+        "type": "object",
+        "properties": {
+          "price_model": {
+            "type": "string",
+            "enum": ["total", "per_unit", "from"]
+          },
+          "regular_price": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "description": "页面明确标注的原价或常规价；不得根据 rewards、积分或价格区间反推。"
+          },
+          "discount_price": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "description": "页面明确给出的促销成交价。与 discount_percent / discount_amount 三选一或组合；常规菜单价留 null（写入 clinic_services）。"
+          },
+          "discount_percent": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 100,
+            "description": "仅提取页面明确写出的折扣百分比；不得自行计算。"
+          },
+          "discount_amount": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "仅提取页面明确写出的固定减免金额；rewards 或积分额度不等同于本字段。"
+          },
+          "min_quantity": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0
+          },
+          "is_membership_required": {
+            "type": "boolean"
+          },
+          "is_new_customer_required": {
+            "type": "boolean"
+          },
+          "offer_raw_text": {
+            "type": "string",
+            "description": "支持该报价的最小原文证据，不得改写成页面未出现的价格关系。"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "description": "该报价包含的服务项。普通单服务报价输出一项，套餐按实际组成输出多项。",
+            "items": {
+              "type": "object",
+              "properties": {
+                "service_name": {
+                  "type": ["string", "null"],
+                  "enum": [
+                    "Botox",
+                    "Dysport",
+                    "Daxxify",
+                    "Letybo",
+                    "Xeomin",
+                    "Jeuveau",
+                    "Dermal Filler",
+                    "Sculptra",
+                    "Juvéderm",
+                    "Restylane",
+                    "Belotero",
+                    "Radiesse",
+                    "Others",
+                    null
+                  ],
+                  "description": "用于匹配 clinic_services.service_name 的标准服务名候选，不是数据库 service_id。无法可靠标准化时为 Others 或 null。"
+                },
+                "quantity": {
+                  "type": ["number", "null"],
+                  "exclusiveMinimum": 0,
+                  "description": "报价明确包含的服务数量；仅按单位计价但未说明购买数量时必须为 null，不能填 1。"
+                },
+                "unit_price": {
+                  "type": ["number", "null"],
+                  "exclusiveMinimum": 0,
+                  "description": "页面明确给出的该服务项单位价格；套餐仅给出总价或无法分配到单项时为 null，不得用套餐总价除以数量推断。"
+                },
+                "unit_type": {
+                  "type": ["string", "null"],
+                  "enum": [
+                    "unit",
+                    "syringe",
+                    "half_syringe",
+                    "vial",
+                    "treatment",
+                    "session",
+                    "package",
+                    "area",
+                    "ml",
+                    "mg",
+                    "others",
+                    null
+                  ],
+                  "description": "quantity 和 unit_price 对应的计量单位；页面未明确时为 null。"
+                },
+                "service_area": {
+                  "type": ["string", "null"],
+                  "description": "报价明确限定的治疗部位；不得根据服务常见用途推断。"
+                }
+              },
+              "required": [
+                "service_name",
+                "quantity",
+                "unit_price",
+                "unit_type",
+                "service_area"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "price_model",
+          "regular_price",
+          "discount_price",
+          "discount_percent",
+          "discount_amount",
+          "min_quantity",
+          "is_membership_required",
+          "is_new_customer_required",
+          "offer_raw_text",
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["explanation", "offers"],
+  "additionalProperties": false
+}

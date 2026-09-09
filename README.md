@@ -56,5 +56,5 @@ Run the test suite with `python -m pytest`.
 
 - `schema/live_schema_snapshot.json` is a checked-in contract of the live database.
 - Historical migration material is retained only where it remains compatible with the live schema; Git history contains retired schema designs.
-- `scripts/one_off/` contains isolated operational utilities and is not a production entrypoint.
+- `one-off/` contains isolated operational utilities and is not a production entrypoint.
 - `sag` is an unexposed, server-only Supabase schema for the rebuildable SAG projection.

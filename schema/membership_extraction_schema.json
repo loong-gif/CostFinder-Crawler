@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explanation", "memberships"],
+  "properties": {
+    "explanation": {
+      "type": "string"
+    },
+    "memberships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership_name",
+          "membership_price",
+          "billing_period",
+          "minimum_commitment_months",
+          "membership_description",
+          "benefits"
+        ],
+        "properties": {
+          "membership_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "membership_price": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "billing_period": {
+            "type": ["string", "null"],
+            "enum": ["monthly", "quarterly", "annual", "one_time", null]
+          },
+          "minimum_commitment_months": {
+            "type": ["integer", "null"],
+            "minimum": 0
+          },
+          "membership_description": {
+            "type": ["string", "null"]
+          },
+          "benefits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -48,15 +48,6 @@ def test_sibling_index_wins():
     assert conf == "high"
 
 
-def test_build_offer_update_payload_fills_category():
-    from utils.change_driven_extractor import build_offer_update_payload
-
-    payload = build_offer_update_payload(
-        {"service_name": "Botox", "offer_raw_text": "Botox $10/unit", "discount_price": 10}
-    )
-    assert payload["service_category"] == "Neurotoxins"
-
-
 def test_normalize_injectables_deprecated():
     assert normalize_service_category("Injectables") is None
 

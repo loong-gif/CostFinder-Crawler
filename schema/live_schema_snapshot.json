@@ -1,0 +1,102 @@
+{
+  "master_business_info": [
+    "business_id", "name", "address", "city", "review_count", "score",
+    "category", "website", "facebook_url", "instagram_url", "updated_at",
+    "created_at", "google_place_id", "logo"
+  ],
+  "clinic_services": [
+    "service_id",
+    "business_id",
+    "service_name",
+    "regular_price",
+    "unit_type",
+    "created_at",
+    "updated_at",
+    "source_url",
+    "service_category",
+    "service_name_raw",
+    "service_area"
+  ],
+  "clinic_memberships": [
+    "plan_id",
+    "business_id",
+    "membership_name",
+    "membership_price",
+    "billing_period",
+    "minimum_commitment_months",
+    "created_at",
+    "updated_at",
+    "benefits",
+    "source_url"
+  ],
+  "clinic_promotions": [
+    "promotion_id",
+    "business_id",
+    "promotion_title",
+    "source_url",
+    "campaign_start_date",
+    "campaign_end_date",
+    "created_at",
+    "updated_at",
+    "is_active",
+    "promotion_content"
+  ],
+  "promo_offer_master": [
+    "id",
+    "business_id",
+    "membership_plan_id",
+    "regular_price",
+    "discount_price",
+    "discount_percent",
+    "discount_amount",
+    "is_membership_required",
+    "offer_fingerprint",
+    "created_at",
+    "offer_raw_text",
+    "promotion_id",
+    "is_active",
+    "is_new_customer_required",
+    "price_model",
+    "updated_at"
+  ],
+  "promo_offer_items": [
+    "offer_item_id",
+    "offer_id",
+    "item_name",
+    "service_id",
+    "quantity",
+    "created_at",
+    "updated_at",
+    "unit_price"
+  ],
+  "firecrawl_search_raw": [
+    "id", "request_fingerprint", "response_json", "success", "error_message",
+    "updated_at", "created_at", "search_query", "response_id"
+  ],
+  "firecrawl_scrape_raw": [
+    "id", "request_fingerprint", "source_url", "search_raw_id", "success",
+    "error_message", "created_at", "updated_at", "markdown", "html", "raw_html",
+    "links", "metadata", "screenshot", "warning", "scrape_job_id", "credits_used",
+    "images", "markdown_ocr", "is_ocr_required"
+  ],
+  "profiles": [
+    "id", "first_name", "last_name", "avatar_url", "phone", "phone_verified_at",
+    "verification_status", "location_city", "location_state", "alerts_email", "alerts_sms",
+    "favorite_categories", "status", "created_at", "updated_at", "last_login_at"
+  ],
+  "claims": [
+    "id", "consumer_id", "deal_id", "business_id", "status", "preferred_date",
+    "preferred_time", "notes", "business_response", "responded_at", "booked_date",
+    "booked_time", "expires_at", "created_at", "updated_at", "relayed_at", "relayed_by",
+    "relay_method"
+  ],
+  "business_reviews": [
+    "id", "business_id", "google_review_id", "author_name", "author_url",
+    "author_profile_picture", "rating", "review_text", "images", "published_at",
+    "created_at", "updated_at"
+  ],
+  "promo_offer_quality_reviews": [
+    "review_id", "offer_id", "rule_name", "raw_text", "snapshot", "proposed_patch",
+    "status", "resolution_note", "resolved_at", "created_at", "updated_at"
+  ]
+}

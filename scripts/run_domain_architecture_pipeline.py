@@ -485,7 +485,7 @@ def build_actual_trace(
                 "step": "1.2",
                 "input": TABLE_FIRECRAWL_SEARCH_RAW,
                 "input_id": search_raw_id,
-                "schema": "service_extraction_schema.json",
+                "schema": "clinic_services_firecrawl_extraction_schema.json",
                 "target_table": TABLE_CLINIC_SERVICES,
                 "target_ids": list(service_ids),
             },
@@ -599,7 +599,7 @@ def main() -> None:
         raise RuntimeError("LLM client not configured (LLM_API_KEY / LLM_MODEL)")
 
     membership_schema = load_schema("membership_extraction_schema.json")
-    service_schema = load_schema("service_extraction_schema.json")
+    service_schema = load_schema("clinic_services_firecrawl_extraction_schema.json")
     promo_schema = load_schema("promotion_extraction_schema.json")
     offer_schema = load_schema("offer_extraction_schema.json")
 
@@ -703,7 +703,7 @@ def main() -> None:
     scrapes = scrape_and_persist(client, scrape_urls, search_raw_ids=search_raw_ids)
 
     membership_schema = load_schema("membership_extraction_schema.json")
-    service_schema = load_schema("service_extraction_schema.json")
+    service_schema = load_schema("clinic_services_firecrawl_extraction_schema.json")
     promo_schema = load_schema("promotion_extraction_schema.json")
     offer_schema = load_schema("offer_extraction_schema.json")
 

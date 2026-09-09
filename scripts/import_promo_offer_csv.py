@@ -17,9 +17,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.promo_csv_import import build_import_plan, normalize_source_url
-from utils.schema_contract import TABLE_CLINIC_PROMOTIONS, TABLE_MASTER_BUSINESS, TABLE_PROMO_OFFER_ITEMS, TABLE_PROMO_OFFER_MASTER
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key, get_supabase_writer_key
+from utils.promo_csv_import import build_import_plan, normalize_source_url, source_domain
+from utils.schema_contract import (
+    TABLE_CLINIC_PROMOTIONS,
+    TABLE_MASTER_BUSINESS,
+    TABLE_PROMO_OFFER_ITEMS,
+    TABLE_PROMO_OFFER_MASTER,
+)
+from utils.supabase_rest import (
+    SupabaseRestClient,
+    get_supabase_secret_key,
+    get_supabase_writer_key,
+)
 
 
 def _fetch_all(client: SupabaseRestClient, table: str, select: str) -> list[dict[str, Any]]:
@@ -100,8 +109,6 @@ def run(csv_path: Path, *, output: Path, apply: bool) -> dict[str, Any]:
     }
     businesses_by_domain: dict[str, list[dict[str, Any]]] = {}
     businesses_by_name: dict[str, list[dict[str, Any]]] = {}
-    from utils.promo_csv_import import source_domain
-
     for business in businesses:
         domain = source_domain(business.get("website"))
         if domain:
@@ -130,9 +137,7 @@ def run(csv_path: Path, *, output: Path, apply: bool) -> dict[str, Any]:
             service_id = service_ids.get((int(entry.master["business_id"]), service_name))
             if service_id is None:
                 unresolved_services.append({"source_row": entry.source_row, "business_id": entry.master["business_id"], "service_name": service_name})
-                items = []
-                break
-            items.append({key: value for key, value in item.items() if key != "service_name"} | {"service_id": service_id})
+            items.append({key: value for key, value in item.items() if key != "service_name"} | {"item_name": service_name, "service_id": service_id})
         if items:
             resolved_entries.append((entry, items))
     eligible = [(entry, items) for entry, items in resolved_entries if entry.master["offer_fingerprint"] not in existing_fingerprints]

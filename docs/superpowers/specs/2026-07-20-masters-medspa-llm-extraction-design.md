@@ -14,7 +14,7 @@
 ### 服务
 
 将 Search raw 的 URL、标题和描述整理为带来源 URL 的证据块，使用
-`service_extraction_schema.json` 调用当前 `.env` 配置的 Gemini 模型。
+`clinic_services_firecrawl_extraction_schema.json` 调用当前 `.env` 配置的 Gemini 模型。
 
 只接受满足下列条件的服务：
 
