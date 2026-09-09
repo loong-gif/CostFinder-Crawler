@@ -5,8 +5,7 @@
   "required": ["explanation", "memberships"],
   "properties": {
     "explanation": {
-      "type": "string",
-      "description": "Evidence summary: list every membership tier found on the page, note OCR/image gaps, and explain empty arrays."
+      "type": "string"
     },
     "memberships": {
       "type": "array",
@@ -24,8 +23,7 @@
         "properties": {
           "membership_name": {
             "type": "string",
-            "minLength": 1,
-            "description": "Exact plan/tier name from the page (one row per priced tier)."
+            "minLength": 1
           },
           "membership_price": {
             "type": "number",
@@ -44,7 +42,6 @@
           },
           "benefits": {
             "type": "array",
-            "description": "Non-priced perks as separate complete sentences (consult access, included treatments, credits, retail discounts, commitment/cancel rules). Include every bullet the page lists for this tier—not only a single \"10% off\" line. No duplicate bullets, markdown links, or URLs. Use [] only when the page truly lists no perks; image-only plans require OCR text first.",
             "items": {
               "type": "string"
             }

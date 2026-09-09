@@ -30,6 +30,8 @@ def _base_row(**overrides):
         "offer_fingerprint": "abc123",
     }
     row.update(overrides)
+    if "is_active" not in overrides:
+        row["is_active"] = row.get("status") == "active"
     return row
 
 
@@ -95,6 +97,38 @@ def test_fingerprint_duplicate_groups():
 def test_no_offer_content_false_positive():
     issues, _, _ = audit_rows([_base_row()])
     assert not any("offer_content" in issue.issue_type for issue in issues)
+
+
+def test_membership_source_metadata_is_used_for_required_fields():
+    row = _base_row(
+        is_active=True,
+        promotion_id=None,
+        membership_plan_id=5,
+        clinic_memberships={
+            "plan_id": 5,
+            "membership_name": "VIP Membership",
+            "source_url": "https://example.com/membership",
+        },
+    )
+    issues, _, _ = audit_rows([row], membership_plan_ids={5})
+    issue_types = {issue.issue_type for issue in issues}
+    assert "missing_source_name" not in issue_types
+    assert "missing_source_url" not in issue_types
+    assert "missing_promotion_id" not in issue_types
+
+
+def test_mapped_service_prevents_consultation_false_positive():
+    row = _base_row(
+        is_active=True,
+        service_name="",
+        offer_raw_text="Typically, the cost is $10 per unit, determined during consultation.",
+        promo_offer_items=[{"service_id": 96}],
+    )
+    issues, _, _ = audit_rows(
+        [row],
+        service_rows={96: {"service_id": 96, "business_id": 10, "service_name": "Botox"}},
+    )
+    assert not any(issue.issue_type == "scope_consultation" for issue in issues)
 
 
 def test_high_confidence_skincare():

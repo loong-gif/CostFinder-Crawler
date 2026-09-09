@@ -26,6 +26,7 @@ from utils.promo_offer_audit import (  # noqa: E402
     build_offer_text_duplicate_groups,
     audit_rows,
 )
+from utils.schema_contract import OFFER_MASTER_WITH_ITEMS_SELECT  # noqa: E402
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
 
 TABLE_NAME = "promo_offer_master"
@@ -59,7 +60,7 @@ def fetch_all_rows(client: SupabaseRestClient, *, limit: Optional[int]) -> List[
         page_limit = PAGE_SIZE if remaining is None else min(PAGE_SIZE, remaining)
         batch = client.fetch_rows(
             TABLE_NAME,
-            "*",
+            OFFER_MASTER_WITH_ITEMS_SELECT,
             limit=page_limit,
             offset=offset,
             order="id.asc",

@@ -10,7 +10,7 @@ EXTRACTION_SCHEMA_FILES = (
     "promotion_extraction_schema.json",
     "offer_extraction_schema.json",
     "membership_extraction_schema.json",
-    "service_extraction_schema.json",
+    "clinic_services_firecrawl_extraction_schema.json",
 )
 
 
@@ -31,7 +31,6 @@ def test_extraction_schemas_have_top_level_explanation_first() -> None:
 
 def test_offer_schema_embeds_service_items() -> None:
     offer_schema = _load_schema("offer_extraction_schema.json")
-    service_schema = _load_schema("service_extraction_schema.json")
     offer = offer_schema["properties"]["offers"]["items"]
     item = offer["properties"]["items"]["items"]
 
@@ -44,8 +43,8 @@ def test_offer_schema_embeds_service_items() -> None:
         "unit_type",
         "service_area",
     ]
-    assert (
-        item["properties"]["service_name"]["enum"]
-        == service_schema["properties"]["services"]["items"]["properties"]["service_name"]["enum"]
-    )
+    service_schema = _load_schema("clinic_services_firecrawl_extraction_schema.json")
+    service = service_schema["properties"]["services"]["items"]
+    assert "service_name" in service["required"]
+    assert service["properties"]["service_name"]["minLength"] == 1
     assert not (SCHEMA_DIR / "offer_items_extraction_schema.json").exists()

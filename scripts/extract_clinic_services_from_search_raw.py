@@ -201,7 +201,7 @@ def run(
         repair_article_urls=repair_article_urls,
     )
     grouped = group_search_rows_by_business(search_rows, businesses)
-    schema = load_schema("service_extraction_schema.json")
+    schema = load_schema("clinic_services_firecrawl_extraction_schema.json")
     results: list[dict[str, Any]] = []
     for business in targets:
         bid = int(business["business_id"])

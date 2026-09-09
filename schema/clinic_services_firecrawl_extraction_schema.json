@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explanation", "services"],
+  "properties": {
+    "explanation": {"type": "string"},
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service_category", "service_name", "service_name_raw", "regular_price", "unit_type", "service_area"],
+        "properties": {
+          "service_category": {"type": "string", "enum": ["Neurotoxins", "Fillers & Other Injectables"]},
+          "service_name": {"type": "string", "minLength": 1},
+          "service_name_raw": {"type": "string", "minLength": 1},
+          "regular_price": {"type": ["number", "null"], "minimum": 0},
+          "unit_type": {"type": "string"},
+          "service_area": {"type": "string"}
+        }
+      }
+    }
+  }
+}

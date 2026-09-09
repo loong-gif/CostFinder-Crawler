@@ -32,7 +32,7 @@
 firecrawl_search_raw 12–26
   → URL/门店归属门控
   → 同域模板去重
-  → service_extraction_schema.json
+  → clinic_services_firecrawl_extraction_schema.json
   → 服务证据复核
   → clinic_services
 

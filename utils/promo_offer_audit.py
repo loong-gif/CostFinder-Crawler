@@ -10,11 +10,17 @@ from urllib.parse import urlparse
 
 from utils.align_service_names import infer_alignment
 from utils.offer_scope_filter import exclude_reason, should_exclude_from_offer_master
-from utils.schema_contract import OFFER_MASTER_COLUMNS, offer_is_active, offer_item_name, offer_source_url, offer_unit_type
+from utils.schema_contract import (
+    OFFER_MASTER_COLUMNS,
+    offer_is_active,
+    offer_item_name,
+    offer_source_url,
+    offer_unit_type,
+)
 
 # Live columns (aligned to current Supabase DDL)
 LIVE_OFFER_COLUMNS: Tuple[str, ...] = OFFER_MASTER_COLUMNS + (
-    "promo_offer_items(offer_item_id,service_id,quantity,unit_price)",
+    "promo_offer_items(offer_item_id,item_name,service_id,quantity,unit_price)",
     "clinic_promotions(source_url,promotion_title,campaign_start_date,campaign_end_date)",
 )
 
@@ -62,6 +68,13 @@ def _item_service_ids(row: Mapping[str, Any]) -> List[Any]:
         return [items["service_id"]]
     legacy = row.get("service_id")
     return [legacy] if legacy is not None else []
+
+
+def _embedded_row(row: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = row.get(key) or {}
+    if isinstance(value, list):
+        return value[0] if value else {}
+    return value if isinstance(value, Mapping) else {}
 
 
 @dataclass
@@ -246,18 +259,20 @@ def audit_rows(
         row_id = row.get("id")
         row_dict = dict(row)
         status = _row_status_label(row)
-        promo = row_dict.get("clinic_promotions") or {}
-        if isinstance(promo, list):
-            promo = promo[0] if promo else {}
+        promo = _embedded_row(row_dict, "clinic_promotions")
+        membership = _embedded_row(row_dict, "clinic_memberships")
         source_name = str(
             promo.get("promotion_title")
+            or membership.get("membership_name")
             or row_dict.get("source_name")
             or row_dict.get("business_name")
             or ""
         ).strip()
-        service_name = offer_item_name(row_dict)
+        service_name = offer_item_name(row_dict, service_lookup=svc_by_id)
         offer_raw_text = str(row.get("offer_raw_text") or "").strip()
-        source_url = offer_source_url(row_dict)
+        source_url = offer_source_url(row_dict) or str(
+            membership.get("source_url") or ""
+        ).strip()
         regular_price = parse_float(row.get("regular_price"))
         discount_price = parse_float(row.get("discount_price"))
         discount_amount = parse_float(row.get("discount_amount"))
@@ -298,7 +313,7 @@ def audit_rows(
         )
 
         # --- scope / business semantics ---
-        scope_reason = exclude_reason(dict(row))
+        scope_reason = exclude_reason({**row_dict, "service_name": service_name})
         if scope_reason == "membership_plan" and not membership_plan_id:
             add(
                 "scope_membership_plan",
@@ -348,7 +363,7 @@ def audit_rows(
                 and svc_by_id[service_id].get("business_id") != business_id
             ):
                 add("service_business_mismatch", "high", "item service_id 与 business_id 不匹配")
-        if is_active and promotion_id is None:
+        if is_active and promotion_id is None and membership_plan_id is None:
             add("missing_promotion_id", "medium", "active offer 缺少 promotion_id")
 
         # --- lifecycle ---
@@ -405,7 +420,7 @@ def audit_rows(
                 f"建议标准化为 {canonical_name}",
             )
 
-        if is_active and should_exclude_from_offer_master(dict(row)):
+        if is_active and should_exclude_from_offer_master({**row_dict, "service_name": service_name}):
             add("active_out_of_scope", "high", f"active 但应排除: {scope_reason or 'out_of_scope'}")
 
     summary = summarize_issues(issues, rows)

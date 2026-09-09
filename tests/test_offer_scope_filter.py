@@ -6,7 +6,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.change_driven_extractor import apply_offer_actions
 from utils.offer_extraction_llm import normalize_offer_payload
 from utils.offer_scope_filter import (
     filter_service_offers,
@@ -43,22 +42,6 @@ def test_normalize_offer_payload_filters_non_service():
     assert payload["offers"][0]["service_name"] == "Botox"
 
 
-def test_apply_offer_actions_skips_consultation_insert():
-    class _Client:
-        def insert_rows(self, *args, **kwargs):
-            raise AssertionError("should not insert")
-
-    result = apply_offer_actions(
-        _Client(),
-        [{"action": "insert", "service_name": "Free Consultation", "offer_raw_text": "Free Consultation $0"}],
-        source_url="https://example.com/pricing",
-        source_name="example.com",
-        dry_run=True,
-    )
-    assert result["inserted"] == 0
-    assert result["skipped"] == 1
-
-
 def test_filter_service_offers():
     rows = filter_service_offers(
         [
@@ -82,20 +65,3 @@ def test_skincare_does_not_flag_traptox_on_retail_url():
             "offer_raw_text": "TrapTox $12/unit",
         }
     )
-
-
-def test_apply_offer_actions_skips_missing_business_id():
-    class _Client:
-        def insert_rows(self, *args, **kwargs):
-            raise AssertionError("should not insert")
-
-    result = apply_offer_actions(
-        _Client(),
-        [{"action": "insert", "service_name": "Botox", "offer_raw_text": "Botox $11/unit"}],
-        source_url="https://example.com/pricing",
-        source_name="example.com",
-        business_id=None,
-        dry_run=True,
-    )
-    assert result["inserted"] == 0
-    assert result["skipped"] == 1

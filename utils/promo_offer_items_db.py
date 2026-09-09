@@ -8,6 +8,18 @@ from utils.schema_contract import TABLE_PROMO_OFFER_ITEMS, OFFER_ITEM_SELECT
 from utils.supabase_rest import SupabaseRestClient
 
 
+def _service_name_for_id(client: SupabaseRestClient, service_id: int) -> str:
+    services = client.fetch_rows(
+        "clinic_services",
+        "service_id,service_name",
+        filters={"service_id": f"eq.{service_id}"},
+        limit=1,
+    )
+    if len(services) != 1:
+        raise ValueError(f"service_id {service_id} does not resolve to one clinic service")
+    return str(services[0]["service_name"])
+
+
 def fetch_items_for_offer(
     client: SupabaseRestClient,
     offer_id: int,
@@ -34,28 +46,26 @@ def upsert_offer_items(
     now = datetime.now(timezone.utc).isoformat()
     rows: List[Dict[str, Any]] = []
     for item in items:
-        # PostgREST bulk insert requires identical keys on every object.
-        rows.append(
-            {
-                "offer_id": offer_id,
-                "service_id": item.get("service_id"),
-                "quantity": item.get("quantity"),
-                "unit_price": item.get("unit_price"),
-                "created_at": now,
-                "updated_at": now,
-            }
-        )
+        service_id = item.get("service_id")
+        row: Dict[str, Any] = {
+            "offer_id": offer_id,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if service_id is not None:
+            row["service_id"] = service_id
+            row["item_name"] = _service_name_for_id(client, int(service_id))
+        elif item.get("item_name") is not None:
+            row["item_name"] = str(item["item_name"]).strip()
+        elif item.get("service_name") is not None:
+            row["item_name"] = str(item["service_name"]).strip()
+        if item.get("quantity") is not None:
+            row["quantity"] = item["quantity"]
+        if item.get("unit_price") is not None:
+            row["unit_price"] = item["unit_price"]
+        rows.append(row)
     if not rows:
-        rows = [
-            {
-                "offer_id": offer_id,
-                "service_id": None,
-                "quantity": None,
-                "unit_price": None,
-                "created_at": now,
-                "updated_at": now,
-            }
-        ]
+        return []
     return client.insert_rows(TABLE_PROMO_OFFER_ITEMS, rows)
 
 
@@ -64,11 +74,13 @@ def link_item_to_service(
     offer_item_id: int,
     service_id: int,
 ) -> List[Dict[str, Any]]:
+    service_name = _service_name_for_id(client, service_id)
     return client.update_row(
         TABLE_PROMO_OFFER_ITEMS,
         {"offer_item_id": f"eq.{offer_item_id}"},
         {
             "service_id": service_id,
+            "item_name": service_name,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
