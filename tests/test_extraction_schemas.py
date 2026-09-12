@@ -43,6 +43,13 @@ def test_offer_schema_embeds_service_items() -> None:
         "unit_type",
         "service_area",
     ]
+    conditions = offer["properties"]["conditions"]
+    assert "conditions" in offer["required"]
+    assert conditions["type"] == "array"
+    assert conditions["items"]["required"] == ["requirement", "evidence"]
+    assert conditions["items"]["additionalProperties"] is False
+    assert set(conditions["items"]["properties"]) == {"requirement", "evidence"}
+    assert "默认填 1" in item["properties"]["quantity"]["description"]
     service_schema = _load_schema("clinic_services_firecrawl_extraction_schema.json")
     service = service_schema["properties"]["services"]["items"]
     assert "service_name" in service["required"]

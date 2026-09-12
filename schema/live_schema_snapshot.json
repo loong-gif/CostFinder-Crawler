@@ -57,7 +57,10 @@
     "is_active",
     "is_new_customer_required",
     "price_model",
-    "updated_at"
+    "updated_at",
+    "moderation_status",
+    "moderation_notes",
+    "conditions"
   ],
   "promo_offer_items": [
     "offer_item_id",
