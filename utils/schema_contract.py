@@ -11,7 +11,8 @@ TABLE_PROMO_OFFER_ITEMS = "promo_offer_items"
 TABLE_FIRECRAWL_SEARCH_RAW = "firecrawl_search_raw"
 TABLE_FIRECRAWL_SCRAPE_RAW = "firecrawl_scrape_raw"
 
-# promo_offer_master columns (live DDL)
+# promo_offer_master columns (live DDL); conditions is nullable text[] and
+# stores requirement strings only (source evidence is validated before write).
 OFFER_MASTER_COLUMNS = (
     "id",
     "business_id",
@@ -29,6 +30,9 @@ OFFER_MASTER_COLUMNS = (
     "is_new_customer_required",
     "price_model",
     "updated_at",
+    "moderation_status",
+    "moderation_notes",
+    "conditions",
 )
 
 OFFER_MASTER_SELECT = ",".join(OFFER_MASTER_COLUMNS)

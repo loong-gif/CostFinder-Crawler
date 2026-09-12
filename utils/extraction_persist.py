@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Mapping, Optional
 
 from utils.clinic_promotions_db import upsert_promotion
 from utils.clinic_service_extraction import (
@@ -14,6 +14,7 @@ from utils.clinic_service_extraction import (
     upsert_extracted_service,
 )
 from utils.offer_extraction_llm import canonicalize_service_name
+from utils.offer_evidence_validator import validate_offer_evidence
 from utils.offer_fingerprint import compute_offer_fingerprint
 from utils.offer_scope_filter import exclude_reason, should_exclude_from_offer_master
 from utils.promo_offer_items_db import upsert_offer_items
@@ -87,6 +88,26 @@ def build_master_from_offer(
         raise ValueError(
             "promo_offer_master requires discount_price, discount_percent, or discount_amount"
         )
+    raw_conditions = offer.get("conditions")
+    if not isinstance(raw_conditions, list):
+        raise ValueError("promo_offer_master requires verified conditions (use [] when none apply)")
+    conditions: list[str] = []
+    for condition in raw_conditions:
+        if isinstance(condition, str):
+            requirement = condition.strip()
+        elif isinstance(condition, Mapping):
+            # The extraction schema carries evidence until the shared gate
+            # validates it; storage keeps only the requirement text.
+            requirement_value = condition.get("requirement")
+            evidence_value = condition.get("evidence")
+            if not isinstance(requirement_value, str) or not isinstance(evidence_value, str) or not evidence_value.strip():
+                raise ValueError("promo offer conditions require non-empty strings")
+            requirement = requirement_value.strip()
+        else:
+            raise ValueError("promo offer conditions must be non-empty strings")
+        if not requirement:
+            raise ValueError("promo offer conditions require non-empty strings")
+        conditions.append(requirement)
     items_in = offer.get("items") or []
     items_in = derive_offer_item_pricing(offer, evidence=str(offer.get("offer_raw_text") or ""))
     first = items_in[0] if items_in else {}
@@ -100,6 +121,7 @@ def build_master_from_offer(
         "is_active": True,
         "is_new_customer_required": bool(offer.get("is_new_customer_required")),
         "is_membership_required": bool(offer.get("is_membership_required")),
+        "conditions": conditions,
         "offer_raw_text": str(offer.get("offer_raw_text") or service_name)[:4000],
         "price_model": infer_price_model(offer),
     }
@@ -228,18 +250,36 @@ def persist_promo_offer(
     promotion_id: int,
     source_url: str,
     offer: dict[str, Any],
+    evidence: str,
     membership_plan_id: Optional[int] = None,
     seen_fingerprints: set[str] | None = None,
 ) -> dict[str, Any]:
-    if route_offer(offer) != "promo":
-        return {"accepted": False, "reason": exclude_reason(offer) or "not_promo", "action": "skipped"}
+    decision = validate_offer_evidence(
+        offer,
+        evidence,
+    )
+    if not decision.accepted:
+        return {
+            "accepted": False,
+            "reason": decision.reason,
+            "action": "quarantined",
+            "evidence_issues": [issue.as_dict() for issue in decision.issues],
+        }
+    validated_offer = decision.offer
+    if route_offer(validated_offer) != "promo":
+        return {
+            "accepted": False,
+            "reason": exclude_reason(validated_offer) or "not_promo",
+            "action": "skipped",
+            "evidence_issues": [issue.as_dict() for issue in decision.issues],
+        }
 
     # Validate ownership and promotion lifecycle before writing anything.  A
     # bad upstream link must be quarantined instead of becoming a cross-clinic
     # offer or an active offer attached to an explicitly ended campaign.
     promotion_rows = client.fetch_rows(
         TABLE_CLINIC_PROMOTIONS,
-        "promotion_id,business_id,campaign_end_date",
+        "promotion_id,business_id,campaign_end_date,is_active",
         filters={"promotion_id": f"eq.{promotion_id}"},
         limit=1,
     )
@@ -247,6 +287,8 @@ def persist_promo_offer(
         promotion = promotion_rows[0]
         if promotion.get("business_id") is not None and int(promotion["business_id"]) != int(business_id):
             return {"accepted": False, "reason": "promotion_business_mismatch", "action": "quarantined"}
+        if promotion.get("is_active") is False:
+            return {"accepted": False, "reason": "promotion_inactive", "action": "quarantined"}
         end_date = promotion.get("campaign_end_date")
         if end_date and str(end_date) < datetime.now(timezone.utc).date().isoformat():
             return {"accepted": False, "reason": "promotion_expired", "action": "quarantined"}
@@ -260,7 +302,7 @@ def persist_promo_offer(
         if membership_rows and membership_rows[0].get("business_id") is not None and int(membership_rows[0]["business_id"]) != int(business_id):
             return {"accepted": False, "reason": "membership_business_mismatch", "action": "quarantined"}
     master, items = build_master_from_offer(
-        offer,
+        validated_offer,
         business_id=business_id,
         promotion_id=promotion_id,
         source_url=source_url,
@@ -270,8 +312,25 @@ def persist_promo_offer(
         client,
         business_id=business_id,
         items=items,
-        fallback_text=str(offer.get("offer_raw_text") or ""),
+        fallback_text=str(validated_offer.get("offer_raw_text") or ""),
     )
+    # An offer item is a saleable atomic service relation, not a free-form
+    # scope label. Broad scopes must be expanded upstream; do not persist an
+    # active offer with a NULL service placeholder.
+    if any(item.get("service_id") is None for item in linked_items):
+        return {
+            "accepted": False,
+            "reason": "unmapped_service_item",
+            "action": "quarantined",
+            "items": [
+                {
+                    "service_name": item.get("service_name"),
+                    "item_name": item.get("item_name"),
+                }
+                for item in linked_items
+                if item.get("service_id") is None
+            ],
+        }
     service_ids = [item.get("service_id") for item in linked_items if item.get("service_id") is not None]
     if service_ids:
         services = client.fetch_rows(
@@ -296,6 +355,7 @@ def persist_promo_offer(
         "offer_id": offer_id,
         "items": len(linked_items),
         "offer_fingerprint": fp,
+        "evidence_issues": [issue.as_dict() for issue in decision.issues],
     }
 
 
@@ -345,12 +405,22 @@ def route_and_persist_extraction(
             promotion_id=promotion_id,
             source_url=source_url,
             offer=offer,
+            evidence=evidence,
             membership_plan_id=membership_plan_id,
             seen_fingerprints=seen_fingerprints,
         )
         stats["promo_writes"].append(write)
         if write.get("accepted"):
             stats["promos"] += 1
+        elif write.get("action") == "quarantined":
+            stats["quarantined"] += 1
+            stats["quarantine"].append(
+                {
+                    "reason": write.get("reason") or "evidence_validation_failed",
+                    "offer_raw_text": str(offer.get("offer_raw_text") or "")[:200],
+                    "evidence_issues": write.get("evidence_issues") or [],
+                }
+            )
         else:
             stats["skipped"] += 1
 

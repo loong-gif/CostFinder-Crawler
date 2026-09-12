@@ -48,6 +48,25 @@
           "is_new_customer_required": {
             "type": "boolean"
           },
+          "conditions": {
+            "type": "array",
+            "description": "仅记录该 Offer 额外的资格或兑换限制；不要重复 is_membership_required 或 is_new_customer_required，也不要写价格、医疗免责声明或普通预约政策。没有明确额外限制时返回空数组。抽取阶段保留逐字来自页面原文的 evidence 供校验；写入 promo_offer_master 时仅保留 requirement 字符串。",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requirement": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["requirement", "evidence"]
+            }
+          },
           "offer_raw_text": {
             "type": "string",
             "description": "支持该报价的最小原文证据，不得改写成页面未出现的价格关系。"
@@ -82,7 +101,7 @@
                 "quantity": {
                   "type": ["number", "null"],
                   "exclusiveMinimum": 0,
-                  "description": "报价明确包含的服务数量；仅按单位计价但未说明购买数量时必须为 null，不能填 1。"
+                  "description": "报价明确的服务数量；若是单个原子服务且没有数量语义，默认填 1。仅按单位计价、套餐、可变数量或未能确定对应服务项时必须为 null，不能填 1。"
                 },
                 "unit_price": {
                   "type": ["number", "null"],
@@ -131,6 +150,7 @@
           "discount_amount",
           "min_quantity",
           "is_membership_required",
+          "conditions",
           "is_new_customer_required",
           "offer_raw_text",
           "items"
