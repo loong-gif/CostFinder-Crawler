@@ -5,22 +5,31 @@ Archived scripts keep their own copies.
 """
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Dict, List, Optional
 
 import requests
 
 
 class SupabaseRestClient:
-    def __init__(self, base_url: str, service_role_key: str):
+    def __init__(
+        self,
+        base_url: str,
+        service_role_key: str,
+        client_info: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/") + "/rest/v1"
         self.session = requests.Session()
         self.session.trust_env = False  # avoid proxy hijacking in automation
+        script = client_info or os.path.basename(sys.argv[0]) or "cf-crawler"
         self.session.headers.update(
             {
                 "apikey": service_role_key,
                 "Authorization": f"Bearer {service_role_key}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                "x-client-info": f"cf-crawler/{script}",
             }
         )
 

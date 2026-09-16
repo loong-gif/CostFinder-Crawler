@@ -835,6 +835,26 @@ def test_prepare_change_event_insert_rows_links_candidate_rows_without_report_fi
     assert match_row["candidate_offer_id"] == "offer-1"
 
 
+def test_prepare_change_event_insert_rows_fills_monitor_event_id():
+    prepared = prepare_change_event_insert_rows(
+        {
+            "change_events": [
+                {
+                    "crawl_run_id": "run-1",
+                    "target_offer_id": 9,
+                    "diff_type": "changed",
+                    "source_url": "https://example.com/specials",
+                    "source_url_normalized": "https://example.com/specials",
+                    "proposed_action": "insert_offer",
+                    "validator_status": "pending",
+                }
+            ]
+        }
+    )
+
+    assert prepared["change_event_rows"][0]["monitor_event_id"] == "run-1:9:changed"
+
+
 def test_persist_change_event_payloads_dry_run_and_write_modes():
     payloads = build_change_event_payloads(
         [

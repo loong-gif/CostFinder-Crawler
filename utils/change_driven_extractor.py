@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from utils.extraction_persist import ensure_monitor_event_id
 from utils.logger import log
 from utils.offer_scope_filter import should_exclude_from_offer_master
 from utils.service_category_lookup import MASTER_CATEGORY_PROMPT, resolve_service_category
@@ -1445,9 +1446,10 @@ def prepare_change_event_insert_rows(
             event_index_int = fallback_index
         change_event_id = str(event.get("change_event_id") or uuid.uuid4())
         event_id_by_index[event_index_int] = change_event_id
+        normalized = ensure_monitor_event_id(dict(event))
         row = {
             key: value
-            for key, value in event.items()
+            for key, value in normalized.items()
             if key in _CHANGE_EVENT_DB_FIELDS and value is not None
         }
         row["change_event_id"] = change_event_id

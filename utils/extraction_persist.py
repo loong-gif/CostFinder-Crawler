@@ -29,6 +29,17 @@ from utils.service_price_guard import derive_offer_item_pricing
 RouteKind = Literal["service", "promo", "quarantine"]
 
 
+def ensure_monitor_event_id(event: dict[str, Any]) -> dict[str, Any]:
+    """Fill monitor_event_id when missing so DB unique index can dedupe retries."""
+    if event.get("monitor_event_id"):
+        return event
+    crawl_run_id = event.get("crawl_run_id") or "unknown"
+    segment_id = event.get("target_offer_id") or event.get("event_index") or "0"
+    diff_type = event.get("diff_type") or "changed"
+    event["monitor_event_id"] = f"{crawl_run_id}:{segment_id}:{diff_type}"
+    return event
+
+
 def _positive(value: Any) -> float | None:
     if value is None:
         return None
