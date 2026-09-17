@@ -10,6 +10,15 @@ def test_schema_for_gemini_strips_meta_keys():
     assert "type" in _schema_for_gemini(schema)
 
 
+def test_schema_for_gemini_drops_required_missing_from_properties():
+    schema = {
+        "type": "object",
+        "properties": {"offers": {"type": "array"}},
+        "required": ["explanation", "offers"],
+    }
+    assert _schema_for_gemini(schema)["required"] == ["offers"]
+
+
 def test_create_json_response_sends_response_json_schema():
     client = GeminiNativeClient(api_key="test-key", model="gemini-3.1-flash-lite")
     schema = {"type": "object", "properties": {"services": {"type": "array"}}, "required": ["services"]}
@@ -32,6 +41,30 @@ def test_create_json_response_sends_response_json_schema():
     assert post.call_args.kwargs["headers"]["x-goog-api-key"] == "test-key"
     assert "params" not in post.call_args.kwargs
     assert "key=" not in post.call_args.args[0]
+
+
+def test_create_json_response_with_image_sends_inline_data():
+    client = GeminiNativeClient(api_key="test-key", model="gemini-3.1-flash-lite")
+    fake_resp = MagicMock()
+    fake_resp.ok = True
+    fake_resp.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": '{"transcript": ["Offer A"]}'}]}}],
+    }
+    fake_resp.raise_for_status = MagicMock()
+
+    with patch("utils.offer_extraction_llm.requests.post", return_value=fake_resp) as post:
+        result = client.create_json_response_with_image(
+            "read offers",
+            image_bytes=b"\x89PNG\r\n",
+            mime_type="image/png",
+            json_schema={"type": "object", "properties": {"transcript": {"type": "array"}}},
+            system_instruction="OCR only",
+        )
+
+    assert result == {"transcript": ["Offer A"]}
+    body = post.call_args.kwargs["json"]
+    assert body["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "image/png"
+    assert body["systemInstruction"]["parts"][0]["text"] == "OCR only"
 
 
 def test_openai_client_uses_json_schema_when_provided():

@@ -3,6 +3,7 @@ LLM-driven offer extraction helpers.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -12,7 +13,6 @@ from typing import Any, Dict, List, Optional, Protocol
 
 import requests
 
-from crawler.promo_site_crawler import normalize_segment_text
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
 
@@ -74,7 +74,10 @@ def _clean_text(value: Any) -> str:
 
 
 def _normalize_lookup_text(value: Any) -> str:
-    return normalize_segment_text(_clean_text(value)).lower()
+    # Keep service-name normalization independent from the crawler runtime.
+    text = _clean_text(value).lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _service_dictionary_indexes() -> Dict[str, Any]:
@@ -298,8 +301,28 @@ class OpenAICompatibleClient:
 
 
 def _schema_for_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop JSON Schema meta keys Gemini does not need."""
-    return {k: v for k, v in schema.items() if k not in ("$schema", "title", "description")}
+    """Drop JSON Schema meta keys and dangling required fields Gemini rejects."""
+    if not isinstance(schema, dict):
+        return schema
+    out: Dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in ("$schema", "title"):
+            continue
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {name: _schema_for_gemini(child) for name, child in value.items()}
+            continue
+        if key == "items" and isinstance(value, dict):
+            out[key] = _schema_for_gemini(value)
+            continue
+        if isinstance(value, list) and key != "enum":
+            out[key] = [_schema_for_gemini(item) if isinstance(item, dict) else item for item in value]
+            continue
+        out[key] = value
+    props = out.get("properties")
+    required = out.get("required")
+    if isinstance(props, dict) and isinstance(required, list):
+        out["required"] = [name for name in required if name in props]
+    return out
 
 
 def _messages_to_gemini(messages: List[Dict[str, str]]) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -352,6 +375,64 @@ class GeminiNativeClient:
             json=body,
             timeout=self.timeout,
         )
+        if not response.ok:
+            raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
+        response.raise_for_status()
+        payload = response.json()
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            raise RuntimeError("Gemini response missing candidates")
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+        if not text.strip():
+            raise RuntimeError("Gemini response missing text")
+        return parse_json_payload(text, {})
+
+    def create_json_response_with_image(
+        self,
+        prompt: str,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        json_schema: Optional[Dict[str, Any]] = None,
+        system_instruction: str = "",
+    ) -> Dict[str, Any]:
+        """Return structured Gemini output grounded in one inline image."""
+        if not image_bytes:
+            raise ValueError("image_bytes must not be empty")
+        if not str(mime_type or "").startswith("image/"):
+            raise ValueError("mime_type must be an image MIME type")
+        generation_config: Dict[str, Any] = {"responseMimeType": "application/json"}
+        if json_schema:
+            generation_config["responseJsonSchema"] = _schema_for_gemini(json_schema)
+        if not self._is_reasoning_model():
+            generation_config["temperature"] = 0
+
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+        body: Dict[str, Any] = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"inline_data": {"mime_type": mime_type, "data": image_data}},
+                        {"text": str(prompt or "")},
+                    ],
+                }
+            ],
+            "generationConfig": generation_config,
+        }
+        if system_instruction.strip():
+            body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
+
+        model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
+        response = requests.post(
+            f"{self.base_url}/{model_path}:generateContent",
+            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+            json=body,
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
         response.raise_for_status()
         payload = response.json()
         candidates = payload.get("candidates") or []

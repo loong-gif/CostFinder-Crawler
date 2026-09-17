@@ -113,6 +113,27 @@ def get_firecrawl_client(*, project_root: Path | None = None):
     )
 
 
+
+def get_firecrawl_cloud_client(*, project_root: Path | None = None):
+    """Initialize Firecrawl Cloud without inheriting a self-hosted API URL."""
+    load_firecrawl_env(project_root)
+    api_key = (
+        os.getenv("FIRECRAWL_CLOUD_API_KEY")
+        or os.getenv("FIRECRAWL_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        raise RuntimeError("Missing FIRECRAWL_CLOUD_API_KEY or FIRECRAWL_API_KEY")
+    return _build_firecrawl_client(
+        api_key_env="FIRECRAWL_CLOUD_API_KEY",
+        api_url_env="FIRECRAWL_CLOUD_API_URL",
+        project_root=project_root,
+        default_api_url="https://api.firecrawl.dev",
+        fallback_key_env="FIRECRAWL_API_KEY",
+        api_key=api_key,
+    )
+
+
 def get_firecrawl_search_client(*, project_root: Path | None = None):
     """Firecrawl Cloud client for search (does not inherit self-hosted FIRECRAWL_API_URL)."""
     load_firecrawl_env(project_root)
