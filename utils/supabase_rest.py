@@ -76,6 +76,9 @@ class SupabaseRestClient:
             headers={"Prefer": "return=representation"},
             timeout=90,
         )
+        if not response.ok:
+            detail = response.text.strip().replace("\n", " ")[:1000]
+            raise RuntimeError(f"Supabase update {table} failed ({response.status_code}): {detail}")
         response.raise_for_status()
         return response.json()
 
@@ -88,6 +91,9 @@ class SupabaseRestClient:
             headers={"Prefer": "return=representation"},
             timeout=90,
         )
+        if not response.ok:
+            detail = response.text.strip().replace("\n", " ")[:1000]
+            raise RuntimeError(f"Supabase insert {table} failed ({response.status_code}): {detail}")
         response.raise_for_status()
         return response.json()
 
@@ -123,10 +129,10 @@ class SupabaseRestClient:
             PostgREST ``on_conflict`` column name for merge-duplicates.
         """
         headers = {"Prefer": "return=representation,resolution=merge-duplicates"}
-        if on_conflict:
-            headers["Prefer"] += f",on_conflict={on_conflict}"
+        params = {"on_conflict": on_conflict} if on_conflict else None
         response = self.session.post(
             f"{self.base_url}/{table}",
+            params=params,
             json=rows,
             headers=headers,
             timeout=90,
