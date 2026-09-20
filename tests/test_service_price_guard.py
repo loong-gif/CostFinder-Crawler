@@ -1,8 +1,9 @@
 """Tests for clinic_services catalog price guards and offer item normalization."""
 from utils.extraction_persist import build_master_from_offer
-from utils.extraction_repair import plan_service_price_repairs
+from utils.extraction_repair import plan_offer_quality_repairs, plan_service_price_repairs
 from utils.service_price_guard import (
     derive_offer_item_pricing,
+    infer_explicit_per_unit_price,
     is_catalog_ineligible_url,
     normalize_service_catalog_item,
     prepare_service_catalog_write,
@@ -105,6 +106,7 @@ def test_derive_offer_item_pricing_for_xeomin_package() -> None:
     offer = {
         "regular_price": 450,
         "discount_price": 350,
+        "conditions": [],
         "offer_raw_text": "Xeomin 50 units Regular $450 Special $350",
         "items": [{"service_name": "Xeomin", "quantity": None, "unit_price": None}],
     }
@@ -125,10 +127,28 @@ def test_preserves_explicit_per_unit_offer_price() -> None:
     assert items == [{"service_name": "Botox", "quantity": 20, "unit_price": 11}]
 
 
+def test_infers_single_source_stated_per_unit_price() -> None:
+    assert infer_explicit_per_unit_price("Botox $11 a unit") == 11
+    assert infer_explicit_per_unit_price("Botox $11/unit (regularly $13/unit)") == 11
+    assert infer_explicit_per_unit_price("Reg. $3.75/unit; $50 off") is None
+
+
+def test_membership_rate_uses_first_rate_when_nonmember_rate_is_also_stated() -> None:
+    items = derive_offer_item_pricing(
+        {
+            "is_membership_required": True,
+            "offer_raw_text": "$11/u Dysport or Botox ($13/u for non-members)",
+            "items": [{"service_name": "Dysport"}, {"service_name": "Botox"}],
+        }
+    )
+    assert [item["unit_price"] for item in items] == [11, 11]
+
+
 def test_build_master_from_offer_carries_derived_item_pricing() -> None:
     offer = {
         "regular_price": 450,
         "discount_price": 350,
+        "conditions": [],
         "offer_raw_text": "Xeomin 50 units Regular $450 Special $350",
         "items": [{"service_name": "Xeomin"}],
     }
@@ -142,6 +162,68 @@ def test_build_master_from_offer_carries_derived_item_pricing() -> None:
     assert master["discount_price"] == 350
     assert items[0]["quantity"] == 50
     assert items[0]["unit_price"] == 7
+
+
+def test_build_master_from_offer_promotes_common_item_rate_to_master_price() -> None:
+    master, items = build_master_from_offer(
+        {
+            "conditions": [],
+            "discount_amount": 2,
+            "offer_raw_text": "$11/u Dysport or Botox ($13/u for non-members)",
+            "is_membership_required": True,
+            "items": [{"service_name": "Dysport"}, {"service_name": "Botox"}],
+        },
+        business_id=456,
+        promotion_id=15,
+        source_url="https://example.com/specials",
+    )
+    assert master["price_model"] == "per_unit"
+    assert master["discount_price"] == 11
+    assert [item["unit_price"] for item in items] == [11, 11]
+
+
+def test_build_master_does_not_broadcast_one_quantity_across_package_items() -> None:
+    offer = {
+        "discount_price": 750,
+        "conditions": [],
+        "offer_raw_text": "2 syringes Skinvive + 25 units Botox = $750",
+        "items": [
+            {"service_name": "Juvéderm"},
+            {"service_name": "Botox"},
+        ],
+    }
+
+    _master, items = build_master_from_offer(
+        offer,
+        business_id=456,
+        promotion_id=15,
+        source_url="https://example.com/specials",
+    )
+
+    assert all(item.get("quantity") is None for item in items)
+    assert all(item.get("unit_price") is None for item in items)
+
+
+def test_legacy_fingerprint_repair_uses_offer_parent_ids() -> None:
+    actions = plan_offer_quality_repairs(
+        [
+            {
+                "id": 10,
+                "business_id": 20,
+                "promotion_id": 30,
+                "membership_plan_id": None,
+                "is_active": True,
+                "offer_fingerprint": "a" * 32,
+                "offer_raw_text": "Botox $9/unit",
+                "regular_price": 12,
+                "discount_price": 9,
+            }
+        ],
+        promotions=[{"promotion_id": 30, "source_url": "https://example.com/specials"}],
+    )
+
+    fingerprint_action = next(action for action in actions if action["batch"] == "offer_fingerprint")
+    assert fingerprint_action["fields"]["offer_fingerprint"] == "4b02934ca3d9ccd80bc49c2ebd0d3f6f9cf86eef"
 
 
 def test_plan_service_price_repairs_includes_confirmed_rows() -> None:

@@ -31,7 +31,8 @@ from utils.extraction_persist import (
     route_and_persist_extraction,
 )
 from utils.clinic_services_botox import website_to_crawl_url
-from utils.clinic_services_db import apply_fields, fetch_service_row, seed_skeleton
+from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES, service_name_enum_hint
+from utils.clinic_services_db import apply_fields, fetch_service_row, fetch_service_row_by_enum, seed_skeleton
 from utils.clinic_services_search import (
     SearchPage,
     business_base_domain,
@@ -320,15 +321,22 @@ def persist_services(
         payload = llm_extract(
             llm,
             schema,
-            task="Extract explicit regular (non-promotional) service unit prices only.",
+            task=(
+                "Extract explicit regular (non-promotional) service unit prices only. "
+                "service_name must be exactly one of: " + ", ".join(SERVICE_NAME_ENUM_VALUES) + ". "
+                "Do not infer a canonical category; service_category_raw is optional and must be copied verbatim from a source label."
+            ),
             source_url=page.url,
             markdown=page.markdown,
         )
         for item in payload.get("services") or []:
-            std_name = str(item.get("service_name") or "Others").strip() or "Others"
-            if std_name in seen_names:
+            service_enum = service_name_enum_hint(item.get("service_name"))
+            if service_enum is None:
                 continue
-            seen_names.add(std_name)
+            service_key = service_enum
+            if service_key in seen_names:
+                continue
+            seen_names.add(service_key)
             write = upsert_extracted_service(
                 client,
                 business_id=business_id,
@@ -367,6 +375,7 @@ def persist_promotions_and_offers(
     promo_schema: dict[str, Any],
     offer_schema: dict[str, Any],
     membership_plan_ids: Sequence[int],
+    rendered_visibility: dict[str, dict[str, Any]],
 ) -> Dict[str, Any]:
     stats = {"promotions": 0, "offers": 0, "items": 0}
     default_plan_id = membership_plan_ids[0] if membership_plan_ids else None
@@ -391,6 +400,7 @@ def persist_promotions_and_offers(
             item=promos[0],
             source_url=url,
             evidence=md,
+            rendered_visibility=rendered_visibility.get(url),
         )
         if not promo_write.get("accepted"):
             continue
@@ -443,8 +453,11 @@ def link_item_services(client: Any, *, business_id: int) -> int:
         for item in items:
             if item.get("service_id"):
                 continue
-            name = canonicalize_service_name(hint) or "Others"
-            svc = fetch_service_row(client, business_id, name)
+            name = canonicalize_service_name(hint)
+            service_enum = service_name_enum_hint(name)
+            if service_enum is None:
+                continue
+            svc = fetch_service_row_by_enum(client, business_id, service_enum)
             if svc:
                 link_item_to_service(client, int(item["offer_item_id"]), int(svc["service_id"]))
                 linked += 1
@@ -553,6 +566,12 @@ def main() -> None:
         help="Run Search/Scrape/LLM and write report JSON only (no Supabase REST)",
     )
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--visibility-manifest",
+        type=Path,
+        default=None,
+        help="Rendered visibility report produced by the ego browser gate; required with --apply",
+    )
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
@@ -593,6 +612,14 @@ def main() -> None:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         print(f"report={out}")
         return
+
+    if args.apply and args.visibility_manifest is None:
+        raise RuntimeError("--visibility-manifest is required with --apply")
+
+    rendered_visibility: dict[str, dict[str, Any]] = {}
+    if args.visibility_manifest is not None:
+        visibility_payload = json.loads(args.visibility_manifest.read_text(encoding="utf-8"))
+        rendered_visibility = visibility_payload.get("results", visibility_payload)
 
     llm = build_client_from_env()
     if llm is None:
@@ -726,6 +753,7 @@ def main() -> None:
         promo_schema=promo_schema,
         offer_schema=offer_schema,
         membership_plan_ids=plan_ids,
+        rendered_visibility=rendered_visibility,
     )
     linked = link_item_services(client, business_id=business_id)
 

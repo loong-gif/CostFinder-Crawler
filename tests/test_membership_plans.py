@@ -51,7 +51,10 @@ def test_build_priced_offer_insert_row():
     assert row["membership_plan_id"] == 42
     assert row["discount_price"] == 11.5
     assert row["regular_price"] == 13.5
+    assert row["price_model"] == "per_unit"
+    assert row["_item"]["unit_price"] == 11.5
     assert "membership_price" not in row
+    assert row["is_new_customer_required"] is False
 
 
 def test_membership_offer_fingerprint_dedupes():

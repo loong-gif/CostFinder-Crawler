@@ -68,6 +68,10 @@ graph LR
 | `promo_offer_master` | offer_extraction_schema | 价格/门槛/指纹 |
 | `promo_offer_items` | offer_extraction_schema.items | 服务行 + 数量 |
 
+广域 membership service offers（例如 all services）在写入时展开为同一 business
+当前 `clinic_services` 目录的快照；`promo_offer_items.service_id` 仍必须非空。
+产品优惠在正式产品目录建立前不进入可激活的 service Offer。
+
 ## Legacy 提醒
 
 - `promo_membership_plans`：旧表名，见 `LEGACY_MEMBERSHIP_TABLE`；新代码/Skill 以 `clinic_memberships` 为准。

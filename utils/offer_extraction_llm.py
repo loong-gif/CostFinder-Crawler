@@ -285,6 +285,12 @@ class OpenAICompatibleClient:
             json=body,
             timeout=self.timeout,
         )
+        if response.status_code == 429:
+            raise RuntimeError(
+                "LLM HTTP 429: "
+                f"{response.text[:500]} "
+                f"Retry-After: {response.headers.get('Retry-After', '')}"
+            )
         response.raise_for_status()
         payload = response.json()
         choices = payload.get("choices", [])
@@ -356,6 +362,12 @@ class GeminiNativeClient:
             json=body,
             timeout=self.timeout,
         )
+        if response.status_code == 429:
+            raise RuntimeError(
+                "Gemini HTTP 429: "
+                f"{response.text[:500]} "
+                f"Retry-After: {response.headers.get('Retry-After', '')}"
+            )
         response.raise_for_status()
         payload = response.json()
         candidates = payload.get("candidates") or []

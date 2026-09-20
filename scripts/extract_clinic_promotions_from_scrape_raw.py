@@ -35,6 +35,7 @@ from utils.recent_raw_extraction import (
     resolve_business,
     validate_promotion,
 )
+from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
 
@@ -429,9 +430,17 @@ def persist_page_promotion(
     source_url: str,
     item: dict[str, Any],
     apply: bool = False,
+    rendered_visibility: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reuse, fill, or insert the one page-anchored promotion record."""
     candidate = copy.deepcopy(item)
+    if apply:
+        visibility = filter_visible_promotion_content(
+            candidate.get("promotion_content") or [], rendered_visibility
+        )
+        if not visibility.accepted:
+            return {"accepted": False, "action": "rejected", "reason": visibility.reason}
+        candidate["promotion_content"] = list(visibility.content)
     validation = validate_promotion(candidate, "")
     if not validation.accepted:
         return {"accepted": False, "action": "rejected", "reason": validation.reason}
@@ -451,9 +460,6 @@ def persist_page_promotion(
         if canonical_scrape_url(str(row.get("source_url") or "")) == canonical_url
     ]
     complete = next((row for row in anchors if _complete_promotion(row)), None)
-    candidate_end = candidate.get("campaign_end_date")
-    is_historical = bool(candidate_end and date.fromisoformat(candidate_end) < date.today())
-    desired_is_active = not is_historical
     if complete is not None:
         candidate_start = candidate.get("campaign_start_date")
         candidate_end = candidate.get("campaign_end_date")
@@ -461,20 +467,16 @@ def persist_page_promotion(
             complete.get("campaign_start_date") is None
             and complete.get("campaign_end_date") is None
         )
-        lifecycle_update = bool(complete.get("is_active")) and not desired_is_active
-        if (missing_existing_dates and candidate_start and candidate_end) or lifecycle_update:
+        if missing_existing_dates and candidate_start and candidate_end:
             update_payload: dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
-            if missing_existing_dates and candidate_start and candidate_end:
-                update_payload.update({
-                    "campaign_start_date": candidate_start,
-                    "campaign_end_date": candidate_end,
-                })
-            if lifecycle_update:
-                update_payload["is_active"] = False
+            update_payload.update({
+                "campaign_start_date": candidate_start,
+                "campaign_end_date": candidate_end,
+            })
             if not apply:
                 return {
                     "accepted": True,
-                    "action": "would_update_lifecycle",
+                    "action": "would_update_dates",
                     "promotion_id": complete.get("promotion_id"),
                 }
             promotion_id = complete.get("promotion_id")
@@ -487,7 +489,7 @@ def persist_page_promotion(
                 raise RuntimeError(
                     f"clinic_promotions date update returned {len(updated)} rows; expected exactly one"
                 )
-            return {"accepted": True, "action": "updated_lifecycle", "promotion_id": promotion_id}
+            return {"accepted": True, "action": "updated_dates", "promotion_id": promotion_id}
         action = "reused" if apply else "would_reuse"
         return {
             "accepted": True,
@@ -502,7 +504,10 @@ def persist_page_promotion(
         "promotion_content": list(candidate.get("promotion_content") or []),
         "campaign_start_date": candidate.get("campaign_start_date"),
         "campaign_end_date": candidate.get("campaign_end_date"),
-        "is_active": desired_is_active,
+        # A valid page extraction is not lifecycle evidence.  Explicit
+        # historical/removed-page decisions belong to the evidence review
+        # workflow, not to a date comparison here.
+        "is_active": True,
     }
     skeleton = anchors[0] if anchors else None
     if not apply:
@@ -728,6 +733,7 @@ def run(
     limit: Optional[int] = None,
     apply: bool = False,
     schema: Optional[dict[str, Any]] = None,
+    rendered_visibility: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the isolated page-by-page extraction and return a reconciliation audit."""
     extraction_schema = schema or json.loads(
@@ -807,6 +813,7 @@ def run(
                 source_url=source_url,
                 item=merged,
                 apply=apply,
+                rendered_visibility=(rendered_visibility or {}).get(source_url),
             )
             action = str(persistence.get("action") or "unknown")
             actions[action] = actions.get(action, 0) + 1
@@ -892,6 +899,12 @@ def main() -> None:
     parser.add_argument("--timezone", default=DEFAULT_TIMEZONE)
     parser.add_argument("--raw_id", action="append", type=int, default=[])
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--visibility-manifest",
+        type=Path,
+        default=None,
+        help="Rendered visibility report produced by the ego browser gate; required with --apply",
+    )
     parser.add_argument("--llm_base_url", default=DEFAULT_LLM_BASE_URL)
     parser.add_argument("--llm_model", default=DEFAULT_LLM_MODEL)
     parser.add_argument(
@@ -912,6 +925,12 @@ def main() -> None:
     if not supabase_url:
         raise RuntimeError("Missing SUPABASE_URL")
     client = SupabaseRestClient(supabase_url, get_supabase_writer_key())
+    if args.apply and args.visibility_manifest is None:
+        raise RuntimeError("--visibility-manifest is required with --apply")
+    rendered_visibility: Mapping[str, Mapping[str, Any]] = {}
+    if args.visibility_manifest is not None:
+        payload = json.loads(args.visibility_manifest.read_text(encoding="utf-8"))
+        rendered_visibility = payload.get("results", payload)
     llm = ProxySafeOpenAICompatibleClient(
         api_url=normalize_llm_api_url(args.llm_base_url),
         api_key=resolve_local_llm_api_key(os.environ),
@@ -925,6 +944,7 @@ def main() -> None:
         raw_ids=tuple(args.raw_id) or None,
         limit=args.limit,
         apply=args.apply,
+        rendered_visibility=rendered_visibility,
     )
     output = _output_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

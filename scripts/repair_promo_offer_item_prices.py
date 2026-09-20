@@ -21,7 +21,7 @@ from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # n
 
 TABLE_MASTER = "promo_offer_master"
 TABLE_ITEMS = "promo_offer_items"
-SELECT = "id,regular_price,discount_price,price_model,updated_at,promo_offer_items(offer_item_id,quantity,unit_price,updated_at,service_id)"
+SELECT = "id,regular_price,discount_price,price_model,updated_at,promo_offer_items(offer_item_id,quantity:delivered_units,unit_price,updated_at,service_id)"
 PAGE_SIZE = 1000
 
 

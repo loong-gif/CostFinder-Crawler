@@ -30,6 +30,7 @@ def test_promo_offer_with_discount_price():
         "discount_price": 11,
         "discount_percent": None,
         "discount_amount": None,
+        "conditions": [],
         "offer_raw_text": "First-time new patient special $11 per unit",
         "items": [{"service_name": "Jeuveau", "unit_type": "unit"}],
     }
@@ -51,6 +52,7 @@ def test_promo_offer_with_discount_percent_only():
         "discount_price": None,
         "discount_percent": 20,
         "discount_amount": None,
+        "conditions": [],
         "offer_raw_text": "Custom Full Facial Balancing 20% off $5,000+",
         "items": [{"service_name": "Others"}],
     }

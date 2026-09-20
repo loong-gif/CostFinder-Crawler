@@ -2,7 +2,7 @@ BEGIN;
 
 -- M009: normalize offer composition onto promo_offer_items.
 -- Master keeps the deal (price + offer_type + price_model).
--- Items keep services (service_id / quantity / unit / area).
+-- Items keep services (service_id / delivered_units / unit / area).
 -- After backfill, master.service_id is dropped.
 
 DO $$
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS promo_offer_items (
     offer_id BIGINT NOT NULL REFERENCES promo_offer_master(id) ON DELETE CASCADE,
     service_id BIGINT REFERENCES clinic_services(service_id) ON DELETE SET NULL,
     item_name TEXT NOT NULL CHECK (btrim(item_name) <> ''),
-    quantity NUMERIC CHECK (quantity IS NULL OR quantity > 0),
+    delivered_units NUMERIC CHECK (delivered_units IS NULL OR delivered_units > 0),
     unit_type TEXT,
     service_area TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -122,10 +122,10 @@ ALTER TABLE promo_offer_items ENABLE ROW LEVEL SECURITY;
 
 COMMENT ON TABLE promo_offer_items IS
     'Services contained by an offer. Single offers have one row; packages have one or more.';
-COMMENT ON COLUMN promo_offer_items.quantity IS
-    'Positive stated quantity only. Per-unit or unspecified amounts stay NULL.';
+COMMENT ON COLUMN promo_offer_items.delivered_units IS
+    'Positive stated delivered quantity only. Per-unit or unspecified amounts stay NULL.';
 
--- Move service linkage off master onto items. quantity stays NULL unless known.
+-- Move service linkage off master onto items. delivered_units stays NULL unless known.
 DO $$
 BEGIN
     IF EXISTS (
@@ -139,7 +139,7 @@ BEGIN
             offer_id,
             service_id,
             item_name,
-            quantity,
+            delivered_units,
             unit_type,
             service_area
         )
@@ -162,7 +162,7 @@ BEGIN
             offer_id,
             service_id,
             item_name,
-            quantity,
+            delivered_units,
             unit_type,
             service_area
         )

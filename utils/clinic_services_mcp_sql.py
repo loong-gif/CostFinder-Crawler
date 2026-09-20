@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from utils.offer_field_normalize import normalize_service_area
+from utils.clinic_service_taxonomy import live_clinic_service_payload
 
 
 def _sql_json(value: Any) -> str:
@@ -13,15 +13,12 @@ def _sql_json(value: Any) -> str:
 
 
 def render_mcp_operations(operations: Iterable[dict[str, Any]]) -> str:
-    """Build idempotent inserts/updates with enum casts required by clinic_services."""
+    """Build idempotent inserts/updates with the approved service-name enum."""
     inserts: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     for operation in operations:
         raw_payload = operation.get("payload") or {}
-        payload = {
-            **raw_payload,
-            "service_area": normalize_service_area(raw_payload.get("service_area")),
-        }
+        payload = live_clinic_service_payload(raw_payload)
         if operation.get("action") == "mcp_insert":
             inserts.append(payload)
         elif operation.get("action") == "mcp_update":
@@ -34,22 +31,22 @@ def render_mcp_operations(operations: Iterable[dict[str, Any]]) -> str:
   select * from jsonb_to_recordset("""
             + _sql_json(inserts)
             + """::jsonb) as r(
-    business_id bigint, service_name text, service_name_raw text, regular_price numeric,
-    unit_type text, service_category text, service_area text, source_url text, checked boolean
+    business_id bigint, service_name text, regular_price numeric,
+    unit_type text, service_area text, source_url text
   )
 )
 insert into public.clinic_services (
-  business_id, service_name, service_name_raw, regular_price, unit_type,
-  service_category, service_area, source_url, "check", updated_at
+  business_id, service_name, regular_price, unit_type, service_area,
+  source_url, updated_at
 )
-select business_id, service_name, service_name_raw, regular_price,
-  unit_type::public.unit_type_enum, service_category::public.service_category_enum,
-  service_area::public.service_area_enum, checked, now()
+select business_id,
+  service_name::public.clinic_service_name_enum,
+  regular_price, unit_type, service_area, source_url, now()
 from rows
 where not exists (
   select 1 from public.clinic_services c
   where c.business_id = rows.business_id
-    and upper(c.service_name) = upper(rows.service_name)
+    and c.service_name = rows.service_name::public.clinic_service_name_enum
 );"""
         )
     if updates:
@@ -58,21 +55,20 @@ where not exists (
   select * from jsonb_to_recordset("""
             + _sql_json(updates)
             + """::jsonb) as r(
-    service_id bigint, business_id bigint, service_name text, service_name_raw text,
-    regular_price numeric, unit_type text, service_category text, service_area text, source_url text,
-    checked boolean
+    service_id bigint, business_id bigint, service_name text,
+    regular_price numeric, unit_type text, service_area text, source_url text
   )
 )
 update public.clinic_services c
-set business_id = r.business_id,
-    service_name = r.service_name,
-    service_name_raw = r.service_name_raw,
+set business_id = coalesce(r.business_id, c.business_id),
+    service_name = case
+      when r.service_name is null then c.service_name
+      else r.service_name::public.clinic_service_name_enum
+    end,
     regular_price = r.regular_price,
-    unit_type = r.unit_type::public.unit_type_enum,
-    service_category = r.service_category::public.service_category_enum,
+    unit_type = r.unit_type,
     service_area = r.service_area,
     source_url = r.source_url,
-    "check" = r.checked,
     updated_at = now()
 from rows r
 where c.service_id = r.service_id;"""

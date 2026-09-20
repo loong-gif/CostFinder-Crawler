@@ -1,6 +1,6 @@
 BEGIN;
 
--- The prior trigger rewrote every explicit NULL as discount_price / quantity.
+-- The prior trigger rewrote every explicit NULL as discount_price / delivered_units.
 -- That loses the fact that a multi-service package has no allocable unit price.
 DROP TRIGGER IF EXISTS trg_set_promo_offer_items_unit_price ON public.promo_offer_items;
 
@@ -32,7 +32,7 @@ BEGIN
     END IF;
 
     SELECT
-        COALESCE(sum(existing.quantity), 0),
+        COALESCE(sum(existing.delivered_units), 0),
         COALESCE(bool_or(
             NEW.service_id IS NULL
             OR existing.service_id IS NULL
@@ -48,7 +48,7 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    v_total_quantity := COALESCE(NEW.quantity, 0) + v_other_quantity;
+    v_total_quantity := COALESCE(NEW.delivered_units, 0) + v_other_quantity;
     IF v_discount_price IS NULL OR v_total_quantity <= 0 THEN
         NEW.unit_price := NULL;
         RETURN NEW;
@@ -67,7 +67,7 @@ END;
 $function$;
 
 CREATE TRIGGER trg_normalize_promo_offer_item_unit_price
-BEFORE INSERT OR UPDATE OF offer_id, service_id, quantity, unit_price
+BEFORE INSERT OR UPDATE OF offer_id, service_id, delivered_units, unit_price
 ON public.promo_offer_items
 FOR EACH ROW
 EXECUTE FUNCTION public.normalize_promo_offer_item_unit_price();
@@ -141,7 +141,7 @@ WHERE item.offer_id = package_offers.offer_id;
 WITH single_logical_offers AS (
     SELECT
         offer_id,
-        sum(quantity)::integer AS total_quantity
+        sum(delivered_units)::integer AS total_quantity
     FROM public.promo_offer_items
     GROUP BY offer_id
     HAVING count(*) = 1

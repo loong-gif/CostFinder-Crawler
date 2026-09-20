@@ -1,6 +1,5 @@
 """Tests for utils.promo_offer_repair."""
 import sys
-from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,12 +24,11 @@ def test_should_swap_prices_when_text_inverted():
     assert should_swap_prices(offer)
 
 
-def test_p0_ends_expired_active():
+def test_p0_does_not_end_active_offer_from_source_page_date():
     actions = plan_p0_repairs(
-        [{"id": 1, "is_active": True, "end_date": "2020-01-01"}],
-        today=date(2026, 7, 15),
+        [{"id": 1, "is_active": True, "end_date": "2020-01-01", "offer_raw_text": "Botox $10/unit"}],
     )
-    assert actions and actions[0]["fields"]["is_active"] is False
+    assert actions == []
 
 
 def test_resolve_business_id_unique_domain():

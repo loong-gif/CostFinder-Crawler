@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from firecrawl.v2.types import ScreenshotFormat
 
@@ -30,6 +30,7 @@ from utils.firecrawl_scrape_raw_db import (
 )
 from utils.offer_extraction_llm import GeminiNativeClient
 from utils.recent_raw_extraction import promotion_evidence_markdown
+from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -148,6 +149,7 @@ def process_scrape_response(
     target: dict[str, Any],
     response: dict[str, Any] | None,
     scrape_error: str | None = None,
+    rendered_visibility: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist one raw response, link its promotion, and write validated content."""
     promotion_id = int(target["promotion_id"])
@@ -199,6 +201,10 @@ def process_scrape_response(
     content = list(merged.get("promotion_content") or [])
     if not content:
         return {"promotion_id": promotion_id, "source_url": source_url, "scrape_id": raw_id, "status": "no_validated_promotions"}
+    visibility = filter_visible_promotion_content(content, rendered_visibility)
+    if not visibility.accepted:
+        return {"promotion_id": promotion_id, "source_url": source_url, "scrape_id": raw_id, "status": "visibility_gate_rejected", "reason": visibility.reason}
+    content = list(visibility.content)
     updated = db.update_row(
         "clinic_promotions",
         {"promotion_id": f"eq.{promotion_id}"},
@@ -209,15 +215,15 @@ def process_scrape_response(
     return {"promotion_id": promotion_id, "source_url": source_url, "scrape_id": raw_id, "status": "updated", "promotion_content_count": len(content)}
 
 
-def process_target(db: Any, llm: Any, target: dict[str, Any]) -> dict[str, Any]:
+def process_target(db: Any, llm: Any, target: dict[str, Any], rendered_visibility: Mapping[str, Any] | None = None) -> dict[str, Any]:
     try:
         response = scrape_target(str(target.get("source_url") or ""))
     except Exception as exc:
-        return process_scrape_response(db, llm, target, None, scrape_error=_clean_error(exc))
-    return process_scrape_response(db, llm, target, response)
+        return process_scrape_response(db, llm, target, None, scrape_error=_clean_error(exc), rendered_visibility=rendered_visibility)
+    return process_scrape_response(db, llm, target, response, rendered_visibility=rendered_visibility)
 
 
-def process_linked_raw(db: Any, llm: Any, target: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+def process_linked_raw(db: Any, llm: Any, target: dict[str, Any], raw: dict[str, Any], rendered_visibility: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Extract content from a Firecrawl raw row already linked to a promotion."""
     promotion_id = int(target["promotion_id"])
     source_url = str(target.get("source_url") or "").strip()
@@ -245,6 +251,10 @@ def process_linked_raw(db: Any, llm: Any, target: dict[str, Any], raw: dict[str,
     content = list(merged.get("promotion_content") or [])
     if not content:
         return {"promotion_id": promotion_id, "source_url": source_url, "scrape_id": raw_id, "status": "no_validated_promotions"}
+    visibility = filter_visible_promotion_content(content, rendered_visibility)
+    if not visibility.accepted:
+        return {"promotion_id": promotion_id, "source_url": source_url, "scrape_id": raw_id, "status": "visibility_gate_rejected", "reason": visibility.reason}
+    content = list(visibility.content)
     updated = db.update_row(
         "clinic_promotions",
         {"promotion_id": f"eq.{promotion_id}"},
@@ -271,6 +281,7 @@ def run(
     workers: int = 3,
     apply: bool = False,
     extract_linked_raw: bool = False,
+    rendered_visibility: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if workers < 1:
         raise ValueError("workers must be positive")
@@ -297,7 +308,7 @@ def run(
             if len(rows) != 1:
                 audit["results"].append({"promotion_id": target["promotion_id"], "scrape_id": raw_id, "status": "missing_raw"})
                 continue
-            audit["results"].append(process_linked_raw(db, llm, target, rows[0]))
+            audit["results"].append(process_linked_raw(db, llm, target, rows[0], (rendered_visibility or {}).get(str(target.get("source_url") or ""))))
         statuses: dict[str, int] = {}
         for result in audit["results"]:
             status = str(result.get("status") or "unknown")
@@ -310,10 +321,10 @@ def run(
         for target, future in zip(targets, futures):
             try:
                 response = future.result()
-                result = process_scrape_response(db, llm, target, response)
+                result = process_scrape_response(db, llm, target, response, rendered_visibility=(rendered_visibility or {}).get(str(target.get("source_url") or "")))
             except Exception as exc:
                 try:
-                    result = process_scrape_response(db, llm, target, None, scrape_error=_clean_error(exc))
+                    result = process_scrape_response(db, llm, target, None, scrape_error=_clean_error(exc), rendered_visibility=(rendered_visibility or {}).get(str(target.get("source_url") or "")))
                 except Exception as persist_exc:
                     result = {"promotion_id": target["promotion_id"], "status": "persistence_failed", "error": _clean_error(persist_exc)}
             audit["results"].append(result)
@@ -337,6 +348,12 @@ def main() -> None:
     parser.add_argument("--promotion-id", action="append", type=int, default=[])
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--extract-linked-raw", action="store_true", help="Use existing linked Firecrawl raw rows; do not call Firecrawl.")
+    parser.add_argument(
+        "--visibility-manifest",
+        type=Path,
+        default=None,
+        help="Rendered visibility report produced by the ego browser gate; required with --apply",
+    )
     parser.add_argument("--output", default=str(PROJECT_ROOT / ".firecrawl" / "clinic_promotions_firecrawl_gemini_backfill_audit.json"))
     args = parser.parse_args()
     if args.limit is not None and args.limit < 0:
@@ -349,6 +366,12 @@ def main() -> None:
     if not url:
         raise RuntimeError("Missing SUPABASE_URL")
     db = SupabaseRestClient(url, get_supabase_writer_key())
+    if args.apply and args.visibility_manifest is None:
+        raise RuntimeError("--visibility-manifest is required with --apply")
+    rendered_visibility: Mapping[str, Mapping[str, Any]] = {}
+    if args.visibility_manifest is not None:
+        payload = json.loads(args.visibility_manifest.read_text(encoding="utf-8"))
+        rendered_visibility = payload.get("results", payload)
     audit = run(
         db=db,
         promotion_ids=tuple(args.promotion_id) or None,
@@ -356,6 +379,7 @@ def main() -> None:
         workers=args.workers,
         apply=args.apply,
         extract_linked_raw=args.extract_linked_raw,
+        rendered_visibility=rendered_visibility,
     )
     output = _output_path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

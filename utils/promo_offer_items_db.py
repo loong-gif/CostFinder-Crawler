@@ -60,7 +60,7 @@ def upsert_offer_items(
         elif item.get("service_name") is not None:
             row["item_name"] = str(item["service_name"]).strip()
         if item.get("quantity") is not None:
-            row["quantity"] = item["quantity"]
+            row["delivered_units"] = item["quantity"]
         if item.get("unit_price") is not None:
             row["unit_price"] = item["unit_price"]
         rows.append(row)

@@ -110,6 +110,11 @@ def _single_logical_service(items: list[Mapping[str, Any]]) -> bool:
 
 
 def _item_unit_expectation(row: Mapping[str, Any]) -> Decimal | None:
+    # A package total is intentionally not allocated to individual items.
+    # The live trigger clears unit_price for these rows, especially when a
+    # package contains multiple delivered services.
+    if row.get("is_package") is True:
+        return None
     discount = _positive(row.get("discount_price"))
     items = _items(row)
     model = str(row.get("price_model") or "").strip().lower()

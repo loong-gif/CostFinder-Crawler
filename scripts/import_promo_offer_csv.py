@@ -60,7 +60,7 @@ def _preflight(client: SupabaseRestClient) -> None:
         if missing:
             raise RuntimeError(f"promo_offer_master schema mismatch: missing {sorted(missing)}")
     if items:
-        required_items = {"offer_item_id", "offer_id", "quantity", "unit_price"}
+        required_items = {"offer_item_id", "offer_id", "delivered_units", "unit_price"}
         missing = required_items - set(items[0])
         if missing:
             raise RuntimeError(f"promo_offer_items schema mismatch: missing {sorted(missing)}")
@@ -82,7 +82,17 @@ def _write_offer(client: SupabaseRestClient, master: dict[str, Any], items: list
     inserted = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [master])
     offer_id = int(inserted[0]["id"])
     now = datetime.now(timezone.utc).isoformat()
-    rows = [{"offer_id": offer_id, "created_at": now, "updated_at": now, **item} for item in items] or [
+    db_items = [
+        {**item, "delivered_units": item["quantity"]}
+        if "quantity" in item
+        else dict(item)
+        for item in items
+    ]
+    db_items = [
+        {key: value for key, value in item.items() if key != "quantity"}
+        for item in db_items
+    ]
+    rows = [{"offer_id": offer_id, "created_at": now, "updated_at": now, **item} for item in db_items] or [
         {"offer_id": offer_id, "created_at": now, "updated_at": now}
     ]
     try:

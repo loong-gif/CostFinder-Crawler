@@ -30,8 +30,6 @@ OFFER_MASTER_COLUMNS = (
     "is_new_customer_required",
     "price_model",
     "updated_at",
-    "moderation_status",
-    "moderation_notes",
     "conditions",
 )
 
@@ -39,7 +37,7 @@ OFFER_MASTER_SELECT = ",".join(OFFER_MASTER_COLUMNS)
 
 OFFER_MASTER_WITH_ITEMS_SELECT = (
     f"{OFFER_MASTER_SELECT},"
-    "promo_offer_items(offer_item_id,offer_id,item_name,service_id,quantity,unit_price),"
+    "promo_offer_items(offer_item_id,offer_id,item_name,service_id,quantity:delivered_units,unit_price),"
     "clinic_promotions(promotion_id,source_url,promotion_title,campaign_start_date,campaign_end_date),"
     "clinic_memberships(plan_id,source_url,membership_name)"
 )
@@ -49,13 +47,18 @@ OFFER_ITEM_COLUMNS = (
     "offer_id",
     "item_name",
     "service_id",
-    "quantity",
+    "delivered_units",
     "created_at",
     "updated_at",
     "unit_price",
 )
 
-OFFER_ITEM_SELECT = ",".join(OFFER_ITEM_COLUMNS)
+# Keep the internal extraction shape stable while reading the renamed database
+# column. Writes must use the physical column name directly.
+OFFER_ITEM_SELECT = (
+    "offer_item_id,offer_id,item_name,service_id,quantity:delivered_units,"
+    "created_at,updated_at,unit_price"
+)
 
 CLINIC_SERVICE_COLUMNS = (
     "service_id",
@@ -63,12 +66,11 @@ CLINIC_SERVICE_COLUMNS = (
     "service_name",
     "regular_price",
     "unit_type",
+    "service_area",
     "created_at",
     "updated_at",
     "source_url",
     "service_category",
-    "service_name_raw",
-    "service_area",
 )
 
 CLINIC_SERVICE_SELECT = ",".join(CLINIC_SERVICE_COLUMNS)

@@ -25,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config.settings import OUTPUT_DIR
 from utils.supabase_access import fetch_all_rows, load_supabase_client
-from utils.clinic_services_db import apply_fields, fetch_service_row
+from utils.clinic_services_db import apply_fields, fetch_service_row_by_enum
 from utils.clinic_services_from_offers import (
     BOTOX_SERVICE_NAME,
     fields_have_updates,
@@ -130,7 +130,7 @@ def process_business(
         report["status"] = "no_winner"
         return report
 
-    clinic_row = fetch_service_row(client, business_id, BOTOX_SERVICE_NAME)
+    clinic_row = fetch_service_row_by_enum(client, business_id, "Botox")
     if not clinic_row:
         report["status"] = "missing_skeleton"
         return report
