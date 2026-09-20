@@ -6,7 +6,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from utils.clinic_services_db import fetch_service_row
+from utils.clinic_service_taxonomy import live_clinic_service_payload, service_name_enum_hint
+from utils.clinic_services_db import fetch_service_row, fetch_service_row_by_enum
 from utils.db_rows import ClinicServiceInsertRow
 from utils.recent_raw_extraction import validate_service
 from utils.schema_contract import TABLE_CLINIC_SERVICES
@@ -16,7 +17,6 @@ from utils.service_price_guard import (
     should_replace_source_url,
 )
 
-_VALID_CATEGORIES = frozenset({"Neurotoxin", "Filler", "others"})
 _VALID_UNIT_TYPES = frozenset(
     {
         "unit",
@@ -32,11 +32,6 @@ _VALID_UNIT_TYPES = frozenset(
         "others",
     }
 )
-
-
-def _normalize_category(value: Any) -> str:
-    category = str(value or "others").strip() or "others"
-    return category if category in _VALID_CATEGORIES else "others"
 
 
 def _normalize_unit_type(value: Any) -> str:
@@ -277,7 +272,8 @@ def upsert_extracted_service(
     source_url: str,
     evidence: str,
 ) -> dict[str, Any]:
-    std_name = str(item.get("service_name") or "Others").strip() or "Others"
+    std_name = str(item.get("service_name") or "").strip()
+    service_enum = service_name_enum_hint(std_name)
     normalized_url = normalize_source_url(source_url)
     result = {
         "business_id": business_id,
@@ -289,7 +285,13 @@ def upsert_extracted_service(
         "action": "skipped",
     }
 
-    existing = fetch_service_row(client, business_id, std_name)
+    if service_enum is None:
+        result["reason"] = "unsupported_service_name"
+        return result
+    std_name = service_enum
+    result["service_name"] = std_name
+
+    existing = fetch_service_row_by_enum(client, business_id, std_name)
     catalog = prepare_service_catalog_write(
         item,
         source_url=normalized_url,
@@ -305,9 +307,6 @@ def upsert_extracted_service(
 
     price = item.get("regular_price")
     unit_type = _normalize_unit_type(item.get("unit_type"))
-    category = _normalize_category(item.get("service_category"))
-    raw_name = str(item.get("service_name_raw") or "").strip()
-
     if existing:
         service_id = int(existing["service_id"])
     else:
@@ -316,17 +315,13 @@ def upsert_extracted_service(
             "service_name": std_name,
             "regular_price": float(price),
             "unit_type": unit_type,
-            "service_category": category,
             "source_url": result["source_url"],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if raw_name:
-            insert_row["service_name_raw"] = raw_name
-        area = item.get("service_area")
-        if area is not None and str(area).strip():
-            insert_row["service_area"] = str(area).strip()
         try:
-            insert_payload = ClinicServiceInsertRow.model_validate(insert_row).to_api_dict()
+            insert_payload = ClinicServiceInsertRow.model_validate(
+                live_clinic_service_payload(insert_row)
+            ).to_api_dict()
         except ValidationError:
             return {**result, "accepted": False, "reason": "schema_invalid", "action": "skipped"}
         inserted = client.insert_rows(TABLE_CLINIC_SERVICES, [insert_payload])
@@ -339,22 +334,14 @@ def upsert_extracted_service(
     }
     if should_replace_source_url(existing.get("source_url"), normalized_url):
         payload["source_url"] = normalized_url
-    if raw_name:
-        payload["service_name_raw"] = raw_name
-    if item.get("service_category") is not None:
-        payload["service_category"] = category
     if price is not None:
         payload["regular_price"] = float(price)
     if str(item.get("unit_type") or "").strip():
         payload["unit_type"] = unit_type
-    area = item.get("service_area")
-    if area is not None and str(area).strip():
-        payload["service_area"] = str(area).strip()
-
     client.update_row(
         TABLE_CLINIC_SERVICES,
         {"service_id": f"eq.{service_id}"},
-        payload,
+        live_clinic_service_payload(payload),
     )
     result.update({"service_id": service_id, "action": "updated"})
     return result

@@ -4,6 +4,7 @@ from typing import Any
 from utils.promo_offer_items_db import upsert_offer_items
 from utils.schema_contract import (
     OFFER_ITEM_COLUMNS,
+    OFFER_MASTER_COLUMNS,
     TABLE_CLINIC_MEMBERSHIPS,
     TABLE_CLINIC_PROMOTIONS,
     TABLE_PROMO_OFFER_ITEMS,
@@ -30,6 +31,11 @@ def test_offer_item_name_from_embed() -> None:
 
 def test_offer_item_columns_include_item_name_before_service_id() -> None:
     assert OFFER_ITEM_COLUMNS.index("item_name") < OFFER_ITEM_COLUMNS.index("service_id")
+
+
+def test_offer_master_columns_exclude_removed_moderation_fields() -> None:
+    assert "moderation_status" not in OFFER_MASTER_COLUMNS
+    assert "moderation_notes" not in OFFER_MASTER_COLUMNS
 
 
 def test_upsert_offer_items_uses_linked_service_name() -> None:

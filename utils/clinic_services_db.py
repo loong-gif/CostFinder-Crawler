@@ -7,48 +7,44 @@ from typing import Any, Dict, List, Optional
 
 from utils.clinic_services_botox import BotoxServiceFields
 from utils.clinic_services_from_offers import ClinicServiceFromOfferFields
+from utils.clinic_service_taxonomy import service_name_enum_hint
 from utils.schema_contract import CLINIC_SERVICE_SELECT, TABLE_CLINIC_SERVICES
 from utils.supabase_rest import SupabaseRestClient
 
 TABLE = TABLE_CLINIC_SERVICES
-
-_NEUROTOXIN_SERVICE_NAMES = frozenset(
-    {"Botox", "Dysport", "Daxxify", "Letybo", "Xeomin", "Jeuveau", "Neurotoxin"}
-)
-_FILLER_SERVICE_NAMES = frozenset(
-    {
-        "Dermal Filler",
-        "Juvéderm",
-        "Restylane",
-        "Belotero",
-        "Radiesse",
-        "PRFM Injections",
-        "Sculptra",
-        "Kybella",
-        "Skinvive",
-    }
-)
-
-
-def _skeleton_service_category(service_name: str) -> str:
-    if service_name in _NEUROTOXIN_SERVICE_NAMES:
-        return "Neurotoxin"
-    if service_name in _FILLER_SERVICE_NAMES:
-        return "Filler"
-    return "others"
-
 
 def fetch_service_row(
     client: SupabaseRestClient,
     business_id: int,
     service_name: str,
 ) -> Optional[Dict[str, Any]]:
+    canonical_name = service_name_enum_hint(service_name)
+    if canonical_name is None:
+        return None
     rows = client.fetch_rows(
         TABLE,
         CLINIC_SERVICE_SELECT,
         filters={
             "business_id": f"eq.{business_id}",
-            "service_name": f"eq.{service_name}",
+            "service_name": f"eq.{canonical_name}",
+        },
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+def fetch_service_row_by_enum(
+    client: SupabaseRestClient,
+    business_id: int,
+    service_name_enum: str,
+) -> Optional[Dict[str, Any]]:
+    """Find a service by canonical service_name enum."""
+    rows = client.fetch_rows(
+        TABLE,
+        CLINIC_SERVICE_SELECT,
+        filters={
+            "business_id": f"eq.{business_id}",
+            "service_name": f"eq.{service_name_enum}",
         },
         limit=1,
     )
@@ -99,7 +95,10 @@ def seed_skeleton(
     business_id: int,
     service_name: str,
 ) -> Dict[str, Any]:
-    existing = fetch_service_row(client, business_id, service_name)
+    canonical_name = service_name_enum_hint(service_name)
+    if canonical_name is None:
+        raise ValueError("unsupported clinic service enum")
+    existing = fetch_service_row(client, business_id, canonical_name)
     if existing:
         return existing
     inserted = client.insert_rows(
@@ -107,8 +106,7 @@ def seed_skeleton(
         [
             {
                 "business_id": business_id,
-                "service_name": service_name,
-                "service_category": _skeleton_service_category(service_name),
+                "service_name": canonical_name,
             }
         ],
     )
@@ -147,10 +145,6 @@ def apply_fields(
         payload["unit_type"] = fields.unit_type
     elif fields.unit_type:
         payload["unit_type"] = fields.unit_type
-    if fields.service_area and not (existing_row or {}).get("service_area"):
-        payload["service_area"] = fields.service_area
-    elif fields.service_area:
-        payload["service_area"] = fields.service_area
     if source_url and not ineligible_source:
         incoming = normalize_source_url(source_url)
         existing_url = normalize_source_url((existing_row or {}).get("source_url"))

@@ -31,7 +31,7 @@ MASTER_SELECT = (
     "created_at,offer_raw_text,promotion_id,is_active,is_new_customer_required,"
     "price_model,updated_at,is_recaculated"
 )
-ITEM_SELECT = "offer_item_id,offer_id,service_id,quantity,unit_price,created_at,updated_at"
+ITEM_SELECT = "offer_item_id,offer_id,service_id,quantity:delivered_units,unit_price,created_at,updated_at"
 SERVICE_SELECT = (
     "service_id,business_id,service_name,regular_price,unit_type,created_at,"
     "updated_at,source_url,service_category"

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import json
+import re
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
@@ -50,6 +51,20 @@ def _is_new_customer_required(row: Mapping[str, Any], raw_text: str) -> bool:
     return any(phrase in text for phrase in ("new customer", "new patient", "new client", "first time"))
 
 
+def _derive_regular_price(
+    regular_price: float | None,
+    discount_price: float | None,
+    discount_amount: float | None,
+    raw_text: str,
+) -> float | None:
+    """Derive only when the source explicitly says ``save $X``."""
+    if regular_price is not None or discount_price is None or discount_amount is None:
+        return regular_price
+    if re.search(r"\b(?:save|saves|savings?)\s*\$\s*[0-9][0-9,]*(?:\.\d+)?", raw_text, re.I):
+        return round(discount_price + discount_amount, 4)
+    return None
+
+
 def _build_items(row: Mapping[str, Any], *, per_unit: bool, discount_price: float | None) -> list[dict[str, Any]]:
     content = str(row.get("offer_content") or "").strip()
     parsed: dict[str, Any] = {}
@@ -75,9 +90,12 @@ def _build_items(row: Mapping[str, Any], *, per_unit: bool, discount_price: floa
         quantity = _positive_quantity(row.get("delivered_unit"))
         if quantity is not None and not per_unit:
             item["quantity"] = int(quantity) if quantity.is_integer() else quantity
+        elif not per_unit and not normalize_bool(row.get("is_package")):
+            item["quantity"] = 1
         items.append(item)
-    if per_unit and discount_price is not None and len(items) == 1:
-        items[0]["unit_price"] = discount_price
+    if per_unit and discount_price is not None:
+        for item in items:
+            item["unit_price"] = discount_price
     return items
 
 
@@ -155,14 +173,22 @@ def build_import_plan(
         discount_price = _positive_price(row.get("discount_price"))
         discount_amount = _positive_price(row.get("discount_amount"))
         discount_percent = _valid_percent(row.get("discount_percent"))
+        regular_price = _derive_regular_price(
+            regular_price, discount_price, discount_amount, raw_text
+        )
         if discount_price is None and discount_amount is None and discount_percent is None:
             rejected.append(RejectedOffer(source_row, "missing_discount_signal", url, raw_text))
             continue
 
         per_unit = _is_per_unit(row)
+        if per_unit and discount_price is None:
+            rejected.append(RejectedOffer(source_row, "per_unit_price_missing", url, raw_text))
+            continue
         quantity = _positive_quantity(row.get("delivered_unit"))
         end_date = str(row.get("end_date") or "").strip()
         is_active = True
+        if promotion is not None and promotion.get("is_active") is False:
+            is_active = False
         if end_date:
             try:
                 is_active = date.fromisoformat(end_date) >= as_of
@@ -197,6 +223,8 @@ def build_import_plan(
             regular_price=regular_price,
             discount_price=discount_price,
             offer_raw_text=raw_text,
+            business_id=business_id,
+            promotion_id=promotion_id,
         )
         accepted.append(PlannedOffer(source_row, master, _build_items(row, per_unit=per_unit, discount_price=discount_price), needs_promotion))
 

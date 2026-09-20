@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import date
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
@@ -138,25 +137,12 @@ def infer_unit_type_from_text(offer: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def plan_p0_repairs(rows: Sequence[Mapping[str, Any]], *, today: Optional[date] = None) -> List[Dict[str, Any]]:
-    today = today or date.today()
+def plan_p0_repairs(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
     for row in rows:
         if not offer_is_active(dict(row)):
             continue
         row_id = row.get("id")
-        end_date = str(row.get("end_date") or "").strip()
-        if end_date and end_date < today.isoformat():
-            actions.append(
-                {
-                    "batch": "p0",
-                    "action": "update",
-                    "id": row_id,
-                    "fields": {"is_active": False},
-                    "reason": f"active_past_end_date={end_date}",
-                }
-            )
-            continue
         if should_swap_prices(row):
             actions.append(
                 {
@@ -348,13 +334,12 @@ def build_all_repair_plans(
     staging_rows: Sequence[Mapping[str, Any]],
     promotion_rows: Optional[Sequence[Mapping[str, Any]]] = None,
     sibling_index: Optional[Mapping[str, str]] = None,
-    today: Optional[date] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     url_map, dom_map = build_business_lookup(
         master_rows, staging_rows, promotion_rows=promotion_rows
     )
     return {
-        "p0": plan_p0_repairs(rows, today=today),
+        "p0": plan_p0_repairs(rows),
         "business": plan_business_repairs(rows, url_map=url_map, dom_map=dom_map),
         "membership": plan_membership_repairs(rows),
         "consultation": plan_consultation_repairs(rows),

@@ -24,11 +24,11 @@ from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
 
 SELECT = (
-    "id,regular_price,discount_price,discount_amount,discount_percent,price_model,"
+    "id,regular_price,discount_price,discount_amount,discount_percent,price_model,is_package,"
     "offer_raw_text,updated_at,"
-    "promo_offer_items(offer_item_id,service_id,quantity,unit_price,updated_at)"
+    "promo_offer_items(offer_item_id,service_id,quantity:delivered_units,unit_price,updated_at)"
 )
-ITEM_SELECT = "offer_item_id,offer_id,service_id,quantity,unit_price,updated_at"
+ITEM_SELECT = "offer_item_id,offer_id,service_id,quantity:delivered_units,unit_price,updated_at"
 SERVICE_SELECT = "service_id,service_name,unit_type"
 
 
@@ -82,7 +82,11 @@ def _apply_item_updates(client: SupabaseRestClient, updates: list[dict[str, Any]
     conflicts: list[dict[str, Any]] = []
     mismatches: list[dict[str, Any]] = []
     for update in updates:
-        payload = {key: value for key, value in update.items() if key not in {"offer_item_id", "updated_at"}}
+        payload = {
+            "delivered_units" if key == "quantity" else key: value
+            for key, value in update.items()
+            if key not in {"offer_item_id", "updated_at"}
+        }
         returned = client.update_row(
             "promo_offer_items",
             {"offer_item_id": f"eq.{update['offer_item_id']}", "updated_at": f"eq.{update['updated_at']}"},
@@ -95,7 +99,9 @@ def _apply_item_updates(client: SupabaseRestClient, updates: list[dict[str, Any]
         mismatched_fields = {
             field: {"expected": update[field], "actual": actual.get(field)}
             for field in ("quantity", "unit_price")
-            if field in update and str(actual.get(field)) != str(update[field])
+            if field in update
+            and str(actual.get("delivered_units" if field == "quantity" else field))
+            != str(update[field])
         }
         if mismatched_fields:
             mismatches.append({"offer_item_id": update["offer_item_id"], "fields": mismatched_fields})

@@ -14,6 +14,10 @@ if TYPE_CHECKING:
     from utils.offer_extraction_llm import StructuredLLMClient
 
 _VALID_BILLING_PERIODS = {"monthly", "annual", "weekly"}
+_PER_UNIT_OFFER_SIGNAL = re.compile(
+    r"(?:/|per)\s*(?:u(?:nit)?s?)\b|\ba\s+unit\b",
+    re.IGNORECASE,
+)
 
 def build_membership_extraction_messages(row: Dict[str, Any], page_content: str) -> List[Dict[str, str]]:
     return [
@@ -179,12 +183,19 @@ def build_priced_offer_insert_row(
         if unit_type:
             parts.append(f"per {unit_type}")
         offer_raw_text = " ".join(parts)
+    price_model = (
+        "per_unit"
+        if unit_type.casefold() in {"unit", "units", "per_unit"}
+        or _PER_UNIT_OFFER_SIGNAL.search(offer_raw_text)
+        else "total"
+    )
 
     row: Dict[str, Any] = {
-        "is_active": True,
-        "is_new_customer_required": True,
+        "is_active": False,
+        "is_new_customer_required": False,
         "offer_raw_text": offer_raw_text,
         "membership_plan_id": membership_plan_id,
+        "price_model": price_model,
     }
     if staging_row.get("business_id") is not None:
         row["business_id"] = staging_row["business_id"]
@@ -197,6 +208,8 @@ def build_priced_offer_insert_row(
     row["_item"] = build_item_from_offer_fields(
         {"service_name": service_name, "unit_type": unit_type},
     )
+    if price_model == "per_unit" and price is not None:
+        row["_item"]["unit_price"] = price
     return row
 
 
@@ -474,6 +487,7 @@ def persist_membership_extraction(
 
     inserted_plans = 0
     inserted_offers = 0
+    quarantined_offers = 0
     ended_offers = 0
     kept_offer_ids: Set[str] = set()
     plan_rows: List[Dict[str, Any]] = []
@@ -510,6 +524,21 @@ def persist_membership_extraction(
                 staging_row=staging_row,
             )
             item_payload = offer_row.pop("_item", None)
+            if offer_row.get("price_model") == "per_unit" and offer_row.get("discount_price") is None:
+                quarantined_offers += 1
+                continue
+            if item_payload and business_id is not None:
+                from utils.clinic_service_extraction import resolve_service_row_for_name
+
+                service = resolve_service_row_for_name(
+                    client,
+                    business_id=int(business_id),
+                    service_name=str(item_payload.get("item_name") or ""),
+                )
+                if service is None:
+                    quarantined_offers += 1
+                    continue
+                item_payload["service_id"] = int(service["service_id"])
             service_name = str((item_payload or {}).get("item_name") or "")
             fingerprint = membership_offer_fingerprint(
                 membership_plan_id=plan_id,
@@ -533,6 +562,11 @@ def persist_membership_extraction(
                 kept_offer_ids.add(str(offer_id))
                 if item_payload:
                     upsert_offer_items(client, offer_id, [item_payload])
+                    client.update_row(
+                        TABLE_PROMO_OFFER_MASTER,
+                        {"id": f"eq.{offer_id}"},
+                        {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()},
+                    )
                 inserted_offers += 1
 
         plan_rows.append({"plan_id": plan_id, **plan_row})
@@ -547,6 +581,7 @@ def persist_membership_extraction(
     return {
         "plans_inserted": inserted_plans,
         "offers_inserted": inserted_offers,
+        "offers_quarantined": quarantined_offers,
         "offers_ended": ended_offers,
         "plans": plan_rows,
         "stale_offer_ids": stale_ids,

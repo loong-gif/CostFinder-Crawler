@@ -23,9 +23,9 @@ from utils.supabase_rest import SupabaseRestClient  # noqa: E402
 
 
 SELECT = (
-    "id,regular_price,discount_price,discount_amount,discount_percent,price_model,"
+    "id,regular_price,discount_price,discount_amount,discount_percent,price_model,is_package,"
     "offer_raw_text,updated_at,"
-    "promo_offer_items(offer_item_id,service_id,quantity,unit_price,updated_at)"
+    "promo_offer_items(offer_item_id,service_id,quantity:delivered_units,unit_price,updated_at)"
 )
 PAGE_SIZE = 1000
 

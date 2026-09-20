@@ -50,6 +50,22 @@ def test_audit_does_not_require_unit_price_for_an_unlinked_item() -> None:
     assert report.issues == []
 
 
+def test_audit_does_not_require_unit_price_for_a_package() -> None:
+    report = audit_offer_prices(
+        [_offer(
+            price_model="total",
+            is_package=True,
+            discount_price=100,
+            regular_price=None,
+            discount_amount=None,
+            discount_percent=None,
+            promo_offer_items=[{"offer_item_id": 20, "service_id": 1, "quantity": 20, "unit_price": None}],
+        )]
+    )
+
+    assert report.issues == []
+
+
 def test_repair_plan_fills_explicit_percentage_and_keeps_ambiguous_free_benefit_for_review() -> None:
     plan = build_price_repair_plan(
         [

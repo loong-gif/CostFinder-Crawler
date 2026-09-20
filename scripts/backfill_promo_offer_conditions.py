@@ -31,7 +31,7 @@ PLAN_VERSION = 1
 OFFER_SELECT = (
     "id,business_id,promotion_id,membership_plan_id,offer_raw_text,regular_price,"
     "discount_price,discount_percent,discount_amount,is_membership_required,"
-    "is_new_customer_required,updated_at,promo_offer_items(item_name,service_id,quantity,unit_price)"
+    "is_new_customer_required,updated_at,promo_offer_items(item_name,service_id,quantity:delivered_units,unit_price)"
 )
 PROMOTION_SELECT = "promotion_id,business_id,source_url,promotion_content,updated_at"
 MEMBERSHIP_SELECT = (

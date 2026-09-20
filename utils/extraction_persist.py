@@ -18,6 +18,7 @@ from utils.offer_evidence_validator import validate_offer_evidence
 from utils.offer_fingerprint import compute_offer_fingerprint
 from utils.offer_scope_filter import exclude_reason, should_exclude_from_offer_master
 from utils.promo_offer_items_db import upsert_offer_items
+from utils.membership_duplicate_check import find_matching_membership_offer
 from utils.recent_raw_extraction import (
     build_promotion_content,
     expand_promotion_content,
@@ -25,6 +26,7 @@ from utils.recent_raw_extraction import (
     validate_promotion,
     validate_service,
 )
+from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS, TABLE_CLINIC_PROMOTIONS, TABLE_PROMO_OFFER_MASTER
 from utils.service_price_guard import derive_offer_item_pricing
 
@@ -67,7 +69,7 @@ def infer_price_model(offer: dict[str, Any]) -> str:
     # These signals describe the price semantics, not merely the presence of
     # a quantity.  A phrase such as "2 syringes for $900" remains a total.
     if re.search(
-        r"(?:/|per)\s*(?:unit|units|syringe|syringes|vial|vials|session|sessions|treatment|treatments)\b",
+        r"(?:(?:/|per)\s*|a\s+)(?:u(?:nit)?s?|syringe|syringes|vial|vials|session|sessions|treatment|treatments)\b",
         raw,
     ):
         return "per_unit"
@@ -129,6 +131,16 @@ def build_master_from_offer(
         master["regular_price"] = float(offer["regular_price"])
     if offer.get("discount_price") is not None:
         master["discount_price"] = float(offer["discount_price"])
+    if master["price_model"] == "per_unit" and master.get("discount_price") is None:
+        item_prices = [
+            round(float(item["unit_price"]), 4)
+            for item in items_in
+            if item.get("unit_price") is not None
+        ]
+        if item_prices and len(item_prices) == len(items_in) and all(
+            abs(price - item_prices[0]) <= 0.011 for price in item_prices
+        ):
+            master["discount_price"] = item_prices[0]
     if offer.get("discount_percent") is not None:
         master["discount_percent"] = float(offer["discount_percent"])
     if offer.get("discount_amount") is not None:
@@ -221,9 +233,16 @@ def persist_promotion_item(
     item: dict[str, Any],
     source_url: str,
     evidence: str,
+    rendered_visibility: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     expanded = dict(item)
     expanded["promotion_content"] = build_promotion_content(item, evidence)
+    visibility = filter_visible_promotion_content(
+        expanded["promotion_content"], rendered_visibility
+    )
+    if not visibility.accepted:
+        return {"accepted": False, "reason": visibility.reason, "action": "skipped"}
+    expanded["promotion_content"] = list(visibility.content)
     decision = validate_promotion(expanded, evidence)
     if not decision.accepted:
         return {"accepted": False, "reason": decision.reason, "action": "skipped"}
@@ -274,9 +293,9 @@ def persist_promo_offer(
             "evidence_issues": [issue.as_dict() for issue in decision.issues],
         }
 
-    # Validate ownership and promotion lifecycle before writing anything.  A
-    # bad upstream link must be quarantined instead of becoming a cross-clinic
-    # offer or an active offer attached to an explicitly ended campaign.
+    # Validate ownership and the explicit promotion lifecycle flag before
+    # writing anything. A source page date is not lifecycle evidence because
+    # current-specials URLs can roll from one campaign to the next.
     promotion_rows = client.fetch_rows(
         TABLE_CLINIC_PROMOTIONS,
         "promotion_id,business_id,campaign_end_date,is_active",
@@ -289,9 +308,6 @@ def persist_promo_offer(
             return {"accepted": False, "reason": "promotion_business_mismatch", "action": "quarantined"}
         if promotion.get("is_active") is False:
             return {"accepted": False, "reason": "promotion_inactive", "action": "quarantined"}
-        end_date = promotion.get("campaign_end_date")
-        if end_date and str(end_date) < datetime.now(timezone.utc).date().isoformat():
-            return {"accepted": False, "reason": "promotion_expired", "action": "quarantined"}
     if membership_plan_id is not None:
         membership_rows = client.fetch_rows(
             TABLE_CLINIC_MEMBERSHIPS,
@@ -331,6 +347,24 @@ def persist_promo_offer(
                 if item.get("service_id") is None
             ],
         }
+    if master.get("price_model") == "per_unit":
+        master_discount_price = _positive(master.get("discount_price"))
+        if master_discount_price is None:
+            return {
+                "accepted": False,
+                "reason": "per_unit_price_incomplete",
+                "action": "quarantined",
+            }
+        if any(
+            _positive(item.get("unit_price")) is None
+            or abs(float(item["unit_price"]) - master_discount_price) > 0.011
+            for item in linked_items
+        ):
+            return {
+                "accepted": False,
+                "reason": "per_unit_item_price_incomplete",
+                "action": "quarantined",
+            }
     service_ids = [item.get("service_id") for item in linked_items if item.get("service_id") is not None]
     if service_ids:
         services = client.fetch_rows(
@@ -341,12 +375,34 @@ def persist_promo_offer(
         )
         if any(int(row["business_id"]) != int(business_id) for row in services if row.get("business_id") is not None):
             return {"accepted": False, "reason": "service_business_mismatch", "action": "quarantined"}
+    membership_match = find_matching_membership_offer(
+        client,
+        business_id=business_id,
+        candidate_master=master,
+        candidate_items=linked_items,
+    )
+    if membership_match is not None:
+        return {
+            "accepted": False,
+            "reason": "membership_duplicate",
+            "action": "skipped",
+            "membership_offer_id": membership_match.get("id"),
+            "membership_plan_id": membership_match.get("membership_plan_id"),
+        }
     fp = str(master.get("offer_fingerprint") or "")
     if seen_fingerprints is not None and fp and fp in seen_fingerprints:
         return {"accepted": False, "reason": "duplicate_fingerprint", "action": "skipped", "offer_fingerprint": fp}
+    # Build the relation first. The database activation guard intentionally
+    # keeps a master inactive until its mapped items are present.
+    master["is_active"] = False
     inserted = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [master])
     offer_id = int(inserted[0]["id"])
     upsert_offer_items(client, offer_id, linked_items)
+    client.update_row(
+        TABLE_PROMO_OFFER_MASTER,
+        {"id": f"eq.{offer_id}"},
+        {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()},
+    )
     if seen_fingerprints is not None and fp:
         seen_fingerprints.add(fp)
     return {

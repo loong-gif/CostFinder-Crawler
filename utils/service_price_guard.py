@@ -23,7 +23,11 @@ _MARKET_AVERAGE_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 _PER_UNIT_SIGNAL = re.compile(
-    r"\$\s*\d+(?:\.\d+)?\s*(?:/|per)\s*(?:unit|units)\b",
+    r"\$\s*\d+(?:\.\d+)?\s*(?:(?:/|per)\s*|a\s+)(?:u(?:nit)?s?)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_PER_UNIT_PRICE = re.compile(
+    r"\$\s*(\d+(?:\.\d+)?)\s*(?:(?:/|per)\s*|a\s+)(?:u(?:nit)?s?)\b",
     re.IGNORECASE,
 )
 
@@ -94,6 +98,36 @@ def infer_unit_count(text: str, price: float | None = None) -> tuple[int | None,
     return count, upper_bound
 
 
+def infer_explicit_per_unit_price(text: str, *, prefer_first: bool = False) -> float | None:
+    """Return a source-stated sale rate when it is unambiguous.
+
+    Regular/list rates are excluded. When a membership-only offer states a
+    member rate followed by a non-member rate, the first rate is the sale rate;
+    callers opt into that interpretation with ``prefer_first``.
+    """
+    candidates: list[float] = []
+    source = str(text or "")
+    for match in _EXPLICIT_PER_UNIT_PRICE.finditer(source):
+        prefix = source[max(0, match.start() - 28) : match.start()]
+        if re.search(
+            r"\b(?:reg|regular|regularly|original|list)(?:\s+price)?[.:=\-]?\s*$",
+            prefix,
+            re.IGNORECASE,
+        ):
+            continue
+        try:
+            value = float(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            candidates.append(value)
+    if not candidates:
+        return None
+    if all(abs(value - candidates[0]) <= 0.011 for value in candidates):
+        return candidates[0]
+    return candidates[0] if prefer_first else None
+
+
 def derive_offer_item_pricing(
     offer: dict[str, Any],
     *,
@@ -115,15 +149,23 @@ def derive_offer_item_pricing(
     regular_total = _positive(offer.get("regular_price"))
     discount_total = _positive(offer.get("discount_price"))
     price_is_per_unit = bool(_PER_UNIT_SIGNAL.search(blob))
+    explicit_unit_price = infer_explicit_per_unit_price(
+        blob,
+        prefer_first=bool(offer.get("is_membership_required")),
+    )
     count, _upper = infer_unit_count(blob, regular_total or discount_total)
     if count is None and len(items) == 1:
         count, _upper = infer_unit_count(blob)
-    if count is not None:
+    if count is not None and len(items) == 1:
         for item in items:
             if item.get("quantity") is None:
                 item["quantity"] = count
             if item.get("unit_price") is None and discount_total is not None:
                 item["unit_price"] = discount_total if price_is_per_unit else round(discount_total / count, 4)
+    if explicit_unit_price is not None and price_is_per_unit:
+        for item in items:
+            if item.get("unit_price") is None:
+                item["unit_price"] = explicit_unit_price
     return items
 
 

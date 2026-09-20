@@ -5,7 +5,7 @@ BEGIN;
 WITH logical_offers AS (
     SELECT
         item.offer_id,
-        sum(item.quantity)::integer AS total_quantity
+        sum(item.delivered_units)::integer AS total_quantity
     FROM public.promo_offer_items AS item
     GROUP BY item.offer_id
     HAVING count(*) = 1

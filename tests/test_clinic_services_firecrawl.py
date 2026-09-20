@@ -86,7 +86,6 @@ def test_rule_fallback_extracts_target_evidence_and_excludes_promotional_price()
 
     assert services == [
         {
-            "service_category": "Neurotoxins",
             "service_name": "Botox",
             "service_name_raw": "Botox $12 per unit",
             "regular_price": 12.0,
@@ -94,7 +93,6 @@ def test_rule_fallback_extracts_target_evidence_and_excludes_promotional_price()
             "service_area": "",
         },
         {
-            "service_category": "Fillers & Other Injectables",
             "service_name": "Juvéderm",
             "service_name_raw": "Juvederm $700 per syringe",
             "regular_price": 700.0,
@@ -102,19 +100,10 @@ def test_rule_fallback_extracts_target_evidence_and_excludes_promotional_price()
             "service_area": "",
         },
         {
-            "service_category": "Neurotoxins",
             "service_name": "Dysport",
             "service_name_raw": "Dysport special $4 per unit",
             "regular_price": None,
             "unit_type": "others",
-            "service_area": "",
-        },
-        {
-            "service_category": "Fillers & Other Injectables",
-            "service_name": "Sculptra",
-            "service_name_raw": "Sculptra $800 per vial",
-            "regular_price": 800.0,
-            "unit_type": "vial",
             "service_area": "",
         },
     ]
@@ -124,23 +113,49 @@ def test_rule_fallback_does_not_treat_generic_contour_as_restylane():
     assert extract_rule_based_services("A sculpted facial contour with a natural result.") == []
 
 
-def test_mcp_sql_renderer_casts_enum_fields_and_escapes_evidence():
+def test_mcp_sql_renderer_casts_the_supported_name_and_skips_generated_category():
     sql = render_mcp_operations([
         {"action": "mcp_insert", "payload": {"business_id": 1, "service_name": "Botox", "service_name_raw": "Doctor's Botox", "regular_price": None, "unit_type": "others", "service_category": "Neurotoxin", "service_area": None, "source_url": "https://example.com"}},
     ])
 
-    assert "unit_type::public.unit_type_enum" in sql
-    assert "service_category::public.service_category_enum" in sql
-    assert "service_area::public.service_area_enum" in sql
-    assert "Doctor''s Botox" in sql
+    assert "unit_type::public.unit_type_enum" not in sql
+    assert "service_name::public.clinic_service_name_enum" in sql
+    assert "service_area::public.service_area_enum" not in sql
+    assert "service_name_raw" not in sql
+    assert "Doctor''s Botox" not in sql
 
 
-def test_mcp_sql_renderer_normalizes_service_area_for_enum_column():
+def test_mcp_sql_renderer_keeps_live_service_area_column():
     sql = render_mcp_operations([
         {"action": "mcp_insert", "payload": {"business_id": 1, "service_name": "Botox", "service_name_raw": "Botox", "regular_price": None, "unit_type": "others", "service_category": "Neurotoxin", "service_area": "Denver, Boulder", "source_url": "https://example.com"}},
     ])
 
-    assert '"service_area":null' in sql
+    assert "service_area" in sql
+
+
+def test_mcp_write_operation_never_sends_generated_taxonomy_columns():
+    operation = build_mcp_write_operation(
+        business_id=1,
+        item={
+            "service_name": "Botox",
+            "service_name_raw": "Botox $12 per unit",
+            "service_name_enum": "botox",
+            "service_category_enum": "neurotoxin",
+            "regular_price": 12,
+            "unit_type": "unit",
+            "service_category": "Injectables",
+            "source_url": "https://example.com/services",
+        },
+        existing=None,
+    )
+
+    assert operation["payload"] == {
+        "business_id": 1,
+        "service_name": "Botox",
+        "regular_price": 12,
+        "unit_type": "unit",
+        "source_url": "https://example.com/services",
+    }
 
 
 def test_restore_loader_normalizes_legacy_service_names(tmp_path):
@@ -175,7 +190,25 @@ def test_validate_service_keeps_unpriced_public_service():
 
     assert reason == "accepted"
     assert item["regular_price"] is None
-    assert item["service_category"] == "Neurotoxin"
+    assert item["service_category"] == "Neurotoxins"
+
+
+def test_validate_service_does_not_require_or_invent_a_canonical_category():
+    item, reason = validate_service(
+        {
+            "service_name": "Botox",
+            "service_name_raw": "Botox injections are available.",
+            "regular_price": None,
+            "unit_type": "unit",
+            "service_area": "face",
+        },
+        source_url="https://example.com/services",
+        evidence="Botox injections are available.",
+    )
+
+    assert reason == "accepted"
+    assert item is not None
+    assert "service_category" not in item
 
 
 def test_validate_service_normalizes_unspecified_unit_to_others():
@@ -255,7 +288,7 @@ def test_choose_best_services_prefers_priced_evidence_for_duplicate_service():
     accepted, rejected = choose_best_services(
         [
             {
-                "service_category": "Neurotoxins",
+            "service_category": "Neurotoxins",
                 "service_name": "Botox",
                 "service_name_raw": "Botox is available.",
                 "regular_price": None,
@@ -282,7 +315,7 @@ def test_choose_best_services_prefers_priced_evidence_for_duplicate_service():
             "service_name_raw": "Botox $12 per unit.",
             "regular_price": 12.0,
             "unit_type": "unit",
-            "service_category": "Neurotoxin",
+                "service_category": "Neurotoxins",
             "service_area": None,
             "source_url": "https://example.com/pricing",
         }

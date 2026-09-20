@@ -10,10 +10,28 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["service_category", "service_name", "service_name_raw", "regular_price", "unit_type", "service_area"],
+        "required": ["service_name", "service_name_raw", "regular_price", "unit_type", "service_area"],
         "properties": {
-          "service_category": {"type": "string", "enum": ["Neurotoxins", "Fillers & Other Injectables"]},
-          "service_name": {"type": "string", "minLength": 1},
+          "service_category_raw": {"type": ["string", "null"], "description": "Exact source-page group label when explicitly shown; do not infer or normalize it."},
+          "service_name": {
+            "type": "string",
+            "minLength": 1,
+            "enum": [
+              "Botox", "Dysport", "Xeomin", "Jeuveau", "Daxxify", "Letybo", "Myobloc", "Neurotoxin",
+              "Dermal Filler", "Juvéderm", "Restylane", "Radiesse", "Belotero", "RHA Filler", "Skinvive", "Filler Dissolving",
+              "Morpheus8", "RF Microneedling", "SkinPen Microneedling", "Sylfirm X", "Microchanneling", "Microneedling",
+              "Hydrafacial", "DiamondGlow", "Dermaplaning", "Glo2 Facial", "Facial",
+              "IPL Photofacial", "BBL Photofacial", "LED Light Therapy", "CO2 Laser", "CoolPeel", "Halo Laser", "Moxi Laser", "Picoway", "Vbeam", "ClearSilk", "Laser Genesis", "Laser Treatment",
+              "Laser Hair Removal",
+              "NAD Therapy", "IV Therapy", "Vitamin Injection", "Weight Loss", "Hormone Therapy", "Peptide Therapy",
+              "Sculptra", "Chemical Peel", "Kybella", "Thread Lift", "Tattoo Removal", "Skin Tightening",
+              "Regenerative Injectable", "PRP", "PRF", "Exosome Therapy", "Body Contouring", "CoolSculpting", "Wellness", "Massage",
+              "Pearl Fractional", "Customized Facial", "Lunchtime Peel", "PRX Skin Perfecting", "Perfect Derma Peel", "Sofwave", "Tixel", "Lipo Dissolve",
+              "Versa", "Evolysse", "EZ Gel", "PDRN", "PRFM", "Fraxel", "Clear + Brilliant", "Emsculpt", "VI Peel", "Microdermabrasion", "Hair Restoration",
+              "Ultherapy", "Thermage", "HIFU", "Forma", "Emface"
+            ],
+            "description": "Required CostFinder service enum. service_name_raw retains the verbatim source wording."
+          },
           "service_name_raw": {"type": "string", "minLength": 1},
           "regular_price": {"type": ["number", "null"], "minimum": 0},
           "unit_type": {"type": "string"},

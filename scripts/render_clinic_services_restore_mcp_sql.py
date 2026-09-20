@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.clinic_services_mcp_sql import render_mcp_operations
+from utils.clinic_service_taxonomy import service_name_enum_hint
 from utils.offer_extraction_llm import canonicalize_service_name
 
 
@@ -30,12 +31,15 @@ def load_recovery_operations(pattern: str) -> list[dict[str, Any]]:
                 service_name = str(payload.get("service_name") or "").strip()
                 if business_id is None or not service_name:
                     continue
+                canonical_name = service_name_enum_hint(canonicalize_service_name(
+                    service_name,
+                    payload.get("service_name_raw"),
+                ))
+                if canonical_name is None:
+                    continue
                 normalized_payload = {
                     **payload,
-                    "service_name": canonicalize_service_name(
-                        service_name,
-                        payload.get("service_name_raw"),
-                    ),
+                    "service_name": canonical_name,
                 }
                 # Restore always inserts idempotently: prior service IDs are invalid
                 # after a destructive table reset.

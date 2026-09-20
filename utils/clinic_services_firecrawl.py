@@ -7,9 +7,9 @@ from typing import Any, Iterable
 from urllib.parse import urljoin, urlparse
 
 from utils.clinic_services_search import url_path_score
+from utils.clinic_service_taxonomy import service_name_enum_hint
 
-TARGET_CATEGORIES = {"Neurotoxins": "Neurotoxin", "Fillers & Other Injectables": "Filler"}
-FALLBACK_TARGET_RULE_CATEGORIES = {"neurotoxin", "filler", "biostimulator", "skin_booster", "fat_dissolver"}
+FALLBACK_TARGET_RULE_CATEGORIES = {"neurotoxin", "filler", "skin_booster", "fat_dissolver"}
 FALLBACK_CANONICAL_SERVICE_NAMES = {
     "Botox": "Botox",
     "Dysport": "Dysport",
@@ -22,27 +22,23 @@ FALLBACK_CANONICAL_SERVICE_NAMES = {
     "Restylane": "Restylane",
     "Belotero": "Belotero",
     "Dermal Filler": "Dermal Filler",
-    "Sculptra": "Sculptra",
     "Radiesse": "Radiesse",
     "SkinVive": "Skinvive",
-    "Kybella": "Kybella",
 }
 FALLBACK_EVIDENCE_PATTERNS = {
-    "Botox": ("Neurotoxins", re.compile(r"\bbotox\b", re.IGNORECASE)),
-    "Dysport": ("Neurotoxins", re.compile(r"\bdysport\b", re.IGNORECASE)),
-    "Xeomin": ("Neurotoxins", re.compile(r"\bxeomin\b", re.IGNORECASE)),
-    "Jeuveau": ("Neurotoxins", re.compile(r"\bjeuveau\b", re.IGNORECASE)),
-    "Daxxify": ("Neurotoxins", re.compile(r"\bdaxxify\b", re.IGNORECASE)),
-    "Letybo": ("Neurotoxins", re.compile(r"\bletybo\b", re.IGNORECASE)),
-    "Neurotoxin": ("Neurotoxins", re.compile(r"\bneurotox(?:in|ins?)\b|\bwrinkle relaxers?\b", re.IGNORECASE)),
-    "Juvéderm": ("Fillers & Other Injectables", re.compile(r"\bjuv[ée]derm\b|\bvoluma\b|\bvolux\b|\bvolbella\b|\bvollure\b", re.IGNORECASE)),
-    "Restylane": ("Fillers & Other Injectables", re.compile(r"\brestylane\b", re.IGNORECASE)),
-    "Belotero": ("Fillers & Other Injectables", re.compile(r"\bbelotero\b", re.IGNORECASE)),
-    "Dermal Filler": ("Fillers & Other Injectables", re.compile(r"\b(?:dermal\s+)?fillers?\b", re.IGNORECASE)),
-    "Sculptra": ("Fillers & Other Injectables", re.compile(r"\bsculptra\b", re.IGNORECASE)),
-    "Radiesse": ("Fillers & Other Injectables", re.compile(r"\bradiesse\b", re.IGNORECASE)),
-    "Skinvive": ("Fillers & Other Injectables", re.compile(r"\bskinvive\b", re.IGNORECASE)),
-    "Kybella": ("Fillers & Other Injectables", re.compile(r"\bkybella\b", re.IGNORECASE)),
+    "Botox": re.compile(r"\bbotox\b", re.IGNORECASE),
+    "Dysport": re.compile(r"\bdysport\b", re.IGNORECASE),
+    "Xeomin": re.compile(r"\bxeomin\b", re.IGNORECASE),
+    "Jeuveau": re.compile(r"\bjeuveau\b", re.IGNORECASE),
+    "Daxxify": re.compile(r"\bdaxxify\b", re.IGNORECASE),
+    "Letybo": re.compile(r"\bletybo\b", re.IGNORECASE),
+    "Neurotoxin": re.compile(r"\bneurotox(?:in|ins?)\b|\bwrinkle relaxers?\b", re.IGNORECASE),
+    "Juvéderm": re.compile(r"\bjuv[ée]derm\b|\bvoluma\b|\bvolux\b|\bvolbella\b|\bvollure\b", re.IGNORECASE),
+    "Restylane": re.compile(r"\brestylane\b", re.IGNORECASE),
+    "Belotero": re.compile(r"\bbelotero\b", re.IGNORECASE),
+    "Dermal Filler": re.compile(r"\b(?:dermal\s+)?fillers?\b", re.IGNORECASE),
+    "Radiesse": re.compile(r"\bradiesse\b", re.IGNORECASE),
+    "Skinvive": re.compile(r"\bskinvive\b", re.IGNORECASE),
 }
 ALLOWED_UNITS = {"unit", "syringe", "half_syringe", "vial", "treatment", "session", "area", "ml", "mg", "others"}
 UNSPECIFIED_VALUES = {"", "n/a", "na", "none", "not applicable", "not specified", "unknown", "unspecified"}
@@ -73,9 +69,9 @@ def extract_rule_based_services(evidence: str) -> list[dict[str, Any]]:
         line = re.sub(r"\s+", " ", raw_line).strip()
         if not line or len(line) > 900:
             continue
-        matches = [(name, category, pattern) for name, (category, pattern) in FALLBACK_EVIDENCE_PATTERNS.items() if pattern.search(line)]
-        unique = {name.casefold(): (name, category, pattern) for name, category, pattern in matches}
-        for canonical_name, category, _pattern in unique.values():
+        matches = [(name, pattern) for name, pattern in FALLBACK_EVIDENCE_PATTERNS.items() if pattern.search(line)]
+        unique = {name.casefold(): (name, pattern) for name, pattern in matches}
+        for canonical_name, _pattern in unique.values():
             price: float | None = None
             unit_type = "others"
             # A line listing multiple individual products with one price is ambiguous.
@@ -89,7 +85,6 @@ def extract_rule_based_services(evidence: str) -> list[dict[str, Any]]:
                         if unit_type == "units":
                             unit_type = "unit"
             item = {
-                "service_category": category,
                 "service_name": canonical_name,
                 "service_name_raw": line,
                 "regular_price": price,
@@ -160,11 +155,10 @@ def price_is_supported_by_raw_text(price: float, raw_text: str) -> bool:
 
 
 def validate_service(item: dict[str, Any], *, source_url: str, evidence: str) -> tuple[dict[str, Any] | None, str]:
-    category = str(item.get("service_category") or "").strip()
+    source_category = str(item.get("service_category_raw") or item.get("service_category") or "").strip()
     raw_name = str(item.get("service_name_raw") or "").strip()
     service_name = str(item.get("service_name") or "").strip()
-    if category not in TARGET_CATEGORIES:
-        return None, "unsupported_category"
+    canonical_service_name = service_name_enum_hint(service_name)
     if not source_url.startswith(("http://", "https://")) or url_path_score(source_url) < 0:
         return None, "ineligible_source_url"
     if not raw_name or not service_name or raw_name.casefold() not in evidence.casefold():
@@ -186,15 +180,19 @@ def validate_service(item: dict[str, Any], *, source_url: str, evidence: str) ->
         unit_type = "others"
     if unit_type not in ALLOWED_UNITS:
         return None, "invalid_unit_type"
-    return {
-        "service_name": service_name,
+    if canonical_service_name is None:
+        return None, "unsupported_service_name"
+    normalized = {
+        "service_name": canonical_service_name,
         "service_name_raw": raw_name,
         "regular_price": price,
         "unit_type": unit_type,
-        "service_category": TARGET_CATEGORIES[category],
         "service_area": None if str(item.get("service_area") or "").strip().lower() in UNSPECIFIED_VALUES else str(item.get("service_area") or "").strip() or None,
         "source_url": source_url.rstrip("/"),
-    }, "accepted"
+    }
+    if source_category:
+        normalized["service_category"] = source_category
+    return normalized, "accepted"
 
 
 def choose_best_services(items: Iterable[dict[str, Any],], *, source_url: str, evidence: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -205,7 +203,7 @@ def choose_best_services(items: Iterable[dict[str, Any],], *, source_url: str, e
         if normalized is None:
             rejected.append({"item": item, "reason": reason})
             continue
-        key = normalized["service_name"].casefold()
+        key = service_name_enum_hint(normalized["service_name"]) or normalized["service_name"].casefold()
         current = accepted.get(key)
         if current is None or (current["regular_price"] is None and normalized["regular_price"] is not None):
             accepted[key] = normalized

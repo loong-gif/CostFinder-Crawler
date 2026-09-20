@@ -89,7 +89,26 @@ def test_process_target_links_raw_before_writing_validated_content(monkeypatch) 
         lambda *_args, **_kwargs: {"explanation": "found", "promotions": [{"promotion_title": "Summer Special", "promotion_content": ["Save $20 on Botox."], "campaign_start_date": None, "campaign_end_date": None}]},
     )
 
-    result = process_target(db, object(), target)
+    result = process_target(
+        db,
+        object(),
+        target,
+        {
+            "status": "page_accessible",
+            "claimResults": [
+                {
+                    "recordType": "promotion",
+                    "claim": "Summer Special",
+                    "status": "visible_match",
+                },
+                {
+                    "recordType": "promotion",
+                    "claim": "Save $20 on Botox.",
+                    "status": "visible_match",
+                },
+            ],
+        },
+    )
 
     assert result["status"] == "updated"
     assert result["scrape_id"] == 88

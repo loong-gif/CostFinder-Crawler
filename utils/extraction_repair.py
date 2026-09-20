@@ -160,6 +160,9 @@ def plan_offer_quality_repairs(
                 regular_price=row.get("regular_price"),
                 discount_price=row.get("discount_price"),
                 offer_raw_text=raw,
+                business_id=row.get("business_id"),
+                promotion_id=row.get("promotion_id"),
+                membership_plan_id=row.get("membership_plan_id"),
             )
             actions.append(
                 {

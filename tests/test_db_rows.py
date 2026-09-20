@@ -17,7 +17,7 @@ def test_clinic_service_insert_row_accepts_valid_payload() -> None:
             "source_url": "https://example.com/services",
         }
     )
-    assert row.to_api_dict()["service_category"] == "others"
+    assert "service_category" not in row.to_api_dict()
 
 
 def test_clinic_service_insert_row_rejects_non_positive_price() -> None:
@@ -55,7 +55,7 @@ def test_upsert_extracted_service_skips_on_schema_invalid(monkeypatch: pytest.Mo
             raise AssertionError("insert_rows must not run when pydantic rejects payload")
 
     monkeypatch.setattr(
-        "utils.clinic_service_extraction.fetch_service_row",
+        "utils.clinic_service_extraction.fetch_service_row_by_enum",
         lambda *_a, **_k: None,
     )
     result = upsert_extracted_service(

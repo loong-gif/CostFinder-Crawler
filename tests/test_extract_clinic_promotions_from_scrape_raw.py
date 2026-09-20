@@ -22,6 +22,33 @@ from scripts.extract_clinic_promotions_from_scrape_raw import (
 )
 
 
+VISIBLE_PROMOTION_EVIDENCE = {
+    "status": "page_accessible",
+    "claimResults": [
+        {
+            "recordType": "promotion",
+            "claim": "Summer Special",
+            "status": "visible_match",
+        },
+        {
+            "recordType": "promotion",
+            "claim": "Save 20% on Botox.",
+            "status": "visible_match",
+        },
+        {
+            "recordType": "promotion",
+            "claim": "Save $10.",
+            "status": "visible_match",
+        },
+        {
+            "recordType": "promotion",
+            "claim": "Save $20.",
+            "status": "visible_match",
+        },
+    ],
+}
+
+
 class FakeDb:
     def __init__(self, *, fetch_batches=None, existing=None):
         self.fetch_batches = list(fetch_batches or [])
@@ -425,6 +452,7 @@ def test_persist_page_promotion_updates_only_an_incomplete_existing_anchor() -> 
         source_url="https://clinic.example/specials/",
         item=item,
         apply=True,
+        rendered_visibility=VISIBLE_PROMOTION_EVIDENCE,
     )
 
     assert result == {"accepted": True, "action": "updated", "promotion_id": 44}
@@ -457,6 +485,7 @@ def test_persist_page_promotion_reuses_complete_existing_row_without_touching_up
             "campaign_end_date": None,
         },
         apply=True,
+        rendered_visibility=VISIBLE_PROMOTION_EVIDENCE,
     )
 
     assert result == {"accepted": True, "action": "reused", "promotion_id": 44}
@@ -464,7 +493,7 @@ def test_persist_page_promotion_reuses_complete_existing_row_without_touching_up
     assert not db.update_calls
 
 
-def test_persist_page_promotion_fills_missing_dates_on_a_complete_row() -> None:
+def test_persist_page_promotion_fills_missing_dates_without_deactivating_by_date() -> None:
     existing = {
         "promotion_id": 44,
         "business_id": 7,
@@ -488,12 +517,13 @@ def test_persist_page_promotion_fills_missing_dates_on_a_complete_row() -> None:
             "campaign_end_date": "2024-02-29",
         },
         apply=True,
+        rendered_visibility=VISIBLE_PROMOTION_EVIDENCE,
     )
 
-    assert result == {"accepted": True, "action": "updated_lifecycle", "promotion_id": 44}
+    assert result == {"accepted": True, "action": "updated_dates", "promotion_id": 44}
     assert db.update_calls[0]["payload"]["campaign_start_date"] == "2024-02-01"
     assert db.update_calls[0]["payload"]["campaign_end_date"] == "2024-02-29"
-    assert db.update_calls[0]["payload"]["is_active"] is False
+    assert "is_active" not in db.update_calls[0]["payload"]
 
 
 def test_persist_page_promotion_rejects_an_empty_write_response() -> None:
@@ -516,6 +546,7 @@ def test_persist_page_promotion_rejects_an_empty_write_response() -> None:
                 "campaign_end_date": None,
             },
             apply=True,
+            rendered_visibility=VISIBLE_PROMOTION_EVIDENCE,
         )
     except RuntimeError as exc:
         assert "insert" in str(exc)

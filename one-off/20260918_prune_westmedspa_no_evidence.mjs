@@ -1,0 +1,15 @@
+import { readFile, writeFile } from "node:fs/promises";
+const ROOT = "/Users/wyl/BrandRap/costfinder";
+const OUTPUT = `${ROOT}/outputs/westmedspa_visibility_prune_20260918.json`;
+const APPLY = process.argv.includes("--apply");
+const env = {};
+for (const line of (await readFile(`${ROOT}/.env`, "utf8")).split(/\r?\n/)) { const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, ""); }
+const base = env.SUPABASE_URL.replace(/\/$/, ""); const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SECRET_KEY; const headers = { apikey: key, Authorization: `Bearer ${key}` };
+const get = async (table, select, suffix) => { const r = await fetch(`${base}/rest/v1/${table}?select=${encodeURIComponent(select)}&limit=3000${suffix}`, { headers }); return r.json(); };
+const update = async (table, filter, body) => { const r = await fetch(`${base}/rest/v1/${table}?${new URLSearchParams(filter)}`, { method: "PATCH", headers: { ...headers, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify(body) }); const rows = await r.json(); if (!Array.isArray(rows) || rows.length !== 1) throw new Error(`${table} update matched ${rows.length}`); return rows[0]; };
+const [promotions, offers] = await Promise.all([get("clinic_promotions", "promotion_id,source_url,promotion_content,is_active,updated_at", "&promotion_id=eq.161"), get("promo_offer_master", "id,promotion_id,offer_raw_text,is_active,updated_at", "&promotion_id=eq.161&is_active=eq.true")]);
+const row = promotions[0]; const change = { promotion_id: 161, source_url: row?.source_url, old_updated_at: row?.updated_at, old_content: row?.promotion_content || [], new_content: [], removed: row?.promotion_content || [] };
+const plan = { mode: APPLY ? "apply" : "dry_run", generated_at: new Date().toISOString(), evidence_summary: "commit navigation and body/accessibility snapshot produced no matching rendered evidence for the eight remaining claims", promotion_changes: row?.is_active ? [change] : [], offer_changes: offers.map(offer => ({ offer_id: offer.id, promotion_id: 161, old_updated_at: offer.updated_at, offer_raw_text: offer.offer_raw_text })) };
+if (APPLY && row?.is_active) { const updated = await update("clinic_promotions", { promotion_id: "eq.161", updated_at: `eq.${row.updated_at}` }, { promotion_content: [], is_offer_extracted: false, updated_at: new Date().toISOString() }); change.status = "updated"; change.new_updated_at = updated.updated_at; for (const offer of plan.offer_changes) { const updatedOffer = await update("promo_offer_master", { id: `eq.${offer.offer_id}`, updated_at: `eq.${offer.old_updated_at}`, is_active: "eq.true" }, { is_active: false, updated_at: new Date().toISOString() }); offer.status = "deactivated"; offer.new_updated_at = updatedOffer.updated_at; } }
+await writeFile(OUTPUT, JSON.stringify(plan, null, 2), "utf8");
+console.log(JSON.stringify({ mode: plan.mode, removed: change.removed.length, offers: plan.offer_changes.length, output: OUTPUT }, null, 2));

@@ -20,7 +20,7 @@ from utils.schema_contract import (
 
 # Live columns (aligned to current Supabase DDL)
 LIVE_OFFER_COLUMNS: Tuple[str, ...] = OFFER_MASTER_COLUMNS + (
-    "promo_offer_items(offer_item_id,item_name,service_id,quantity,unit_price)",
+    "promo_offer_items(offer_item_id,item_name,service_id,quantity:delivered_units,unit_price)",
     "clinic_promotions(source_url,promotion_title,campaign_start_date,campaign_end_date)",
 )
 

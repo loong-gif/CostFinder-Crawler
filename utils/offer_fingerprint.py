@@ -1,9 +1,8 @@
-"""Stable offer identity fingerprint for promo_offer_master dedup."""
+"""Offer identity fingerprint shared with ``fn_compute_offer_fingerprint``."""
 from __future__ import annotations
 
 import hashlib
 import re
-import unicodedata
 from typing import Any
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -54,11 +53,9 @@ def normalize_price(value: Any) -> str:
 
 
 def normalize_offer_raw_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
-    text = re.sub(r"\$(\d[\d,]*)(?:\.0+)(?!\d)", r"$\1", text)
-    text = re.sub(r"[‐‑‒–—−]", "-", text)
-    text = re.sub(r"\s+", " ", text)
-    return text[:240]
+    """Match the database trigger's ASCII token normalization exactly."""
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", str(value or ""))
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def offer_fingerprint_key(
@@ -75,21 +72,15 @@ def offer_fingerprint_key(
     discount_percent: Any = None,
     discount_amount: Any = None,
 ) -> str:
-    return "|".join(
-        [
-            normalize_url(source_url),
-            normalize_service_name(service_name),
-            normalize_unit_type(unit_type),
-            normalize_price(regular_price),
-            normalize_price(discount_price),
-            normalize_offer_raw_text(offer_raw_text),
-            normalize_price(business_id),
-            normalize_price(promotion_id),
-            normalize_price(membership_plan_id),
-            normalize_price(discount_percent),
-            normalize_price(discount_amount),
-        ]
-    )
+    del source_url, service_name, unit_type, regular_price, discount_price
+    del discount_percent, discount_amount
+    if membership_plan_id is not None:
+        source_key = f"m:{membership_plan_id}"
+    elif promotion_id is not None:
+        source_key = f"p:{promotion_id}"
+    else:
+        source_key = f"b:{'' if business_id is None else business_id}"
+    return f"{source_key}|{normalize_offer_raw_text(offer_raw_text)}"
 
 
 def compute_offer_fingerprint(

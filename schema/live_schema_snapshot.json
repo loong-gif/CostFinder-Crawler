@@ -10,12 +10,11 @@
     "service_name",
     "regular_price",
     "unit_type",
+    "service_area",
     "created_at",
     "updated_at",
     "source_url",
-    "service_category",
-    "service_name_raw",
-    "service_area"
+    "service_category"
   ],
   "clinic_memberships": [
     "plan_id",
@@ -58,8 +57,6 @@
     "is_new_customer_required",
     "price_model",
     "updated_at",
-    "moderation_status",
-    "moderation_notes",
     "conditions"
   ],
   "promo_offer_items": [
@@ -67,7 +64,7 @@
     "offer_id",
     "item_name",
     "service_id",
-    "quantity",
+    "delivered_units",
     "created_at",
     "updated_at",
     "unit_price"

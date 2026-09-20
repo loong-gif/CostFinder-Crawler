@@ -51,7 +51,7 @@ BEGIN
     END IF;
 
     SELECT
-        COALESCE(sum(existing.quantity), 0),
+        COALESCE(sum(existing.delivered_units), 0),
         COALESCE(bool_or(
             existing.service_id IS NULL
             OR existing.service_id IS DISTINCT FROM NEW.service_id
@@ -62,7 +62,6 @@ BEGIN
        AND (TG_OP = 'INSERT' OR existing.offer_item_id <> NEW.offer_item_id);
 
     IF NEW.service_id IS NULL
-       OR v_has_different_item
        OR v_discount_price IS NULL
        OR v_price_model = 'from' THEN
         NEW.unit_price := NULL;
@@ -79,12 +78,19 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- Different atomic services make total-price allocation ambiguous, but
+    -- per-unit offers were handled above because their item price is explicit.
+    IF v_has_different_item THEN
+        NEW.unit_price := NULL;
+        RETURN NEW;
+    END IF;
+
     IF v_price_model <> 'total' THEN
         NEW.unit_price := NULL;
         RETURN NEW;
     END IF;
 
-    v_total_quantity := COALESCE(NEW.quantity, 0) + v_other_quantity;
+    v_total_quantity := COALESCE(NEW.delivered_units, 0) + v_other_quantity;
     IF v_total_quantity <= 0 THEN
         NEW.unit_price := NULL;
         RETURN NEW;

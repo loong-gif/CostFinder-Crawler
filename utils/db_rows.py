@@ -6,7 +6,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ServiceCategory = Literal["Neurotoxin", "Filler", "others"]
 UnitType = Literal[
     "unit",
     "syringe",
@@ -31,7 +30,7 @@ class ClinicServiceInsertRow(BaseModel):
     service_name: str = Field(min_length=1)
     regular_price: float = Field(gt=0)
     unit_type: UnitType
-    service_category: ServiceCategory = "others"
+    service_category: Optional[str] = None
     source_url: str = Field(min_length=1)
     service_name_raw: Optional[str] = None
     service_area: Optional[str] = None
