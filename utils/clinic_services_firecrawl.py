@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from utils.clinic_services_search import url_path_score
 from utils.clinic_service_taxonomy import service_name_enum_hint
+from utils.offer_field_normalize import normalize_service_area
 
 FALLBACK_TARGET_RULE_CATEGORIES = {"neurotoxin", "filler", "skin_booster", "fat_dissolver"}
 FALLBACK_CANONICAL_SERVICE_NAMES = {
@@ -40,7 +41,7 @@ FALLBACK_EVIDENCE_PATTERNS = {
     "Radiesse": re.compile(r"\bradiesse\b", re.IGNORECASE),
     "Skinvive": re.compile(r"\bskinvive\b", re.IGNORECASE),
 }
-ALLOWED_UNITS = {"unit", "syringe", "half_syringe", "vial", "treatment", "session", "area", "ml", "mg", "others"}
+ALLOWED_UNITS = {"unit", "syringe", "vial", "session", "treatment", "area", "shot"}
 UNSPECIFIED_VALUES = {"", "n/a", "na", "none", "not applicable", "not specified", "unknown", "unspecified"}
 PROMOTIONAL_PRICE_TOKENS = re.compile(
     r"\b(?:special|promo(?:tional)?|sale|discount|member(?:ship)?|new\s+(?:patient|client|guest)|"
@@ -48,7 +49,14 @@ PROMOTIONAL_PRICE_TOKENS = re.compile(
     re.IGNORECASE,
 )
 PRICE_TOKEN = re.compile(r"\$\s*(\d+(?:\.\d{1,2})?)\b")
-UNIT_TOKEN = re.compile(r"\b(?:per|/)\s*(unit|units|syringe|half[ -]?syringe|vial|treatment|session|area|ml|mg)\b", re.IGNORECASE)
+UNIT_TOKEN = re.compile(r"\b(?:per|/)\s*(unit|units|syringe|vial|treatment|session|area|shot)\b", re.IGNORECASE)
+
+
+def normalize_unit_type(value: Any) -> str | None:
+    unit_type = str(value or "").strip().lower() or None
+    if unit_type in UNSPECIFIED_VALUES or unit_type == "others":
+        return None
+    return unit_type
 
 
 @dataclass(frozen=True)
@@ -73,7 +81,7 @@ def extract_rule_based_services(evidence: str) -> list[dict[str, Any]]:
         unique = {name.casefold(): (name, pattern) for name, pattern in matches}
         for canonical_name, _pattern in unique.values():
             price: float | None = None
-            unit_type = "others"
+            unit_type = None
             # A line listing multiple individual products with one price is ambiguous.
             if len(unique) == 1 and not PROMOTIONAL_PRICE_TOKENS.search(line):
                 price_match = PRICE_TOKEN.search(line)
@@ -81,7 +89,7 @@ def extract_rule_based_services(evidence: str) -> list[dict[str, Any]]:
                     price = float(price_match.group(1))
                     unit_match = UNIT_TOKEN.search(line)
                     if unit_match:
-                        unit_type = unit_match.group(1).lower().replace(" ", "_").replace("-", "_")
+                        unit_type = normalize_unit_type(unit_match.group(1).replace(" ", "_").replace("-", "_"))
                         if unit_type == "units":
                             unit_type = "unit"
             item = {
@@ -175,11 +183,13 @@ def validate_service(item: dict[str, Any], *, source_url: str, evidence: str) ->
             return None, "invalid_regular_price"
         if not price_is_supported_by_raw_text(price, raw_name):
             return None, "price_not_supported_by_evidence"
-    unit_type = str(item.get("unit_type") or "").strip().lower()
-    if unit_type in UNSPECIFIED_VALUES:
-        unit_type = "others"
-    if unit_type not in ALLOWED_UNITS:
+    unit_type = normalize_unit_type(item.get("unit_type"))
+    if unit_type is not None and unit_type not in ALLOWED_UNITS:
         return None, "invalid_unit_type"
+    if unit_type is not None:
+        unit_word = unit_type + r"s?"
+        if not re.search(r"\b" + unit_word + r"\b", raw_name, re.IGNORECASE):
+            unit_type = None
     if canonical_service_name is None:
         return None, "unsupported_service_name"
     normalized = {
@@ -187,7 +197,7 @@ def validate_service(item: dict[str, Any], *, source_url: str, evidence: str) ->
         "service_name_raw": raw_name,
         "regular_price": price,
         "unit_type": unit_type,
-        "service_area": None if str(item.get("service_area") or "").strip().lower() in UNSPECIFIED_VALUES else str(item.get("service_area") or "").strip() or None,
+        "service_area": normalize_service_area(item.get("service_area")) if normalize_service_area(item.get("service_area")) == normalize_service_area(raw_name) else None,
         "source_url": source_url.rstrip("/"),
     }
     if source_category:

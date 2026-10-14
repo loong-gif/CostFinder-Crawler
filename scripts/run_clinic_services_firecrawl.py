@@ -24,6 +24,7 @@ from utils.clinic_services_firecrawl import (
     build_queries,
     choose_best_services,
     extract_rule_based_services,
+    normalize_unit_type,
     rank_candidate_urls,
 )
 from utils.direct_public_scrape import scrape_public_page_text
@@ -154,6 +155,10 @@ def extract_services(llm: Any, *, url: str, markdown: str, max_retries: int | No
 def build_mcp_write_operation(*, business_id: int, item: dict[str, Any], existing: dict[str, Any] | None) -> dict[str, Any]:
     """Create an idempotent operation for Codex's Supabase MCP SQL executor."""
     payload = live_clinic_service_payload({"business_id": business_id, **item})
+    if "unit_type" in payload:
+        payload["unit_type"] = normalize_unit_type(payload["unit_type"])
+    if existing and not payload.get("service_area"):
+        payload.pop("service_area", None)
     # The current source page is authoritative: absent public price means null.
     if existing:
         return {

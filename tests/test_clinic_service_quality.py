@@ -30,3 +30,7 @@ def test_promotion_price_is_not_a_catalogue_price() -> None:
 
 def test_generic_filler_does_not_infer_a_brand() -> None:
     assert service_mentions("Dermal fillers available") == ["Dermal Filler"]
+
+
+def test_unknown_service_unit_stays_unknown() -> None:
+    assert evaluate_service("Botox", ["Botox pricing available"]).unit_type is None

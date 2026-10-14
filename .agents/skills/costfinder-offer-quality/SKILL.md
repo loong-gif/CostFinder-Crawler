@@ -25,6 +25,11 @@ description: Use when reviewing, extracting, importing, repairing, or accepting 
 
 ## Active 状态闭环
 
+Firecrawl Monitor 按用户确认的 `AGENTS.md` 例外执行：未知服务可保持 NULL，
+不阻断已核验价格、数量和条件的同步；未知年份日期保持 NULL。
+保留唯一正确的已有映射和 ID，且未完整映射时 `is_offer_extracted=false`。
+该入口不以 `active_null_service_items=0` 作为价格同步门禁；其他入口的下述要求仍适用。
+
 active 数据至少满足：
 
 - active Offer 的上游 Promotion 或 Membership 仍有效；

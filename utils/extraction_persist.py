@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 import re
 from typing import Any, Literal, Mapping, Optional
 
@@ -15,9 +16,9 @@ from utils.clinic_service_extraction import (
 )
 from utils.offer_extraction_llm import canonicalize_service_name
 from utils.offer_evidence_validator import validate_offer_evidence
-from utils.offer_fingerprint import compute_offer_fingerprint
+from utils.offer_fingerprint import compute_offer_fingerprint, normalize_offer_raw_text
 from utils.offer_scope_filter import exclude_reason, should_exclude_from_offer_master
-from utils.promo_offer_items_db import upsert_offer_items
+from utils.promo_offer_items_db import is_blanket_offer_text, offer_item_semantics, upsert_offer_items
 from utils.membership_duplicate_check import find_matching_membership_offer
 from utils.recent_raw_extraction import (
     build_promotion_content,
@@ -29,6 +30,10 @@ from utils.recent_raw_extraction import (
 from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS, TABLE_CLINIC_PROMOTIONS, TABLE_PROMO_OFFER_MASTER
 from utils.service_price_guard import derive_offer_item_pricing
+from utils.offer_purchase_semantics import (
+    canonical_offer_semantics, normalize_purchase_offers, offer_update_identity,
+    service_supported_by_source, usable_unit_price,
+)
 
 RouteKind = Literal["service", "promo", "quarantine"]
 
@@ -44,6 +49,8 @@ def _positive(value: Any) -> float | None:
 
 
 def route_offer(offer: dict[str, Any]) -> RouteKind:
+    if is_blanket_offer_text(str(offer.get("offer_raw_text") or "")) and is_promo_offer(offer):
+        return "promo"
     if should_exclude_from_offer_master(offer):
         return "quarantine"
     if is_promo_offer(offer):
@@ -55,6 +62,8 @@ def route_offer(offer: dict[str, Any]) -> RouteKind:
 
 def infer_price_model(offer: dict[str, Any]) -> str:
     raw = str(offer.get("offer_raw_text") or "").lower()
+    if re.search(r"\b(?:starting\s+at|starts?\s+(?:at|from)|from)\s+\$", raw):
+        return "from"
     # These signals describe the price semantics, not merely the presence of
     # a quantity.  A phrase such as "2 syringes for $900" remains a total.
     if re.search(
@@ -110,8 +119,8 @@ def build_master_from_offer(
         "business_id": business_id,
         "promotion_id": promotion_id,
         "is_active": True,
-        "is_new_customer_required": bool(offer.get("is_new_customer_required")),
-        "is_membership_required": bool(offer.get("is_membership_required")),
+        "is_new_customer_required": offer.get("is_new_customer_required"),
+        "is_membership_required": offer.get("is_membership_required"),
         "conditions": conditions,
         "offer_raw_text": str(offer.get("offer_raw_text") or service_name)[:4000],
         "price_model": infer_price_model(offer),
@@ -136,6 +145,7 @@ def build_master_from_offer(
         master["discount_amount"] = float(offer["discount_amount"])
     if membership_plan_id is not None and offer.get("is_membership_required"):
         master["membership_plan_id"] = membership_plan_id
+        master["promotion_id"] = None
     unit_type = str(first.get("unit_type") or "")
     raw_text = str(offer.get("offer_raw_text") or "")
     master["offer_fingerprint"] = compute_offer_fingerprint(
@@ -146,19 +156,28 @@ def build_master_from_offer(
         discount_price=master.get("discount_price"),
         offer_raw_text=raw_text,
         business_id=business_id,
-        promotion_id=promotion_id,
-        membership_plan_id=membership_plan_id,
+        promotion_id=master.get("promotion_id"),
+        membership_plan_id=master.get("membership_plan_id"),
         discount_percent=master.get("discount_percent"),
         discount_amount=master.get("discount_amount"),
     )
     item_rows: list[dict[str, Any]] = []
     for raw in items_in:
+        source_item_name = str(
+            raw.get("item_name")
+            or raw.get("display_service_name")
+            or raw.get("service_name")
+            or "Offer item"
+        ).strip()
         name = canonicalize_service_name(
             raw.get("service_name"),
             raw.get("service_area"),
             raw_text,
         ) or str(raw.get("service_name") or "Offer item")
-        item: dict[str, Any] = {"service_name": name}
+        # Keep the source-facing title separate from the canonical name used
+        # for service matching. Unknown dictionary values must remain visible
+        # instead of being rewritten to "Others".
+        item: dict[str, Any] = {"item_name": source_item_name, "service_name": name}
         if raw.get("quantity") is not None:
             item["quantity"] = raw["quantity"]
         if raw.get("unit_price") is not None:
@@ -166,6 +185,8 @@ def build_master_from_offer(
         item_rows.append(item)
     if not item_rows:
         item_rows = [{"service_name": service_name}]
+    if is_blanket_offer_text(raw_text):
+        item_rows = [{"item_name": raw_text}]
     return master, item_rows
 
 
@@ -193,25 +214,54 @@ def persist_membership_item(
     item: dict[str, Any],
     source_url: str,
     evidence: str,
+    rendered_visibility: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    decision = validate_membership(item, evidence)
-    if not decision.accepted:
-        return {"accepted": False, "reason": decision.reason, "action": "skipped"}
+    from utils.membership_evidence import prepare_membership_write
+    decision = prepare_membership_write(item, evidence, rendered_visibility)
+    if not decision["accepted"]:
+        return {"accepted": False, "reason": decision["reason"], "action": "skipped"}
     row = {
         "business_id": business_id,
         "membership_name": str(item.get("membership_name") or "").strip(),
-        "membership_price": float(item["membership_price"]),
+        "membership_price": decision["membership_price"],
         "billing_period": item.get("billing_period"),
         "minimum_commitment_months": item.get("minimum_commitment_months"),
-        "benefits": item.get("benefits") or [],
+        "benefits": decision["benefits"],
+        "is_offer_extracted": decision["is_offer_extracted"],
         "source_url": str(source_url or "").strip().rstrip("/"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [row])
+    matches = client.fetch_rows(TABLE_CLINIC_MEMBERSHIPS,
+        "plan_id,business_id,membership_name,membership_price,benefits,billing_period,minimum_commitment_months,is_offer_extracted,source_url,updated_at",
+        filters={"business_id": f"eq.{business_id}", "source_url": f"eq.{row['source_url']}"})
+    matches = [old for old in matches if str(old.get("membership_name") or "").strip().casefold() == row["membership_name"].casefold()]
+    if len(matches) > 1:
+        return {"accepted": False, "reason": "ambiguous_membership_identity", "action": "quarantined"}
+    if matches:
+        old = matches[0]
+        if decision["benefits"] is None:
+            row.pop("benefits")
+        if all(old.get(key) == value for key, value in row.items() if key != "updated_at"):
+            return {"accepted": True, "action": "unchanged", "plan_id": int(old["plan_id"])}
+        filters = {"plan_id": f"eq.{old['plan_id']}"}
+        if old.get("updated_at"):
+            filters["updated_at"] = f"eq.{old['updated_at']}"
+        inserted = client.update_row(TABLE_CLINIC_MEMBERSHIPS, filters, row)
+        if len(inserted) != 1:
+            return {"accepted": False, "reason": "membership_write_conflict", "action": "quarantined"}
+        action = "updated"
+    else:
+        inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [row])
+        action = "inserted"
+    plan_id = int(inserted[0]["plan_id"]) if action == "inserted" else int(matches[0]["plan_id"])
+    actual = client.fetch_rows(TABLE_CLINIC_MEMBERSHIPS, ",".join(row),
+                              filters={"plan_id": f"eq.{plan_id}"}, limit=1)
+    if len(actual) != 1 or any(actual[0].get(key) != value for key, value in row.items() if key != "updated_at"):
+        return {"accepted": False, "reason": "membership_readback_mismatch", "action": "quarantined", "plan_id": plan_id}
     return {
         "accepted": True,
-        "action": "inserted",
-        "plan_id": int(inserted[0]["plan_id"]),
+        "action": action,
+        "plan_id": plan_id,
     }
 
 
@@ -236,17 +286,25 @@ def persist_promotion_item(
     if not decision.accepted:
         return {"accepted": False, "reason": decision.reason, "action": "skipped"}
     promotion_id = upsert_promotion(client, business_id=business_id, source_url=source_url)
+    payload = {
+        "promotion_title": str(expanded.get("promotion_title") or "Promotion"),
+        "promotion_content": expanded.get("promotion_content") or [],
+        "campaign_start_date": expanded.get("campaign_start_date"),
+        "campaign_end_date": expanded.get("campaign_end_date"),
+        "is_active": True,
+    }
+    current = client.fetch_rows(
+        TABLE_CLINIC_PROMOTIONS,
+        ",".join(payload),
+        filters={"promotion_id": f"eq.{promotion_id}"},
+        limit=1,
+    )
+    if current and all(current[0].get(key) == value for key, value in payload.items()):
+        return {"accepted": True, "action": "unchanged", "promotion_id": int(promotion_id)}
     client.update_row(
         TABLE_CLINIC_PROMOTIONS,
         {"promotion_id": f"eq.{promotion_id}"},
-        {
-            "promotion_title": str(expanded.get("promotion_title") or "Promotion"),
-            "promotion_content": expanded.get("promotion_content") or [],
-            "campaign_start_date": expanded.get("campaign_start_date"),
-            "campaign_end_date": expanded.get("campaign_end_date"),
-            "is_active": True,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
+        {**payload, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
     return {"accepted": True, "action": "upserted", "promotion_id": int(promotion_id)}
 
@@ -262,6 +320,11 @@ def persist_promo_offer(
     membership_plan_id: Optional[int] = None,
     seen_fingerprints: set[str] | None = None,
 ) -> dict[str, Any]:
+    normalized, purchase_reviews = normalize_purchase_offers([offer], evidence)
+    if len(normalized) != 1:
+        return {"accepted": False, "reason": purchase_reviews[0]["reason"] if purchase_reviews else "purchase_requires_split",
+                "action": "quarantined"}
+    offer = normalized[0]
     decision = validate_offer_evidence(
         offer,
         evidence,
@@ -313,16 +376,15 @@ def persist_promo_offer(
         source_url=source_url,
         membership_plan_id=membership_plan_id,
     )
-    linked_items = attach_service_ids_to_items(
+    blanket = is_blanket_offer_text(str(master.get("offer_raw_text") or ""))
+    linked_items = items if blanket else attach_service_ids_to_items(
         client,
         business_id=business_id,
         items=items,
         fallback_text=str(validated_offer.get("offer_raw_text") or ""),
     )
-    # An offer item is a saleable atomic service relation, not a free-form
-    # scope label. Broad scopes must be expanded upstream; do not persist an
-    # active offer with a NULL service placeholder.
-    if any(item.get("service_id") is None for item in linked_items):
+    # Only explicit blanket wording can remain outside the service catalogue.
+    if not blanket and any(item.get("service_id") is None for item in linked_items):
         return {
             "accepted": False,
             "reason": "unmapped_service_item",
@@ -336,7 +398,16 @@ def persist_promo_offer(
                 if item.get("service_id") is None
             ],
         }
-    if master.get("price_model") == "per_unit":
+    master["is_package"] = not blanket and (
+        validated_offer.get("is_package") is True or validated_offer.get("purchase_type") == "bundle"
+    )
+    if len(linked_items) > 1 and not master["is_package"]:
+        return {"accepted": False, "reason": "unresolved_purchase_composition", "action": "quarantined"}
+    if master["is_package"]:
+        linked_items = [dict(item, unit_price=None) for item in linked_items]
+    elif master["price_model"] == "from":
+        linked_items = [dict(item, unit_price=None) for item in linked_items]
+    if not master["is_package"] and master.get("price_model") == "per_unit":
         master_discount_price = _positive(master.get("discount_price"))
         if master_discount_price is None:
             return {
@@ -358,12 +429,106 @@ def persist_promo_offer(
     if service_ids:
         services = client.fetch_rows(
             "clinic_services",
-            "service_id,business_id",
+            "service_id,business_id,service_name",
             filters={"service_id": f"in.({','.join(str(int(value)) for value in service_ids)})"},
             limit=len(service_ids),
         )
         if any(int(row["business_id"]) != int(business_id) for row in services if row.get("business_id") is not None):
             return {"accepted": False, "reason": "service_business_mismatch", "action": "quarantined"}
+        if any(row.get("service_name") and not service_supported_by_source(row["service_name"], master["offer_raw_text"]) for row in services):
+            return {"accepted": False, "reason": "service_not_named_in_source", "action": "quarantined"}
+    # Live SQL computes fingerprints from items and prices. Compare source
+    # identity and semantics directly instead of trusting a Python fingerprint.
+    existing_rows = client.fetch_rows(
+        TABLE_PROMO_OFFER_MASTER,
+        "id,business_id,promotion_id,membership_plan_id,offer_raw_text,is_active,updated_at,"
+        "regular_price,discount_price,discount_percent,discount_amount,price_model,is_package,"
+        "is_new_customer_required,is_membership_required,conditions,"
+        "promo_offer_items(offer_item_id,service_id,item_name,quantity:delivered_units,unit_price,updated_at)",
+        filters={
+            "business_id": f"eq.{business_id}",
+            "promotion_id": f"eq.{master['promotion_id']}"
+            if master.get("promotion_id") is not None else "is.null",
+            "membership_plan_id": f"eq.{master['membership_plan_id']}"
+            if master.get("membership_plan_id") is not None else "is.null",
+        },
+    )
+    full_matches = [row for row in existing_rows if canonical_offer_semantics(row, row.get("promo_offer_items") or [])
+                    == canonical_offer_semantics(master, linked_items)]
+    if full_matches:
+        existing = min(full_matches, key=lambda row: (not bool(row.get("is_active")), int(row["id"])))
+        return {"accepted": False, "reason": "unchanged_offer" if existing.get("is_active") else "existing_inactive_offer",
+                "action": "skipped", "offer_id": int(existing["id"])}
+    matches = [row for row in existing_rows if offer_update_identity(row, row.get("promo_offer_items") or [])
+               == offer_update_identity(master, linked_items)]
+    same_raw = [row for row in existing_rows if normalize_offer_raw_text(row.get("offer_raw_text"))
+                == normalize_offer_raw_text(master.get("offer_raw_text"))]
+    if same_raw and not any(row.get("is_active") for row in same_raw):
+        return {"accepted": False, "reason": "existing_inactive_offer", "action": "skipped", "offer_id": min(row["id"] for row in same_raw)}
+    # Identical quoted copy is a safe update identity only with equal qualifications.
+    if not matches:
+        matches = [row for row in existing_rows if
+            normalize_offer_raw_text(row.get("offer_raw_text")) == normalize_offer_raw_text(master.get("offer_raw_text"))
+            and all(row.get(k) == master.get(k) for k in ("is_membership_required", "is_new_customer_required", "conditions"))]
+    if len(matches) > 1:
+        return {"accepted": False, "reason": "ambiguous_offer_identity", "action": "quarantined"}
+    if matches:
+        existing = matches[0]
+        offer_id = int(existing["id"])
+        if not existing.get("is_active"):
+            return {"accepted": False, "reason": "existing_inactive_offer", "action": "skipped", "offer_id": offer_id}
+        existing_items = existing.get("promo_offer_items") or []
+        # An extractor's generic mapping label must not erase an already
+        # scraped commercial title on the same service relation.
+        old_names = {item.get("service_id"): item.get("item_name") for item in existing_items}
+        linked_items = [
+            dict(item, item_name=old_names[item.get("service_id")])
+            if item.get("service_id") is not None
+            and item.get("item_name") == item.get("service_name")
+            and old_names.get(item.get("service_id")) else item
+            for item in linked_items
+        ]
+        fields = ("regular_price", "discount_price", "discount_percent", "discount_amount",
+                  "price_model", "is_package", "is_new_customer_required", "is_membership_required", "conditions")
+        patch = {field: master.get(field) for field in fields if existing.get(field) != master.get(field)}
+        # SQL retains structural comparisons when the source states both
+        # prices. They are QA arithmetic, not additional extracted facts.
+        if master.get("regular_price") is not None and master.get("discount_price") is not None:
+            regular = Decimal(str(master["regular_price"]))
+            discount = Decimal(str(master["discount_price"]))
+            if regular > 0 and 0 <= discount < regular:
+                arithmetic = {
+                    "discount_amount": (regular - discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                    "discount_percent": ((regular - discount) * 100 / regular).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                }
+                patch = {field: value for field, value in patch.items() if not (
+                    field in arithmetic and master.get(field) is None
+                    and existing.get(field) is not None
+                    and Decimal(str(existing[field])) == arithmetic[field]
+                )}
+        items_changed = offer_item_semantics(existing_items) != offer_item_semantics(linked_items)
+        if not patch and not items_changed:
+            return {"accepted": False, "reason": "unchanged_offer", "action": "skipped", "offer_id": offer_id}
+        filters = {"id": f"eq.{offer_id}"}
+        if existing.get("updated_at"):
+            filters["updated_at"] = f"eq.{existing['updated_at']}"
+        changed = client.update_row(TABLE_PROMO_OFFER_MASTER, filters,
+                          {**patch, "offer_raw_text": master["offer_raw_text"], "is_active": False,
+                           "updated_at": datetime.now(timezone.utc).isoformat()})
+        if len(changed) != 1:
+            return {"accepted": False, "reason": "offer_write_conflict", "action": "quarantined"}
+        upsert_offer_items(client, offer_id, linked_items)
+        activate_filters = {"id": f"eq.{offer_id}"}
+        if changed[0].get("updated_at"):
+            activate_filters["updated_at"] = f"eq.{changed[0]['updated_at']}"
+        activated = client.update_row(TABLE_PROMO_OFFER_MASTER, activate_filters,
+                          {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()})
+        if len(activated) != 1:
+            return {"accepted": False, "reason": "offer_activation_conflict", "action": "quarantined"}
+        verified = _verify_offer_write(client, offer_id, master, linked_items)
+        if not verified:
+            return {"accepted": False, "reason": "offer_readback_mismatch", "action": "quarantined", "offer_id": offer_id}
+        return {"accepted": True, "action": "updated", "offer_id": offer_id, "items": len(linked_items)}
     membership_match = find_matching_membership_offer(
         client,
         business_id=business_id,
@@ -379,8 +544,6 @@ def persist_promo_offer(
             "membership_plan_id": membership_match.get("membership_plan_id"),
         }
     fp = str(master.get("offer_fingerprint") or "")
-    if seen_fingerprints is not None and fp and fp in seen_fingerprints:
-        return {"accepted": False, "reason": "duplicate_fingerprint", "action": "skipped", "offer_fingerprint": fp}
     # Build the relation first. The database activation guard intentionally
     # keeps a master inactive until its mapped items are present.
     master["is_active"] = False
@@ -392,6 +555,9 @@ def persist_promo_offer(
         {"id": f"eq.{offer_id}"},
         {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
+    master["is_active"] = True
+    if not _verify_offer_write(client, offer_id, master, linked_items):
+        return {"accepted": False, "reason": "offer_readback_mismatch", "action": "quarantined", "offer_id": offer_id}
     if seen_fingerprints is not None and fp:
         seen_fingerprints.add(fp)
     return {
@@ -402,6 +568,40 @@ def persist_promo_offer(
         "offer_fingerprint": fp,
         "evidence_issues": [issue.as_dict() for issue in decision.issues],
     }
+
+
+def _verify_offer_write(client: Any, offer_id: int, master: dict, items: list[dict]) -> bool:
+    rows = client.fetch_rows(TABLE_PROMO_OFFER_MASTER,
+        "id,business_id,promotion_id,membership_plan_id,offer_raw_text,is_active,regular_price,discount_price,"
+        "discount_amount,discount_percent,price_model,is_package,is_membership_required,is_new_customer_required,conditions,"
+        "promo_offer_items(offer_item_id,service_id,item_name,quantity:delivered_units,unit_price)",
+        filters={"id": f"eq.{offer_id}"}, limit=1)
+    if len(rows) != 1 or rows[0].get("is_active") is not True:
+        return False
+    expected = dict(master)
+    # Trigger arithmetic is permitted only for the source-stated comparable pair.
+    regular, discount = expected.get("regular_price"), expected.get("discount_price")
+    if regular is not None and discount is not None and regular > discount:
+        for field in ("discount_amount", "discount_percent"):
+            if expected.get(field) is None:
+                expected[field] = rows[0].get(field)
+    return canonical_offer_semantics(rows[0], rows[0].get("promo_offer_items") or []) == canonical_offer_semantics(expected, items)
+
+
+def _coalesce_source_offer_items(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one shared-price source line together when extraction splits items."""
+    grouped: list[dict[str, Any]] = []
+    for offer in offers:
+        terms = {key: value for key, value in offer.items() if key != "items"}
+        match = next((row for row in grouped if (offer.get("is_package") is True or offer.get("purchase_type") == "bundle") and
+            {key: value for key, value in row.items() if key != "items"} == terms), None)
+        if match is None:
+            grouped.append({**offer, "items": [dict(item) for item in offer.get("items") or []]})
+            continue
+        match["items"] = match["items"] + [
+            dict(item) for item in offer.get("items") or [] if item not in match["items"]
+        ]
+    return grouped
 
 
 def route_and_persist_extraction(
@@ -426,7 +626,12 @@ def route_and_persist_extraction(
         "quarantine": [],
     }
     service_candidates: list[dict[str, Any]] = []
-    for offer in offers:
+    normalized, purchase_reviews = normalize_purchase_offers(offers, evidence)
+    stats["purchase_reviews"] = purchase_reviews
+    rejected_reviews = [review for review in purchase_reviews if review["reason"] != "generic_offer_scope"]
+    stats["quarantined"] += len(rejected_reviews)
+    stats["quarantine"].extend(rejected_reviews)
+    for offer in _coalesce_source_offer_items(normalized):
         kind = route_offer(offer)
         if kind == "service":
             item = offer_to_clinic_service_item(offer)

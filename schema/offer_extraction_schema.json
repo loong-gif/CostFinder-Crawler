@@ -13,6 +13,11 @@
       "items": {
         "type": "object",
         "properties": {
+          "purchase_type": {
+            "type": "string",
+            "enum": ["single", "independent_options", "bundle"],
+            "description": "独立购买的同折扣品牌列表或二选一为 independent_options；必须共同购买的组成才为 bundle。赠品留在原文和限制里，仅主要购买项目作为 item。不要按 or/and 字符本身决定。每个商品可购买规格单独输出，包括资格和规格名称。"
+          },
           "price_model": {
             "type": "string",
             "enum": ["total", "per_unit", "from"]
@@ -101,7 +106,7 @@
                 "quantity": {
                   "type": ["number", "null"],
                   "exclusiveMinimum": 0,
-                  "description": "报价明确的服务数量；若是单个原子服务且没有数量语义，默认填 1。仅按单位计价、套餐、可变数量或未能确定对应服务项时必须为 null，不能填 1。"
+                  "description": "仅记录原文或可购买规格标题明确的固定交付数量。没有数量语义、最低购买门槛、可变数量或仅按单位计价时为 null，绝不默认填 1。"
                 },
                 "unit_price": {
                   "type": ["number", "null"],

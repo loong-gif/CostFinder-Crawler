@@ -39,6 +39,18 @@ def test_explicit_quantity_repairs_item_quantity_and_unit_price():
     ]
 
 
+def test_same_source_reconciliation_has_no_second_semantic_update():
+    row = _row()
+    first = build_semantic_repair_plan([row])
+    projected = {
+        **row,
+        "promo_offer_items": [{**row["promo_offer_items"][0], **first.item_updates[0]}],
+    }
+    second = build_semantic_repair_plan([projected])
+    assert second.master_updates == []
+    assert second.item_updates == []
+
+
 def test_total_price_is_restored_when_master_contains_derived_unit_price():
     plan = build_semantic_repair_plan(
         [
@@ -151,7 +163,7 @@ def test_multi_item_offer_does_not_allocate_master_total_to_items():
     assert {item["unit_price"] for item in plan.item_updates} == {None}
 
 
-def test_explicit_unit_price_and_quantity_override_a_savings_label():
+def test_arithmetic_only_historical_master_prices_remain_for_review():
     plan = build_semantic_repair_plan(
         [
             _row(
@@ -167,10 +179,8 @@ def test_explicit_unit_price_and_quantity_override_a_savings_label():
         ]
     )
 
-    master = plan.master_updates[0]
-    assert master["price_model"] == "total"
-    assert master.get("discount_price", 1200.0) == 1200.0
-    assert master.get("discount_amount", 150.0) == 150.0
+    assert plan.master_updates == []
+    assert any(case["rule_name"] == "arithmetic_only_master_price" for case in plan.review_cases)
 
 
 def test_value_of_free_add_on_does_not_replace_offer_regular_price():
@@ -336,9 +346,28 @@ def test_explicit_total_quantity_beats_free_units_and_value_amounts():
         ]
     )
 
-    assert plan.master_updates[0]["discount_price"] == 780.0
+    assert plan.master_updates == []
     assert plan.item_updates[0]["quantity"] == 60
     assert plan.item_updates[0].get("unit_price", 13.0) == 13.0
+    assert any(case["rule_name"] == "arithmetic_only_master_price" for case in plan.review_cases)
+
+
+def test_reconciler_does_not_create_transaction_prices_from_unit_arithmetic():
+    plan = build_semantic_repair_plan([
+        _row(regular_price=None, discount_price=None,
+             offer_raw_text="Buy 40 units Botox at $11/unit, regularly $13/unit",
+             promo_offer_items=[])
+    ])
+    assert plan.master_updates == []
+    assert any(case["rule_name"] == "arithmetic_only_master_price" for case in plan.review_cases)
+
+
+def test_up_to_quantity_is_not_delivered_quantity():
+    plan = build_semantic_repair_plan([
+        _row(offer_raw_text="Botox up to 40 units for $399",
+             discount_price=399)
+    ])
+    assert plan.item_updates[0]["quantity"] is None
 
 
 def test_your_price_is_used_and_multi_item_package_is_not_allocated():

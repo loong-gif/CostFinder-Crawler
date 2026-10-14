@@ -124,7 +124,27 @@ def test_preserves_explicit_per_unit_offer_price() -> None:
         evidence="Botox $11 per unit, 20 units minimum",
     )
 
-    assert items == [{"service_name": "Botox", "quantity": 20, "unit_price": 11}]
+    assert items == [{"service_name": "Botox", "unit_price": 11}]
+
+
+def test_offer_helper_does_not_reintroduce_conditional_quantity() -> None:
+    for wording in ("minimum 40 units", "up to 40 units", "40 units or more"):
+        offer = {
+            "discount_price": 11,
+            "offer_raw_text": f"Botox $11 per unit, {wording}",
+            "items": [{"service_name": "Botox", "quantity": None}],
+        }
+        assert derive_offer_item_pricing(offer)[0]["quantity"] is None
+
+
+def test_offer_helper_does_not_guess_between_paid_free_and_total_units() -> None:
+    items = derive_offer_item_pricing({
+        "discount_price": 179,
+        "offer_raw_text": "20 units Botox plus 10 units free, 30 units for $179",
+        "items": [{"service_name": "Botox", "quantity": None}],
+    })
+    assert items[0]["quantity"] is None
+    assert items[0].get("unit_price") is None
 
 
 def test_infers_single_source_stated_per_unit_price() -> None:

@@ -20,12 +20,6 @@ from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 from scripts.run_domain_architecture_pipeline import (
     build_actual_trace,
     link_item_services,
-    schema_offer_to_master,
-)
-from utils.clinic_service_extraction import (
-    is_promo_offer,
-    offer_to_clinic_service_item,
-    upsert_extracted_service,
 )
 from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_fingerprint, scrape_response_to_row_fields
 from utils.scrape_markdown import prepare_scrape_markdown
@@ -35,6 +29,7 @@ from utils.firecrawl_search_raw_db import (
     web_rows_from_search_payload,
 )
 from utils.membership_plans import find_existing_plan_id
+from utils.extraction_persist import route_and_persist_extraction
 from utils.schema_contract import (
     TABLE_CLINIC_MEMBERSHIPS,
     TABLE_CLINIC_PROMOTIONS,
@@ -64,35 +59,17 @@ def persist_memberships_from_bundle(
     business_id: int,
     memberships: List[dict[str, Any]],
     source_url: str = "",
+    source_evidence: dict[str, str] | None = None,
+    rendered_visibility: dict[str, dict[str, Any]] | None = None,
 ) -> List[int]:
     plan_ids: List[int] = []
     now = datetime.now(timezone.utc).isoformat()
     for item in memberships:
-        name = str(item.get("membership_name") or "").strip()
-        price = item.get("membership_price")
-        if not name or price is None:
-            continue
-        existing = find_existing_plan_id(client, business_id, name)
-        if existing:
-            plan_ids.append(existing)
-            continue
-        benefits = item.get("benefits") or []
-        row = {
-            "business_id": business_id,
-            "membership_name": name,
-            "membership_price": float(price),
-            "billing_period": item.get("billing_period") or "monthly",
-            "benefits": [str(b).strip() for b in benefits if str(b).strip()],
-            "created_at": now,
-            "updated_at": now,
-        }
-        if item.get("minimum_commitment_months") is not None:
-            row["minimum_commitment_months"] = item["minimum_commitment_months"]
-        url = str(item.get("source_url") or source_url or "").strip().rstrip("/")
-        if url:
-            row["source_url"] = url
-        inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [row])
-        plan_ids.append(int(inserted[0]["plan_id"]))
+        from utils.extraction_persist import persist_membership_item
+        url = str(item.get("source_url") or source_url or "")
+        result = persist_membership_item(client, business_id=business_id, item=item, source_url=url, evidence=(source_evidence or {}).get(url.rstrip("/"), str(item.get("source_evidence") or "")), rendered_visibility=(rendered_visibility or {}).get(url.rstrip("/"), item.get("rendered_visibility")))
+        if result.get("accepted"):
+            plan_ids.append(int(result["plan_id"]))
     return plan_ids
 
 
@@ -170,11 +147,12 @@ def insert_offer_items_live(
             if service_id not in services_by_id:
                 raise ValueError(f"service_id {service_id} does not resolve to clinic_services")
             row["service_id"] = service_id
-            row["item_name"] = services_by_id[service_id]
-        elif item.get("item_name") is not None:
+        if item.get("item_name") is not None:
             row["item_name"] = str(item["item_name"]).strip()
         elif item.get("service_name") is not None:
             row["item_name"] = str(item["service_name"]).strip()
+        elif item.get("service_id") is not None:
+            row["item_name"] = services_by_id[int(item["service_id"])]
         if item.get("quantity") is not None:
             row["delivered_units"] = item["quantity"]
         if item.get("unit_price") is not None:
@@ -193,6 +171,7 @@ def persist_promotion_and_offers_from_bundle(
     promotion: dict[str, Any] | None,
     offers: List[dict[str, Any]],
     membership_plan_ids: List[int],
+    evidence: str | None = None,
 ) -> dict[str, int]:
     stats = {"promotions": 0, "offers": 0, "items": 0}
     if not promotion and not offers:
@@ -228,45 +207,23 @@ def persist_promotion_and_offers_from_bundle(
         promotion_id = int(inserted[0]["promotion_id"])
     stats["promotions"] = 1
     default_plan_id = membership_plan_ids[0] if membership_plan_ids else None
-    for offer in offers:
-        if not is_promo_offer(offer):
-            service_item = offer_to_clinic_service_item(offer)
-            if service_item:
-                upsert_extracted_service(
-                    client,
-                    business_id=business_id,
-                    item=service_item,
-                    source_url=source_url,
-                    evidence=str((promotion or {}).get("promotion_description") or ""),
-                )
-            continue
-        master, items = schema_offer_to_master(
-            offer,
-            business_id=business_id,
-            promotion_id=promotion_id,
-            source_url=source_url,
-            membership_plan_id=default_plan_id,
-        )
-        fp = master.get("offer_fingerprint")
-        existing_offer = []
-        if fp:
-            existing_offer = client.fetch_rows(
-                TABLE_PROMO_OFFER_MASTER,
-                "id",
-                filters={
-                    "business_id": f"eq.{business_id}",
-                    "offer_fingerprint": f"eq.{fp}",
-                },
-                limit=1,
-            )
-        if existing_offer:
-            offer_id = int(existing_offer[0]["id"])
-        else:
-            inserted = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [master])
-            offer_id = int(inserted[0]["id"])
-            stats["offers"] += 1
-        item_count = insert_offer_items_live(client, offer_id, items)
-        stats["items"] += item_count
+    # Bundle ingestion uses the same evidence and blanket boundary as the
+    # domain pipeline. Missing source text is a non-writing evidence decision.
+    routed = route_and_persist_extraction(
+        client,
+        business_id=business_id,
+        promotion_id=promotion_id,
+        source_url=source_url,
+        offers=offers,
+        evidence=evidence if evidence is not None else str(
+            (promotion or {}).get("promotion_description") or ""
+        ),
+        membership_plan_id=default_plan_id,
+    )
+    stats["offers"] = routed["promos"]
+    stats["items"] = sum(
+        write.get("items", 0) for write in routed["promo_writes"] if write.get("accepted")
+    )
     return stats
 
 
@@ -414,6 +371,8 @@ def apply_bundle(bundle_path: Path, *, trace_out: Path | None = None) -> dict[st
         business_id=business_id,
         memberships=bundle.get("memberships") or [],
         source_url=membership_url,
+        source_evidence={str(row["source_url"]).rstrip("/"): row["markdown"] for row in scrape_rows},
+        rendered_visibility=bundle.get("rendered_visibility") or {},
     )
     offer_stats = persist_promotion_and_offers_from_bundle(
         client,
@@ -421,6 +380,11 @@ def apply_bundle(bundle_path: Path, *, trace_out: Path | None = None) -> dict[st
         promotion=bundle.get("promotion"),
         offers=bundle.get("offers") or [],
         membership_plan_ids=plan_ids,
+        evidence="\n".join(
+            row["markdown"] for row in scrape_rows
+            if str(row.get("source_url") or "").rstrip("/")
+            == str((bundle.get("promotion") or (bundle.get("offers") or [{}])[0]).get("source_url") or "").rstrip("/")
+        ),
     )
     try:
         linked = link_item_services(client, business_id=business_id)

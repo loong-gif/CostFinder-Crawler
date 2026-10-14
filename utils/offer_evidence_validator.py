@@ -8,21 +8,25 @@ It does not add fields to any database payload or change the extraction schema.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 import re
 import unicodedata
 from typing import Any, Mapping
 
 from utils.clinic_service_extraction import is_promo_offer
 from utils.offer_price_evidence import extract_price_evidence
+from utils.service_price_guard import quantity_has_bound, infer_explicit_per_unit_price
+from utils.offer_purchase_semantics import service_supported_by_source
 
 
 _CURRENCY = re.compile(r"\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)")
 _PROMO_SIGNAL = re.compile(
     r"\b(?:special|promo|promotion|offer|sale|member|membership|vip|"
-    r"new\s+(?:patient|client)|first[-\s]?time|introductory|only|just|save|off)\b",
+    r"new\s+(?:patient|client)|first[-\s]?time|introductory|only|just|save|off)\b|"
+    r"-\s*\d+(?:\.\d+)?\s*%",
     re.IGNORECASE,
 )
-_MEMBERSHIP_SIGNAL = re.compile(r"\b(?:member|membership|vip|club|plan)\b", re.IGNORECASE)
+_MEMBERSHIP_SIGNAL = re.compile(r"\b(?:members?|membership|vip|club|plan)\b", re.IGNORECASE)
 _NEW_CUSTOMER_SIGNAL = re.compile(
     r"\b(?:new\s+(?:patient|client|customer)|first[-\s]?time|first\s+visit)\b",
     re.IGNORECASE,
@@ -199,31 +203,30 @@ def _currency_contexts(text: str, value: Any, *, radius: int = 45) -> list[tuple
 
 
 def _regular_price_supported(value: Any, raw_text: str) -> bool:
+    badge = _badge_price_pair(raw_text)
+    if badge and _same_number(badge[0], value):
+        return True
     parsed = extract_price_evidence(raw_text).get("regular_price")
     if _same_number(parsed, value):
         return True
     for prefix, suffix in _currency_contexts(raw_text, value):
         if re.search(
-            r"\b(?:was|regular(?:ly)?|original|list\s+price|value)\b\s*[:=]?\s*$",
+            r"\b(?:was|reg(?:ular(?:ly)?)?\.?|original|list\s+price|value)(?:\s+price)?\s*[:=]?\s*$",
             prefix,
             re.I,
-        ) or re.match(
-            r"^\s*[,;:()\-]*\s*(?:regular(?:ly)?|original|list\s+price|value)\b",
+        ) or (not _CURRENCY.search(suffix) and re.match(
+            r"^\s*[,;:()\-]*\s*(?:reg(?:ular(?:ly)?)?\.?|original|list\s+price|value)\b",
             suffix,
             re.I,
-        ):
+        )):
             return True
-    mentions = _currency_mentions(raw_text)
-    target = _number(value)
-    return bool(
-        target is not None
-        and len(mentions) >= 2
-        and target == max(amount for amount, _start, _end in mentions)
-        and _PROMO_SIGNAL.search(raw_text)
-    )
+    return False
 
 
 def _discount_price_supported(value: Any, raw_text: str) -> bool:
+    badge = _badge_price_pair(raw_text)
+    if badge and _same_number(badge[1], value):
+        return True
     parsed = extract_price_evidence(raw_text).get("discount_price")
     if _same_number(parsed, value):
         return True
@@ -255,27 +258,59 @@ def _discount_price_supported(value: Any, raw_text: str) -> bool:
     ]
     if target not in valid_amounts:
         return False
-    if len(valid_amounts) >= 2 and target == min(valid_amounts):
-        return True
+    if len(valid_amounts) >= 2:
+        regulars = [amount for amount in valid_amounts if _regular_price_supported(amount, raw_text)]
+        return len(regulars) == 1 and target not in regulars and len(set(valid_amounts) - set(regulars)) == 1
     return bool(len(valid_amounts) == 1 and _PROMO_SIGNAL.search(raw_text))
+
+
+def _badge_price_pair(raw_text: str) -> tuple[float, float] | None:
+    """An ordered price pair with a corroborating discount badge is explicit."""
+    match = re.search(r"\$\s*(\d+(?:\.\d+)?)\s+\$\s*(\d+(?:\.\d+)?)\s+-\s*(\d+(?:\.\d+)?)\s*%", raw_text)
+    if match:
+        regular, discount, percent = map(float, match.groups())
+        if regular > discount > 0 and abs((regular-discount)*100/regular-percent) < 1:
+            return regular, discount
+    return None
+
+
+def stated_paid_and_delivered(raw_text: str) -> tuple[Decimal, Decimal] | None:
+    """Recognize explicitly paid and free quantities of the same stated unit."""
+    text = str(raw_text or "")
+    for word,value in (("one",1),("two",2),("three",3),("four",4),("five",5),("six",6)):
+        text = re.sub(r"\b"+word+r"\b",str(value),text,flags=re.I)
+    units = "|".join(_UNIT_WORDS.values())
+    forward = re.search(rf"\bbuy\s+(\d+)\s+({units})\b.{{0,60}}?\bget\s+(?:in\s+)?(?:the\s+)?(\d+)(st|nd|rd|th)?\s*(?:({units})\s*)?(?:for\s+)?free\b",text,re.I|re.S)
+    if forward:
+        paid,free = Decimal(forward[1]),Decimal(forward[3])
+        if forward[5] and forward[2].lower().rstrip("s") != forward[5].lower().rstrip("s"):
+            return None
+        delivered = free if forward[4] else paid+free
+        if paid>0 and delivered>paid and (not forward[4] or delivered==paid+1):return paid,delivered
+    reverse = re.search(rf"\b(\d+)\s+free\s+({units})\b.{{0,35}}?purchase\s+of\s+(\d+)\s+({units})\b",text,re.I|re.S)
+    if reverse and reverse[2].lower().rstrip("s")==reverse[4].lower().rstrip("s"):
+        paid,free=Decimal(reverse[3]),Decimal(reverse[1])
+        if paid>0 and free>0:return paid,paid+free
+    return None
 
 
 def _quantity_supported(value: Any, raw_text: str, *, minimum: bool = False) -> bool:
     number = _number(value)
     if number is None:
         return False
-    shown = f"{number:g}"
-    unit_pattern = "|".join(_UNIT_WORDS.values())
+    shown = re.escape(f"{number:g}")
+    units = "|".join(_UNIT_WORDS.values())
     if minimum:
-        return bool(
-            re.search(
-                rf"\b{re.escape(shown)}\s*(?:{unit_pattern})\b.{{0,24}}?"
-                r"(?:minimum|at\s+least|or\s+more|\+)",
-                raw_text,
-                re.I,
-            )
-        )
-    return bool(re.search(rf"\b{re.escape(shown)}\s*(?:{unit_pattern})\b", raw_text, re.I))
+        return bool(re.search(rf"\b(?:minimum|min\.?|at\s+least)\s+{shown}\s*(?:{units})\b|"
+            rf"\b{shown}\s*(?:\+|or\s+more)\s*(?:{units})\b|"
+            rf"\b{shown}[ -]*(?:{units})\b.{{0,24}}?(?:minimum|at\s+least|or\s+more|\+)",raw_text,re.I))
+    counts=stated_paid_and_delivered(raw_text)
+    if counts is not None:
+        # The paid count is not the delivered count when units are included free.
+        if number in (counts[0],counts[1]-counts[0]):return False
+        if number == counts[1]:return True
+    return any(not quantity_has_bound(raw_text[max(0,match.start()-35):match.start()],raw_text[match.end():])
+               for match in re.finditer(rf"\b{shown}\s*(?:{units})\b",raw_text,re.I))
 
 
 def _unit_type_supported(value: Any, raw_text: str) -> bool:
@@ -322,7 +357,10 @@ def _discount_amount_supported(value: Any, raw_text: str) -> bool:
 
 
 def _discount_percent_supported(value: Any, raw_text: str) -> bool:
-    return _same_number(extract_price_evidence(raw_text).get("discount_percent"), value)
+    if _same_number(extract_price_evidence(raw_text).get("discount_percent"), value):
+        return True
+    return any(_same_number(match[1], value) for match in re.finditer(
+        r"(?:-\s*|\bsave\s+)(\d+(?:\.\d+)?)\s*%", raw_text, re.I))
 
 
 def _clear_unsupported(
@@ -352,6 +390,16 @@ def validate_offer_evidence(
         return OfferEvidenceDecision(False, "missing_source_evidence", candidate)
     if not raw_text or not _raw_text_supported(raw_text, source):
         return OfferEvidenceDecision(False, "offer_raw_text_not_supported", candidate)
+    source_quote = candidate.get("source_offer_raw_text")
+    if source_quote and (not _raw_text_supported(str(source_quote), source)
+                         or not _raw_text_supported(raw_text, str(source_quote))):
+        return OfferEvidenceDecision(False, "purchase_branch_not_supported", candidate)
+    if (candidate.get("discount_price") is not None
+            and infer_explicit_per_unit_price(raw_text) is None
+            and infer_explicit_per_unit_price(raw_text, prefer_first=True) is not None):
+        return OfferEvidenceDecision(False, "ambiguous_unit_price_context", candidate)
+    if re.search(r"\b(?:from|starting\s+at|starts?\s+(?:at|from))\s+\$", raw_text, re.I):
+        candidate["price_model"] = "from"
 
     issues: list[OfferEvidenceIssue] = []
     sanitized_conditions, condition_issues = sanitize_conditions(
@@ -422,6 +470,11 @@ def validate_offer_evidence(
     for index, raw_item in enumerate(raw_items):
         item = dict(raw_item) if isinstance(raw_item, Mapping) else {}
         prefix = f"items[{index}]"
+        service_name = item.get("service_name")
+        if service_name and str(service_name).casefold() != "others" and not service_supported_by_source(service_name, raw_text):
+            issues.append(OfferEvidenceIssue(f"{prefix}.service_name", "not_supported_by_offer_raw_text", service_name))
+            item["service_name"] = None
+            item.pop("service_id", None)
         quantity = item.get("quantity")
         if quantity is not None and not _quantity_supported(quantity, raw_text):
             issues.append(OfferEvidenceIssue(f"{prefix}.quantity", "not_supported_by_offer_raw_text", quantity))
@@ -447,7 +500,7 @@ def validate_offer_evidence(
         sanitized_items.append(item)
     candidate["items"] = sanitized_items
 
-    if not is_promo_offer(candidate):
+    if not is_promo_offer(candidate) and not stated_paid_and_delivered(raw_text):
         return OfferEvidenceDecision(
             False,
             "no_supported_promo_fact",

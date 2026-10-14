@@ -17,9 +17,9 @@ from utils.schema_contract import TABLE_PROMO_OFFER_MASTER
 
 _PRICE_FIELDS = ("discount_price", "discount_percent", "discount_amount")
 _MEMBERSHIP_OFFER_SELECT = (
-    "id,business_id,membership_plan_id,discount_price,discount_percent,"
-    "discount_amount,price_model,is_new_customer_required,conditions,"
-    "promo_offer_items(item_name,service_id)"
+    "id,business_id,membership_plan_id,regular_price,discount_price,discount_percent,"
+    "discount_amount,price_model,is_package,is_membership_required,is_new_customer_required,conditions,offer_raw_text,"
+    "promo_offer_items(item_name,service_id,delivered_units,unit_price)"
 )
 _GENERIC_MEMBERSHIP_TERM = re.compile(
     r"^(?:(?:vip|member|members|membership|club|plan)(?:[- ]only)?"
@@ -84,9 +84,14 @@ def same_items(
     *,
     service_names: Mapping[int, str] | None = None,
 ) -> bool:
-    candidate_names = _candidate_item_names(candidate_items)
-    existing_names = _item_names(existing_items, service_names=service_names)
-    return bool(candidate_names) and candidate_names == existing_names
+    def composition(items):
+        return sorted((
+            _normalized_item_identity(item.get("item_name") or item.get("service_name")
+                or (service_names or {}).get(item.get("service_id"))),
+            _number(item.get("delivered_units", item.get("quantity"))),
+            str(item.get("unit_type") or ""), _number(item.get("unit_price")))
+            for item in items or [] if isinstance(item, Mapping))
+    return bool(candidate_items) and composition(candidate_items) == composition(existing_items)
 
 
 def same_offer_value(candidate: Mapping[str, Any], existing: Mapping[str, Any]) -> bool:
@@ -117,7 +122,8 @@ def _material_conditions(value: Any) -> set[str]:
 
 
 def no_material_term_conflict(candidate: Mapping[str, Any], existing: Mapping[str, Any]) -> bool:
-    if bool(candidate.get("is_new_customer_required")) != bool(existing.get("is_new_customer_required")):
+    if any(candidate.get(field) != existing.get(field) for field in
+           ("is_membership_required", "is_new_customer_required", "is_package")):
         return False
 
     candidate_model = str(candidate.get("price_model") or "").strip()
@@ -130,7 +136,9 @@ def no_material_term_conflict(candidate: Mapping[str, Any], existing: Mapping[st
     # A promotion page often repeats only the price line and omits the
     # membership plan's own enrollment terms. That is not a conflict. When
     # both sources state material terms, they must agree.
-    return not candidate_terms or not existing_terms or candidate_terms == existing_terms
+    if candidate.get("conditions") is None or existing.get("conditions") is None:
+        return candidate.get("conditions") is existing.get("conditions")
+    return candidate_terms == existing_terms
 
 
 def _service_name_fallbacks(client: Any, rows: list[dict[str, Any]], business_id: int) -> dict[int, str]:
@@ -169,18 +177,24 @@ def find_matching_membership_offer(
     candidate_items: Any,
 ) -> dict[str, Any] | None:
     """Return the canonical membership offer when the candidate is a duplicate."""
+    # A price/name coincidence cannot establish that two sources describe the
+    # same tier. Require the relationship already resolved by the caller.
+    plan_id = candidate_master.get("membership_plan_id")
+    if plan_id is None or candidate_master.get("is_membership_required") is not True:
+        return None
     rows = client.fetch_rows(
         TABLE_PROMO_OFFER_MASTER,
         _MEMBERSHIP_OFFER_SELECT,
         filters={
             "business_id": f"eq.{int(business_id)}",
-            "membership_plan_id": "not.is.null",
+            "membership_plan_id": f"eq.{int(plan_id)}",
             "is_active": "eq.true",
         },
         limit=1000,
         order="id.asc",
     )
     service_names = _service_name_fallbacks(client, rows, business_id)
+    matches = []
     for existing in rows:
         if int(existing.get("business_id") or business_id) != int(business_id):
             continue
@@ -190,5 +204,10 @@ def find_matching_membership_offer(
             continue
         if not no_material_term_conflict(candidate_master, existing):
             continue
-        return existing
-    return None
+        if candidate_master.get("regular_price") != existing.get("regular_price"):
+            continue
+        from utils.offer_fingerprint import normalize_offer_raw_text
+        if normalize_offer_raw_text(candidate_master.get("offer_raw_text")) != normalize_offer_raw_text(existing.get("offer_raw_text")):
+            continue
+        matches.append(existing)
+    return matches[0] if len(matches) == 1 else None

@@ -217,9 +217,11 @@ def test_validate_service_rejects_blog_source_url() -> None:
 
 def test_validate_membership_requires_name_and_price() -> None:
     item = {"membership_name": "Club", "membership_price": 99, "billing_period": None}
-    assert validate_membership(item, "").accepted
-    assert not validate_membership({"membership_name": "Club"}, "").accepted
-    assert not validate_membership({"membership_price": 99}, "").accepted
+    assert validate_membership(item, "Club membership $99 per month").accepted
+    # A fee must be bound to the named plan's own evidence.
+    assert not validate_membership(item, "").accepted
+    assert not validate_membership({"membership_name": "Club"}, "Club membership $99").accepted
+    assert not validate_membership({"membership_price": 99}, "Club membership $99").accepted
 
 
 def test_validate_membership_accepts_without_evidence() -> None:

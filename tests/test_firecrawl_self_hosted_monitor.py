@@ -56,7 +56,7 @@ def test_self_hosted_scrape_request_uses_legacy_v1_compatible_fields(monkeypatch
     from scripts.firecrawl_self_hosted_monitor import SelfHostedMonitor
 
     SelfHostedMonitor("http://local", "", 1).scrape("https://example.com")
-    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown"], "onlyMainContent": True}
+    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown"], "onlyMainContent": True, "excludeTags": ["nav", "footer", "script", "style", "noscript"]}
 
 
 def test_runner_baselines_without_webhook(tmp_path: Path, monkeypatch) -> None:

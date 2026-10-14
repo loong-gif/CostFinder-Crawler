@@ -185,11 +185,9 @@ def validate_service(
 
 
 def validate_membership(item: dict, evidence: str) -> GateDecision:
-    del evidence
-    name = str(item.get("membership_name") or "").strip()
-    if not name or item.get("membership_price") is None:
-        return GateDecision(False, None, "missing_membership_or_price")
-    return GateDecision(True, None, "validated")
+    from utils.membership_evidence import prepare_membership_write
+    decision = prepare_membership_write(item, evidence)
+    return GateDecision(decision["accepted"], None, decision["reason"])
 
 
 def _promotion_content_title_only(segments: Sequence[str], title: str) -> bool:

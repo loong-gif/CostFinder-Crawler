@@ -21,22 +21,20 @@ _VALID_UNIT_TYPES = frozenset(
     {
         "unit",
         "syringe",
-        "half_syringe",
         "vial",
         "treatment",
         "session",
-        "package",
         "area",
-        "ml",
-        "mg",
-        "others",
+        "shot",
     }
 )
 
 
-def _normalize_unit_type(value: Any) -> str:
-    unit_type = str(value or "others").strip() or "others"
-    return unit_type if unit_type in _VALID_UNIT_TYPES else "others"
+def _normalize_unit_type(value: Any) -> str | None:
+    unit_type = str(value or "").strip().lower() or None
+    if unit_type in {"", "others"}:
+        return None
+    return unit_type if unit_type in _VALID_UNIT_TYPES else None
 
 
 def _positive_number(value: Any) -> float | None:
@@ -99,7 +97,7 @@ def offer_to_clinic_service_item(offer: dict[str, Any]) -> dict[str, Any] | None
         "service_name": service_name,
         "service_name_raw": raw_name,
         "regular_price": regular_price,
-        "unit_type": first.get("unit_type") or "others",
+        "unit_type": _normalize_unit_type(first.get("unit_type")),
     }
     if first.get("service_category") is not None:
         item["service_category"] = first.get("service_category")
@@ -111,21 +109,17 @@ def offer_to_clinic_service_item(offer: dict[str, Any]) -> dict[str, Any] | None
 _UNIT_TYPE_RANK = {
     "unit": 0,
     "syringe": 1,
-    "half_syringe": 2,
-    "vial": 3,
-    "session": 4,
-    "treatment": 5,
-    "area": 6,
-    "package": 7,
-    "ml": 8,
-    "mg": 9,
-    "others": 10,
+    "vial": 2,
+    "session": 3,
+    "treatment": 4,
+    "area": 5,
+    "shot": 6,
 }
 
 
 def _unit_type_rank(value: Any) -> int:
     unit_type = _normalize_unit_type(value)
-    return _UNIT_TYPE_RANK.get(unit_type, 10)
+    return _UNIT_TYPE_RANK.get(unit_type, 7)
 
 
 def pick_best_service_items(
@@ -336,7 +330,7 @@ def upsert_extracted_service(
         payload["source_url"] = normalized_url
     if price is not None:
         payload["regular_price"] = float(price)
-    if str(item.get("unit_type") or "").strip():
+    if unit_type is not None:
         payload["unit_type"] = unit_type
     client.update_row(
         TABLE_CLINIC_SERVICES,

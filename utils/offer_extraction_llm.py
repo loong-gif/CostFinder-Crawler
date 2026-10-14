@@ -379,63 +379,44 @@ class GeminiNativeClient:
             raise RuntimeError("Gemini response missing text")
         return parse_json_payload(text, {})
 
-    def create_json_response_with_image(
-        self,
-        prompt: str,
-        *,
-        image_bytes: bytes,
-        mime_type: str,
-        json_schema: Optional[Dict[str, Any]] = None,
-        system_instruction: str = "",
-    ) -> Dict[str, Any]:
-        """Return structured Gemini output grounded in one inline image.
+    def create_json_response_with_image(self, prompt: str, *, image_bytes: bytes, mime_type: str,
+                                        json_schema=None, system_instruction=""):
+        return self.create_json_response_with_images(prompt, images=[(image_bytes, mime_type)],
+                    json_schema=json_schema, system_instruction=system_instruction)
 
-        Callers must still validate the returned text against their own evidence
-        policy; this method only transports a bounded image to Gemini.
-        """
-        if not image_bytes:
-            raise ValueError("image_bytes must not be empty")
-        if not str(mime_type or "").startswith("image/"):
-            raise ValueError("mime_type must be an image MIME type")
-        generation_config: Dict[str, Any] = {"responseMimeType": "application/json"}
+    def create_json_response_with_images(self, prompt: str, *, images, json_schema=None,
+                                         system_instruction="", return_metadata=False, timeout=None):
+        """Transport at most eight images / 10 MiB; callers validate the facts."""
+        if not 1 <= len(images) <= 8 or sum(len(data) for data, _ in images) > 10 * 1024 * 1024:
+            raise ValueError("image_batch_limit")
+        if any(not data or not str(mime).startswith("image/") for data, mime in images):
+            raise ValueError("invalid_image")
+        config = {"responseMimeType": "application/json"}
         if json_schema:
-            generation_config["responseJsonSchema"] = _schema_for_gemini(json_schema)
+            config["responseJsonSchema"] = _schema_for_gemini(json_schema)
         if not self._is_reasoning_model():
-            generation_config["temperature"] = 0
-
-        image_data = base64.b64encode(image_bytes).decode("ascii")
-        body: Dict[str, Any] = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"inline_data": {"mime_type": mime_type, "data": image_data}},
-                        {"text": str(prompt or "")},
-                    ],
-                }
-            ],
-            "generationConfig": generation_config,
-        }
+            config["temperature"] = 0
+        parts = [{"inline_data": {"mime_type": mime, "data": base64.b64encode(data).decode("ascii")}}
+                 for data, mime in images] + [{"text": str(prompt or "")}]
+        body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": config}
         if system_instruction.strip():
             body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
-
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
-        response = requests.post(
-            f"{self.base_url}/{model_path}:generateContent",
-            headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
-            json=body,
-            timeout=self.timeout,
-        )
+        response = requests.post(f"{self.base_url}/{model_path}:generateContent",
+                    headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+                    json=body, timeout=min(self.timeout, timeout) if timeout is not None else self.timeout)
         response.raise_for_status()
-        payload = response.json()
-        candidates = payload.get("candidates") or []
+        raw = response.json()
+        candidates = raw.get("candidates") or []
         if not candidates:
-            raise RuntimeError("Gemini response missing candidates")
+            raise RuntimeError("gemini_missing_candidates")
         parts = (candidates[0].get("content") or {}).get("parts") or []
-        text = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
-        if not text.strip():
-            raise RuntimeError("Gemini response missing text")
-        return parse_json_payload(text, {})
+        value = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
+        if not value.strip():
+            raise RuntimeError("gemini_missing_text")
+        parsed = parse_json_payload(value, {})
+        return (parsed, {"model": self.model, "model_version": raw.get("modelVersion"),
+                         "usage": raw.get("usageMetadata"), "raw_response": raw}) if return_metadata else parsed
 
     def _is_reasoning_model(self) -> bool:
         name = (self.model or "").lower()

@@ -5,6 +5,7 @@ import json
 from typing import Any, Iterable
 
 from utils.clinic_service_taxonomy import live_clinic_service_payload
+from utils.clinic_services_firecrawl import normalize_unit_type
 
 
 def _sql_json(value: Any) -> str:
@@ -19,6 +20,8 @@ def render_mcp_operations(operations: Iterable[dict[str, Any]]) -> str:
     for operation in operations:
         raw_payload = operation.get("payload") or {}
         payload = live_clinic_service_payload(raw_payload)
+        if "unit_type" in payload:
+            payload["unit_type"] = normalize_unit_type(payload["unit_type"])
         if operation.get("action") == "mcp_insert":
             inserts.append(payload)
         elif operation.get("action") == "mcp_update":

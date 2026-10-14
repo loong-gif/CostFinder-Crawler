@@ -6,8 +6,11 @@ Archived scripts keep their own copies.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 import requests
+
+PRODUCTION_PROJECT_REF = "kdlpkjzcnbkjcvwsvlwn"
 
 
 class SupabaseRestClient:
@@ -23,6 +26,12 @@ class SupabaseRestClient:
                 "Content-Type": "application/json",
             }
         )
+
+    def assert_write_project(self) -> None:
+        # Replica reads remain allowed; a default connector must never choose a writer.
+        parsed = urlsplit(self.base_url)
+        if parsed.scheme != "https" or parsed.hostname != PRODUCTION_PROJECT_REF + ".supabase.co":
+            raise RuntimeError("database_project_mismatch")
 
     def fetch_rows(
         self,
@@ -56,6 +65,7 @@ class SupabaseRestClient:
           ``{"promo_website_id": "eq.123"}``).
         - Otherwise it is treated as a simple scalar id and mapped to ``id=eq.<value>``.
         """
+        self.assert_write_project()
         if isinstance(row_id_or_filters, dict):
             params = dict(row_id_or_filters)
         else:
@@ -73,6 +83,7 @@ class SupabaseRestClient:
     def insert_rows(
         self, table: str, rows: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
+        self.assert_write_project()
         response = self.session.post(
             f"{self.base_url}/{table}",
             json=rows,
@@ -88,6 +99,7 @@ class SupabaseRestClient:
         filters: Dict[str, str],
     ) -> List[Dict[str, Any]]:
         """Delete rows matching PostgREST filters."""
+        self.assert_write_project()
         response = self.session.delete(
             f"{self.base_url}/{table}",
             params=dict(filters),
@@ -113,6 +125,7 @@ class SupabaseRestClient:
         on_conflict : str, optional
             PostgREST ``on_conflict`` column name for merge-duplicates.
         """
+        self.assert_write_project()
         headers = {"Prefer": "return=representation,resolution=merge-duplicates"}
         params: Dict[str, str] = {}
         if on_conflict:
@@ -128,6 +141,7 @@ class SupabaseRestClient:
         return response.json()
 
     def rpc(self, function: str, payload: Optional[Dict[str, Any]] = None) -> Any:
+        self.assert_write_project()
         response = self.session.post(
             f"{self.base_url}/rpc/{function}",
             json=payload or {},

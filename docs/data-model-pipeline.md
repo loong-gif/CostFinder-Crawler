@@ -46,11 +46,23 @@ erDiagram
 | --- | --- | --- |
 | `clinic_promotions` | Campaign-level source page and lifecycle. | `promotion_id`, `business_id`, `promotion_title`, `source_url`, campaign dates, `is_active`, `promotion_content`. |
 | `promo_offer_master` | Offer-level price, eligibility, provenance, and activity state. | `id`, `business_id`, `promotion_id`, `membership_plan_id`, regular and discount price fields, `price_model`, membership/new-customer requirements, `conditions` (`text[]` of extra requirement strings), `offer_fingerprint`, `offer_raw_text`, `is_active`. |
-| `promo_offer_items` | The service components of an offer, including a single-service offer. | `offer_item_id`, `offer_id`, `service_id`, `delivered_units`, `unit_price`. |
+| `promo_offer_items` | The service components of an offer, including a single-service offer. | `offer_item_id`, `offer_id`, `item_name`, `service_id`, `delivered_units`, `unit_price`. |
 
 `promo_offer_master` describes the commercial offer, not a specific service. Its `price_model` distinguishes total-price, per-unit, and starting-price offers. `regular_price` and `discount_price` are the prices stated by the promotion; `discount_amount` and `discount_percent` are comparative fields when supported by evidence. `promo_offer_items` supplies the service relationship and stated delivered quantity. A package can therefore have multiple items, while a single offer still has one item. `delivered_units` is recorded only when a positive delivered quantity is explicitly stated; `unit_price` records an item-level price when available.
 
 `conditions` is nullable `text[]`: `NULL` means not processed or under review, an empty array means the matched source has no additional restriction, and non-empty values contain only validated requirement text. Membership and new-customer eligibility remain in their dedicated boolean columns and are not duplicated here.
+
+## Normalized-write gates
+
+The following controls keep discovery output from becoming catalogue or offer data prematurely:
+
+- A candidate marked `review` is never written automatically. A `ready` candidate still needs route classification for `/product(s)/` pages and same-page specificity resolution: a supported specific service suppresses its generic parent, except when a true category page independently establishes multiple services.
+- `clinic_services.unit_type` is a source-backed unit semantic, not a completeness placeholder. Keep it `NULL` when unknown; do not default it to `treatment` or another catch-all value.
+- Scraped or DOM text alone cannot support a Promotion, Membership benefit, or Offer-condition write. Use the rendered-visibility gate in [`rendered_visibility_qa.md`](rendered_visibility_qa.md); `dom_only_hidden`, `page_unavailable`, and pending image review remain non-writing states.
+- `promo_offer_items.item_name` preserves the source's commercial line item; `service_id` is a separate, same-business catalogue association. Never replace the item name with an inferred service enum. A blanket offer (for example, all services, products, or gift cards) remains one offer with `service_id = NULL`, so it stays visible on clinic/city pages without appearing on a treatment page.
+- The domain and bundle writers collapse explicit blanket wording into one unlinked scope item and compare existing offers by business, promotion/membership context, normalized source wording, and complete master/item semantics. An identical offer or inactive historical duplicate performs no write; an evidence-supported change updates the existing active row. Shared-price source lines retain all extracted components in one package offer; package item prices remain unallocated (`NULL`). When an explicit membership requirement selects a known membership plan, the offer stores only `membership_plan_id`, leaving `promotion_id` NULL. Service relinking skips blankets, and identical item replacement preserves `updated_at`.
+- Database-derived discount amount/percent values matching the two source-stated prices do not trigger a rewrite when extraction leaves those comparative fields empty. They remain structural arithmetic rather than extracted source facts.
+- Bundle offers pass the same evidence validator as domain extraction, using the matching scrape text. An extraction payload alone cannot support its own commercial fields.
 
 ### Evidence and quality control
 
@@ -97,3 +109,10 @@ Catalogue-price writes are guarded by [`utils/service_price_guard.py`](../utils/
 The pilot reads structured service, membership, and promotion records, then creates versioned `sag.document` rows. Documents are split into `sag.chunk` rows, enriched as `sag.event` and `sag.entity` records linked through `sag.event_entity`, and indexed through the corresponding chunk, event, and entity embedding tables. `sag.index_version` identifies each corpus build, while `sag.index_job` tracks asynchronous upsert or delete work.
 
 The current project accesses SAG through server-side database connectivity used by [`scripts/sag_persistent_pilot.py`](../scripts/sag_persistent_pilot.py). It is intentionally outside client access: as verified on 2026-07-30, the `anon`, `authenticated`, and `public` roles have no `USAGE` on the `sag` schema and no `SELECT` access to its tables. RLS is not currently enabled on these private tables, so documentation must not describe SAG as RLS-protected.
+# Firecrawl Monitor 的明确同步例外（2026-10-11）
+
+按用户授权和 `AGENTS.md`，该监控入口允许已核验的优惠在服务匹配未知时保存
+`promo_offer_items.service_id=NULL`，不新建服务，不阻断价格、数量和条款同步。
+日期没有明确年份时保存 NULL，不猜测年份；页面核验仍保留原始时间。
+服务映射未完成时 `is_offer_extracted=false`。此规则仅改变监控同步的程序判断，
+不修改数据库 Schema，也不改变其他提取入口的门禁。详见 `docs/monitor_price_sync.md`。

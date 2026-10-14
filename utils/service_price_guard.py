@@ -27,8 +27,12 @@ _PER_UNIT_SIGNAL = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_PER_UNIT_PRICE = re.compile(
-    r"\$\s*(\d+(?:\.\d+)?)\s*(?:(?:/|per)\s*|a\s+)(?:u(?:nit)?s?)\b",
+    r"\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:(?:/|per)\s*|a\s+)"
+    r"(?:u(?:nit)?s?|half[-\s]?syringes?|syringes?|vials?|sessions?|treatments?|areas?|ml|mg)\b",
     re.IGNORECASE,
+)
+_VALID_CLINIC_SERVICE_UNITS = frozenset(
+    {"unit", "syringe", "vial", "session", "treatment", "area", "shot"}
 )
 
 
@@ -110,13 +114,13 @@ def infer_explicit_per_unit_price(text: str, *, prefer_first: bool = False) -> f
     for match in _EXPLICIT_PER_UNIT_PRICE.finditer(source):
         prefix = source[max(0, match.start() - 28) : match.start()]
         if re.search(
-            r"\b(?:reg|regular|regularly|original|list)(?:\s+price)?[.:=\-]?\s*$",
+            r"\b(?:reg(?:ular(?:ly)?)?|original|list)\.?\s*(?:price)?[.:=\-]?\s*$",
             prefix,
             re.IGNORECASE,
         ):
             continue
         try:
-            value = float(match.group(1))
+            value = float(match.group(1).replace(",", ""))
         except (TypeError, ValueError):
             continue
         if value > 0:
@@ -126,6 +130,16 @@ def infer_explicit_per_unit_price(text: str, *, prefer_first: bool = False) -> f
     if all(abs(value - candidates[0]) <= 0.011 for value in candidates):
         return candidates[0]
     return candidates[0] if prefer_first else None
+
+
+def quantity_has_bound(prefix: str, suffix: str) -> bool:
+    """Distinguish a purchase condition or upper bound from delivered units."""
+    return bool(
+        re.search(r"\b(?:up\s+to|minimum|min\.?|at\s+least|more\s+than|first)\s*$", prefix, re.I)
+        or re.match(r"\s*(?:minimum\b|min\b|or\s+(?:more|fewer|less)\b|\+)", suffix, re.I)
+        or re.search(r"\d\s*[-–]\s*$", prefix)
+        or re.match(r"\s*[-–]\s*\d", suffix)
+    )
 
 
 def derive_offer_item_pricing(
@@ -146,16 +160,21 @@ def derive_offer_item_pricing(
         )
         if part
     )
-    regular_total = _positive(offer.get("regular_price"))
     discount_total = _positive(offer.get("discount_price"))
     price_is_per_unit = bool(_PER_UNIT_SIGNAL.search(blob))
     explicit_unit_price = infer_explicit_per_unit_price(
         blob,
         prefer_first=bool(offer.get("is_membership_required")),
     )
-    count, _upper = infer_unit_count(blob, regular_total or discount_total)
-    if count is None and len(items) == 1:
-        count, _upper = infer_unit_count(blob)
+    # The catalogue helper also understands upper bounds; an Offer quantity
+    # must be an actual delivered count, not a minimum purchase condition.
+    counts = {
+        int(match.group(1))
+        for match in _UNIT_COUNT_RE.finditer(blob)
+        if int(match.group(1)) > 0
+        and not quantity_has_bound(blob[max(0, match.start(1) - 35):match.start(1)], blob[match.end():])
+    }
+    count = next(iter(counts)) if len(counts) == 1 else None
     if count is not None and len(items) == 1:
         for item in items:
             if item.get("quantity") is None:
@@ -194,13 +213,27 @@ def normalize_service_catalog_item(
     if std_name == "Botox" and "lip flip" in raw_cf:
         return ServiceCatalogDecision(False, "named_subtreatment_not_unit_catalog")
 
+    # Only the service's quoted line can establish anatomy, units or counts.
     evidence_text = str(evidence or "")
+    quoted = str(normalized.get("service_name_raw") or "").strip()
+    if quoted and quoted.casefold() in evidence_text.casefold():
+        evidence_text = quoted
+    from utils.offer_field_normalize import normalize_service_area
+    claimed_area = normalize_service_area(normalized.get("service_area"))
+    if claimed_area is None or claimed_area != normalize_service_area(evidence_text):
+        normalized.pop("service_area", None)
     if _MARKET_AVERAGE_SIGNAL.search(evidence_text):
         return ServiceCatalogDecision(False, "market_average_not_clinic_price")
 
-    unit_type = str(normalized.get("unit_type") or "others").strip().lower() or "others"
+    unit_type = str(normalized.get("unit_type") or "").strip().lower() or None
+    if unit_type == "others":
+        unit_type = None
     if unit_type == "package":
         return ServiceCatalogDecision(False, "package_not_catalog_unit_price")
+    if unit_type is not None and unit_type not in _VALID_CLINIC_SERVICE_UNITS:
+        return ServiceCatalogDecision(False, "invalid_unit_type")
+    if unit_type is not None and not re.search(r"\b" + re.escape(unit_type) + r"s?\b", evidence_text, re.IGNORECASE):
+        unit_type = None
 
     if unit_type in {"session", "area", "treatment", "package"} or _PROMO_PRICE_SIGNAL.search(
         evidence_text
@@ -211,12 +244,14 @@ def normalize_service_catalog_item(
         )
         if count is not None and count >= 2:
             normalized["regular_price"] = round(price / count, 4)
-            normalized["unit_type"] = "unit"
+            unit_type = "unit"
         elif unit_type in {"session", "area", "treatment"} and not _PER_UNIT_SIGNAL.search(evidence_text):
             return ServiceCatalogDecision(False, "non_unit_price_without_explicit_units")
 
-    if normalized.get("unit_type") in (None, "", "others") and _PER_UNIT_SIGNAL.search(evidence_text):
+    if unit_type is None and _PER_UNIT_SIGNAL.search(evidence_text):
         normalized["unit_type"] = "unit"
+    else:
+        normalized["unit_type"] = unit_type
 
     return ServiceCatalogDecision(True, "validated", normalized_item=normalized)
 

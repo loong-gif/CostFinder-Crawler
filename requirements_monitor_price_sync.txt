@@ -1,0 +1,6 @@
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+psycopg[binary]>=3.2,<4
+firecrawl-py>=4.28,<5
+websockets>=15,<18
+pandas>=2.2,<4

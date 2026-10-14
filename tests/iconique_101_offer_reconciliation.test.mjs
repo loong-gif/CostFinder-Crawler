@@ -1,0 +1,24 @@
+import assert from "node:assert/strict";
+import { cardSpec, priceFromCard, quantityFromCard, sameOffer, serviceMappingFromProductEvidence, servicesFromProductEvidence } from "../one-off/iconique_101_offer_reconciliation_lib.mjs";
+
+assert.equal(priceFromCard("BBL Laser (Face) 3 SESSIONS $1,500.00"), 1500);
+assert.equal(quantityFromCard("BBL Laser (Face) 3 SESSIONS $1,500.00"), 3);
+assert.deepEqual(servicesFromProductEvidence("BBL + MOXI combo", "BBL and Moxi laser treatment"), ["BBL Photofacial", "Moxi Laser"]);
+assert.deepEqual(servicesFromProductEvidence("Full Facial Balancing", "Iconique Full Facial Balancing treatment"), []);
+assert.equal(serviceMappingFromProductEvidence("Iconique Eyes", "Iconique Eyes 1 Volbella OR 1 EZ-GEL PRF 12u Botox").reason, "alternative_component_not_atomic");
+assert.deepEqual(servicesFromProductEvidence("Iconique Lip Reset", "Iconique Lip Reset Dissolver session 1ml Filler of your choice Botox lip lift"), ["Filler Dissolving", "Dermal Filler", "Botox"]);
+assert.deepEqual(servicesFromProductEvidence("ZO Gentle Cleanser", "ZO Gentle Cleanser US$49.00 Description"), []);
+assert.equal(serviceMappingFromProductEvidence("ZO Gentle Cleanser", "ZO Gentle Cleanser skincare").reason, "retail_product_not_in_service_taxonomy");
+assert.deepEqual(cardSpec({ text: "Kybella $1,200.00" }, { status: "cf_verification_required" }), { status: "review", reason: "cf_verification_required" });
+const spec = cardSpec({ text: "BBL Laser (Face) 3 SESSIONS $1,500.00" }, { status: "verified", visible_text: "BBL photofacial treatment" });
+assert.equal(spec.status, "ready");
+assert.equal(spec.price, 1500);
+assert.equal(spec.items[0].delivered_units, 3);
+assert.equal(spec.items[0].unit_price, null);
+assert.equal(spec.is_package, true);
+const singleSession = cardSpec({ text: "Moxi 1 SESSION $500.00" }, { status: "verified", visible_text: "Moxi laser treatment" });
+assert.equal(singleSession.status, "ready");
+assert.equal(singleSession.is_package, false);
+assert.deepEqual(cardSpec({ text: "Kybella $1,200.00" }, { status: "verified", visible_text: "" }), { status: "review", reason: "canonical_service_unconfirmed" });
+assert.equal(sameOffer({ offer_raw_text: "BOTOX 64u $768.00", discount_price: 768, promo_offer_items: [{ item_name: "Botox" }] }, { offer_raw_text: "BOTOX 64u $768.00", discount_price: 768, items: [{ service_name: "Botox" }] }), true);
+console.log("iconique reconciliation checks passed");

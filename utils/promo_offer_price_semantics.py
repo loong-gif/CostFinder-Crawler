@@ -1,8 +1,8 @@
 """Text-backed repair planning for promo-offer price semantics.
 
-This module only proposes changes that are supported by the offer text or by
-exact arithmetic. It deliberately leaves ambiguous package allocation and
-market-price interpretation for review.
+This module proposes source-backed master prices. Item unit-price arithmetic
+can validate a stated total and delivered quantity; it cannot manufacture a
+master price. Historical arithmetic-only master prices remain review cases.
 """
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any, Mapping
+
+from utils.service_price_guard import quantity_has_bound
 
 
 _NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
@@ -75,6 +77,11 @@ def _quantity_candidates(raw: str) -> list[tuple[int, str, int]]:
 
 
 def _explicit_quantity(raw: str) -> int | None:
+    if any(
+        quantity_has_bound(raw[max(0, match.start() - 35):match.start()], raw[match.end():])
+        for match in _QUANTITY_RE.finditer(raw)
+    ):
+        return None
     parenthesized_units = re.search(rf"\(\s*({_NUMBER})\s+units?\s*\)", raw, re.IGNORECASE)
     if parenthesized_units:
         return int(parenthesized_units.group(1).replace(",", ""))
@@ -173,14 +180,12 @@ def _regular_total(raw: str, quantity: int | None, regular_unit: Decimal | None)
     match = re.search(rf"\b(?:regular|original|list)\s*(?:price)?\s*[:=]?\s*\$?\s*({_NUMBER})", raw, re.IGNORECASE)
     if match:
         suffix = raw[match.end() : match.end() + 24]
-        if regular_unit is not None and quantity is not None and re.search(r"(?:/|per)\s*(?:unit|units?)", suffix, re.IGNORECASE):
-            return regular_unit * quantity
+        if re.search(r"(?:/|per)\s*(?:unit|units?)", suffix, re.IGNORECASE):
+            return None
         return _decimal(match.group(1))
     value = _value_price(raw)
     if value is not None:
         return value
-    if regular_unit is not None and quantity is not None:
-        return regular_unit * quantity
     return None
 
 
@@ -274,9 +279,9 @@ def build_semantic_repair_plan(rows: list[Mapping[str, Any]]) -> SemanticRepairP
         multi_item = _is_multi_item(row, raw)
         explicit_total = total_price is not None
 
-        if total_price is None and unit_price is not None and quantity is not None and not multi_item:
-            total_price = unit_price * quantity
-            explicit_total = False
+        arithmetic_only = total_price is None and unit_price is not None and quantity is not None and not multi_item
+        if arithmetic_only:
+            review_cases.append({"offer_id": row.get("id"), "rule_name": "arithmetic_only_master_price", "raw_text": raw})
 
         expected_master: dict[str, Any] = {}
         has_computable_total = total_price is not None
@@ -348,6 +353,10 @@ def build_semantic_repair_plan(rows: list[Mapping[str, Any]]) -> SemanticRepairP
             expected_master.clear()
             review_cases.append({"offer_id": row.get("id"), "rule_name": "unit_only_master_not_representable", "raw_text": raw})
 
+        # The accepted historical arithmetic exceptions have no row-level
+        # ledger here. Keep their master fields intact for evidence review.
+        if arithmetic_only:
+            expected_master = {}
         patch = _changed_fields(row, expected_master)
         projected_discount_fields = {
             field: patch.get(field, row.get(field))
