@@ -111,28 +111,28 @@ def offer_is_active(row: dict) -> bool:
 
 
 def offer_item_name(row: dict, *, service_lookup: dict | None = None) -> str:
-    """Primary display name from linked service, item embed, or legacy columns."""
+    """Primary source-derived display name, with service-name fallback."""
     items = row.get("promo_offer_items")
     if isinstance(items, list) and items:
         for item in items:
+            name = str(item.get("item_name") or item.get("service_name") or "").strip()
+            if name:
+                return name
             service_id = item.get("service_id")
             if service_lookup and service_id in service_lookup:
                 name = str(service_lookup[service_id].get("service_name") or "").strip()
                 if name:
                     return name
-            name = str(item.get("service_name") or item.get("item_name") or "").strip()
-            if name:
-                return name
     if isinstance(items, dict):
+        name = str(items.get("item_name") or items.get("service_name") or "").strip()
+        if name:
+            return name
         service_id = items.get("service_id")
         if service_lookup and service_id in service_lookup:
             name = str(service_lookup[service_id].get("service_name") or "").strip()
             if name:
                 return name
-        name = str(items.get("service_name") or items.get("item_name") or "").strip()
-        if name:
-            return name
-    return str(row.get("service_name") or row.get("item_name") or "").strip()
+    return str(row.get("item_name") or row.get("service_name") or "").strip()
 
 
 def offer_source_url(row: dict) -> str:

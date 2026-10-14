@@ -2,10 +2,34 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional
 
 from utils.schema_contract import TABLE_PROMO_OFFER_ITEMS, OFFER_ITEM_SELECT
 from utils.supabase_rest import SupabaseRestClient
+
+
+_BLANKET_OFFER_RE = re.compile(
+    r"\b(?:all services|any service|all products|all treatments|gift cards?|"
+    r"skin ?care products|products and services|products & services|entire menu|"
+    r"all regular-priced services|all medspa services|all purchases|referral program(?:me)?|"
+    r"(?:favorite|selected|select) treatments?(?: and products?)?)\b",
+    re.IGNORECASE,
+)
+
+
+def is_blanket_offer_text(text: str) -> bool:
+    """Identify explicit clinic-wide and non-treatment offer wording."""
+    return bool(_BLANKET_OFFER_RE.search(str(text or "")))
+
+
+def offer_item_semantics(items: List[Dict[str, Any]]) -> list[tuple[Any, ...]]:
+    """Compare persisted and extraction item shapes without timestamps or IDs."""
+    return sorted([
+        (item.get("service_id"), item.get("item_name"),
+         item.get("quantity", item.get("delivered_units")), item.get("unit_price"))
+        for item in items
+    ], key=repr)
 
 
 def _service_name_for_id(client: SupabaseRestClient, service_id: int) -> str:
@@ -37,12 +61,10 @@ def upsert_offer_items(
     offer_id: int,
     items: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Replace items for an offer with the provided list."""
+    """Reconcile an Offer's items while preserving uniquely matched item IDs."""
     if not items:
         return []
-    existing = fetch_items_for_offer(client, offer_id)
-    if existing:
-        client.delete_rows(TABLE_PROMO_OFFER_ITEMS, {"offer_id": f"eq.{offer_id}"})
+    existing = [dict(row) for row in fetch_items_for_offer(client, offer_id)]
     now = datetime.now(timezone.utc).isoformat()
     rows: List[Dict[str, Any]] = []
     for item in items:
@@ -52,21 +74,62 @@ def upsert_offer_items(
             "created_at": now,
             "updated_at": now,
         }
-        if service_id is not None:
-            row["service_id"] = service_id
-            row["item_name"] = _service_name_for_id(client, int(service_id))
-        elif item.get("item_name") is not None:
+        row["service_id"] = service_id
+        if item.get("item_name") is not None:
             row["item_name"] = str(item["item_name"]).strip()
         elif item.get("service_name") is not None:
             row["item_name"] = str(item["service_name"]).strip()
-        if item.get("quantity") is not None:
-            row["delivered_units"] = item["quantity"]
-        if item.get("unit_price") is not None:
-            row["unit_price"] = item["unit_price"]
+        elif service_id is not None:
+            row["item_name"] = _service_name_for_id(client, int(service_id))
+        row["delivered_units"] = item.get("quantity", item.get("delivered_units"))
+        row["unit_price"] = item.get("unit_price")
         rows.append(row)
     if not rows:
         return []
-    return client.insert_rows(TABLE_PROMO_OFFER_ITEMS, rows)
+    if offer_item_semantics(existing) == offer_item_semantics(rows):
+        return existing
+    assignments, used = [], set()
+    for row in rows:
+        matches = [old for old in existing if old.get("offer_item_id") not in used
+                   and old.get("service_id") == row.get("service_id")
+                   and old.get("item_name") == row.get("item_name")]
+        if not matches and row.get("service_id") is not None:
+            matches = [old for old in existing if old.get("offer_item_id") not in used
+                       and old.get("service_id") == row.get("service_id")]
+        if len(matches) > 1:
+            raise ValueError("ambiguous_offer_item_identity")
+        old = matches[0] if matches else None
+        if old:
+            used.add(old["offer_item_id"])
+        assignments.append((row, old))
+    result = []
+    for row, old in assignments:
+        if old is None:
+            result.extend(client.insert_rows(TABLE_PROMO_OFFER_ITEMS, [row]))
+            continue
+        fields = ("service_id", "item_name", "delivered_units", "unit_price")
+        patch = {
+            key: row.get(key) for key in fields
+            if row.get(key) != (old.get("quantity", old.get("delivered_units")) if key == "delivered_units" else old.get(key))}
+        if not patch:
+            result.append(old)
+            continue
+        filters = {"offer_item_id": f"eq.{old['offer_item_id']}"}
+        if old.get("updated_at"):
+            filters["updated_at"] = f"eq.{old['updated_at']}"
+        updated = client.update_row(TABLE_PROMO_OFFER_ITEMS, filters, {**patch, "updated_at": now})
+        if len(updated) != 1:
+            raise ValueError("offer_item_write_conflict")
+        result.extend(updated)
+    for old in existing:
+        if old.get("offer_item_id") not in used:
+            filters = {"offer_item_id": f"eq.{old['offer_item_id']}"}
+            if old.get("updated_at"):
+                filters["updated_at"] = f"eq.{old['updated_at']}"
+            deleted = client.delete_rows(TABLE_PROMO_OFFER_ITEMS, filters)
+            if len(deleted) != 1:
+                raise ValueError("offer_item_write_conflict")
+    return result
 
 
 def link_item_to_service(
@@ -74,15 +137,25 @@ def link_item_to_service(
     offer_item_id: int,
     service_id: int,
 ) -> List[Dict[str, Any]]:
-    service_name = _service_name_for_id(client, service_id)
+    existing = client.fetch_rows(
+        TABLE_PROMO_OFFER_ITEMS,
+        "offer_item_id,item_name",
+        filters={"offer_item_id": f"eq.{offer_item_id}"},
+        limit=1,
+    )
+    if len(existing) != 1:
+        raise ValueError(f"offer_item_id {offer_item_id} does not resolve to one promo offer item")
+    item_name = str(existing[0].get("item_name") or "").strip()
+    payload: Dict[str, Any] = {
+        "service_id": service_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not item_name:
+        payload["item_name"] = _service_name_for_id(client, service_id)
     return client.update_row(
         TABLE_PROMO_OFFER_ITEMS,
         {"offer_item_id": f"eq.{offer_item_id}"},
-        {
-            "service_id": service_id,
-            "item_name": service_name,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
+        payload,
     )
 
 
@@ -113,6 +186,8 @@ def backfill_unlinked_item_service_ids(
         offer_id = int(offer["id"])
         business_id = int(offer["business_id"])
         hint = str(offer.get("offer_raw_text") or "")
+        if is_blanket_offer_text(hint):
+            continue
         items = fetch_items_for_offer(client, offer_id)
         unlinked = [item for item in items if item.get("service_id") is None]
         if not unlinked:
@@ -148,9 +223,9 @@ def build_item_from_offer_fields(
 ) -> Dict[str, Any]:
     """Build a single item row payload from extracted offer dict."""
     name = str(
-        offer.get("service_name")
-        or offer.get("item_name")
+        offer.get("item_name")
         or offer.get("offer_raw_text")
+        or offer.get("service_name")
         or "Offer item"
     ).strip()
     item: Dict[str, Any] = {"item_name": name[:500] if len(name) > 500 else name}

@@ -41,7 +41,8 @@
             "type": ["string", "null"]
           },
           "benefits": {
-            "type": "array",
+            "type": ["array", "null"],
+            "description": "Unknown or unverified benefits must be null. An empty array requires explicit source evidence of no benefits.",
             "items": {
               "type": "string"
             }

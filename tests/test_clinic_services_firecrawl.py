@@ -103,7 +103,7 @@ def test_rule_fallback_extracts_target_evidence_and_excludes_promotional_price()
             "service_name": "Dysport",
             "service_name_raw": "Dysport special $4 per unit",
             "regular_price": None,
-            "unit_type": "others",
+            "unit_type": None,
             "service_area": "",
         },
     ]
@@ -211,7 +211,7 @@ def test_validate_service_does_not_require_or_invent_a_canonical_category():
     assert "service_category" not in item
 
 
-def test_validate_service_normalizes_unspecified_unit_to_others():
+def test_validate_service_normalizes_unspecified_unit_to_null():
     item, reason = validate_service(
         {
             "service_category": "Fillers & Other Injectables",
@@ -226,7 +226,7 @@ def test_validate_service_normalizes_unspecified_unit_to_others():
     )
 
     assert reason == "accepted"
-    assert item["unit_type"] == "others"
+    assert item["unit_type"] is None
     assert item["service_area"] is None
 
 
@@ -390,6 +390,7 @@ def test_build_mcp_write_operation_clears_placeholder_price_for_unpriced_evidenc
     )
 
     assert operation["payload"]["regular_price"] is None
+    assert operation["payload"]["unit_type"] is None
 
 
 def test_process_business_persists_direct_public_raw_evidence_during_dry_run(monkeypatch):

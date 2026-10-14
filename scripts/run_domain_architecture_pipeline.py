@@ -55,7 +55,7 @@ from utils.membership_plans import find_existing_plan_id
 from utils.search_scrape_gate import search_page_has_price
 from utils.offer_extraction_llm import build_client_from_env, canonicalize_service_name
 from utils.offer_fingerprint import compute_offer_fingerprint
-from utils.promo_offer_items_db import link_item_to_service, upsert_offer_items
+from utils.promo_offer_items_db import is_blanket_offer_text, link_item_to_service, upsert_offer_items
 from utils.schema_contract import (
     TABLE_CLINIC_MEMBERSHIPS,
     TABLE_CLINIC_PROMOTIONS,
@@ -262,6 +262,7 @@ def persist_memberships(
     pages: Sequence[SearchPage],
     llm: Any,
     schema: dict[str, Any],
+    rendered_visibility: dict[str, dict[str, Any]] | None = None,
 ) -> List[int]:
     plan_ids: List[int] = []
     membership_pages = [p for p in pages if is_membership_page_url(p.url)] or list(pages[:1])
@@ -274,27 +275,10 @@ def persist_memberships(
             markdown=page.markdown,
         )
         for item in payload.get("memberships") or []:
-            name = str(item.get("membership_name") or "").strip()
-            price = item.get("membership_price")
-            if not name or price is None:
-                continue
-            existing = find_existing_plan_id(client, business_id, name)
-            if existing:
-                plan_ids.append(existing)
-                continue
-            benefits = item.get("benefits") or []
-            row = {
-                "business_id": business_id,
-                "membership_name": name,
-                "membership_price": float(price),
-                "billing_period": item.get("billing_period") or "monthly",
-                "benefits": [str(b).strip() for b in benefits if str(b).strip()],
-                "source_url": str(page.url or "").strip().rstrip("/"),
-            }
-            if item.get("minimum_commitment_months") is not None:
-                row["minimum_commitment_months"] = item["minimum_commitment_months"]
-            inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [row])
-            plan_ids.append(int(inserted[0]["plan_id"]))
+            from utils.extraction_persist import persist_membership_item
+            result = persist_membership_item(client, business_id=business_id, item=item, source_url=page.url, evidence=page.markdown, rendered_visibility=(rendered_visibility or {}).get(page.url))
+            if result.get("accepted"):
+                plan_ids.append(int(result["plan_id"]))
     return plan_ids
 
 
@@ -450,6 +434,8 @@ def link_item_services(client: Any, *, business_id: int) -> int:
         if isinstance(items, dict):
             items = [items]
         hint = str(offer.get("offer_raw_text") or "")
+        if is_blanket_offer_text(hint):
+            continue
         for item in items:
             if item.get("service_id"):
                 continue
@@ -735,7 +721,7 @@ def main() -> None:
     offer_schema = load_schema("offer_extraction_schema.json")
 
     plan_ids = persist_memberships(
-        client, business_id=business_id, pages=pages, llm=llm, schema=membership_schema
+        client, business_id=business_id, pages=pages, llm=llm, schema=membership_schema, rendered_visibility=rendered_visibility
     )
     service_ids = persist_services(
         client,

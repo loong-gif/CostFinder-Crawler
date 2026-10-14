@@ -2,6 +2,10 @@
 
 > 表名以 `utils/schema_contract.py` 为准。会员 canonical：`clinic_memberships`。
 
+Firecrawl Monitor 的用户确认规则以 `AGENTS.md` 和 `docs/monitor_price_sync.md` 为准：
+已核验优惠允许服务关联及未知年份日期为 NULL，仍同步有证据的业务字段，服务未完整匹配时
+保持 `is_offer_extracted=false`。不建服务、不改 Schema；下文其他流水线要求不因此变更。
+
 ```mermaid
 graph LR
     classDef database_top fill:#ececff,stroke:#9370db,stroke-width:2px;

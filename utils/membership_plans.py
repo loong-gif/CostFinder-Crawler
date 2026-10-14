@@ -75,9 +75,9 @@ def normalize_membership_plan(record: Dict[str, Any]) -> Dict[str, Any]:
     if billing_period not in _VALID_BILLING_PERIODS:
         billing_period = "monthly"
 
-    benefits = record.get("benefits") or []
-    if not isinstance(benefits, list):
-        benefits = [benefits] if benefits else []
+    benefits = record.get("benefits")
+    if benefits is not None and not isinstance(benefits, list):
+        benefits = [benefits] if benefits else None
 
     priced_offers = record.get("priced_offers") or []
     if not isinstance(priced_offers, list):
@@ -124,9 +124,9 @@ def _membership_price(plan: Dict[str, Any]) -> Optional[float]:
     return _parse_fee(plan.get("annual_fee"))
 
 
-def _benefits_list(benefits: Any) -> list:
-    if not benefits:
-        return []
+def _benefits_list(benefits: Any) -> Optional[list]:
+    if benefits is None:
+        return None
     if isinstance(benefits, str):
         try:
             parsed = json.loads(benefits)
@@ -407,7 +407,7 @@ def offer_row_to_membership_plan(offer: Dict[str, Any]) -> Dict[str, Any]:
             "monthly_fee": monthly_fee,
             "annual_fee": annual_fee,
             "billing_period": billing_period,
-            "benefits": [],
+            "benefits": None,
             "priced_offers": [],
         }
     )
@@ -510,11 +510,18 @@ def persist_membership_extraction(
             plan_id = -(inserted_plans + 1)
             inserted_plans += 1
         else:
-            inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [plan_row])
-            if not inserted:
+            from utils.extraction_persist import persist_membership_item
+            result = persist_membership_item(
+                client, business_id=int(business_id), item=plan_row,
+                source_url=source_url,
+                evidence=str(staging_row.get("page_content") or ""),
+                rendered_visibility=staging_row.get("rendered_visibility"),
+            )
+            if not result.get("accepted"):
                 continue
-            plan_id = int(inserted[0]["plan_id"])
-            inserted_plans += 1
+            plan_id = int(result["plan_id"])
+            if result.get("action") == "inserted":
+                inserted_plans += 1
 
         seen_fingerprints: Set[str] = set()
         for priced_offer in plan.get("priced_offers") or []:

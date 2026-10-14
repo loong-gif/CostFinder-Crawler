@@ -184,25 +184,10 @@ def validate_service(
     return GateDecision(True, None, "validated")
 
 
-def validate_membership(
-    item: dict,
-    evidence: str,
-    *,
-    is_ocr_required: bool = False,
-) -> GateDecision:
-    name = str(item.get("membership_name") or "").strip()
-    if not name or item.get("membership_price") is None:
-        return GateDecision(False, None, "missing_membership_or_price")
-    from utils.extraction_semantic_quality import gate_membership_semantics
-
-    semantic = gate_membership_semantics(
-        item,
-        evidence=evidence,
-        is_ocr_required=is_ocr_required,
-    )
-    if not semantic.accepted:
-        return semantic
-    return GateDecision(True, None, "validated")
+def validate_membership(item: dict, evidence: str) -> GateDecision:
+    from utils.membership_evidence import prepare_membership_write
+    decision = prepare_membership_write(item, evidence)
+    return GateDecision(decision["accepted"], None, decision["reason"])
 
 
 def _promotion_content_title_only(segments: Sequence[str], title: str) -> bool:

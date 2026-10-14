@@ -1,4 +1,7 @@
-from utils.rendered_visibility_gate import filter_visible_promotion_content
+from utils.rendered_visibility_gate import (
+    filter_visible_membership_benefits,
+    filter_visible_promotion_content,
+)
 
 
 def _evidence(*claims):
@@ -34,3 +37,53 @@ def test_rejects_page_without_visible_promotion_content():
     )
     assert result.accepted is False
     assert result.reason == "no_rendered_visible_promotion_content"
+
+
+def test_membership_benefits_require_membership_visibility_evidence():
+    result = filter_visible_membership_benefits(
+        ["15% off every service", "Priority booking"],
+        {
+            "status": "page_accessible",
+            "claimResults": [
+                {
+                    "recordType": "membership",
+                    "claim": "15% off every service",
+                    "status": "visible_match",
+                },
+                {
+                    "recordType": "promotion",
+                    "claim": "Priority booking",
+                    "status": "visible_match",
+                },
+            ],
+        },
+    )
+    assert result.accepted is True
+    assert result.content == ("15% off every service",)
+    assert result.removed == ("Priority booking",)
+
+
+def test_membership_benefits_have_membership_specific_empty_reason():
+    result = filter_visible_membership_benefits(
+        ["Priority booking"],
+        {"status": "page_accessible", "claimResults": []},
+    )
+    assert result.accepted is False
+    assert result.reason == "no_rendered_visible_membership_content"
+
+
+def test_membership_image_only_label_alone_cannot_pass_visibility_gate():
+    result = filter_visible_membership_benefits(
+        ["One facial per month"],
+        {
+            "status": "page_accessible",
+            "claimResults": [{
+                "recordType": "membership",
+                "claim": "One facial per month",
+                "status": "image_only",
+                "visibleEvidence": {"kind": "rendered_image_ocr", "imageUrl": "https://example.test/card.png"},
+            }],
+        },
+    )
+    assert result.accepted is False
+    assert result.content == ()

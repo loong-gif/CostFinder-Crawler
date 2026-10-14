@@ -17,8 +17,10 @@ _PATTERNS = {
     "Radiesse": r"\bradiesse\b", "Sculptra": r"\bsculptra\b",
 }
 _UNITS = {
-    "unit": r"(?:per|/)\s*units?\b", "syringe": r"(?:per|/)\s*(?:half[ -]?)?syringe\b",
+    "unit": r"(?:per|/)\s*units?\b", "syringe": r"(?:per|/)\s*syringe\b",
     "vial": r"(?:per|/)\s*vial\b", "treatment": r"(?:per|/)\s*treatment\b",
+    "session": r"(?:per|/)\s*session\b", "area": r"(?:per|/)\s*area\b",
+    "shot": r"(?:per|/)\s*shot\b",
 }
 _PROMO = re.compile(r"\b(?:special|promo(?:tion)?|sale|discount|member(?:ship)?|new\s+(?:patient|client)|limited\s+time|starting\s+at|from)\b", re.I)
 _PRICE = re.compile(r"\$\s*(\d+(?:\.\d{1,2})?)\b")
@@ -27,7 +29,7 @@ _PRICE = re.compile(r"\$\s*(\d+(?:\.\d{1,2})?)\b")
 @dataclass(frozen=True)
 class EvidenceDecision:
     regular_price: Decimal | None
-    unit_type: str
+    unit_type: str | None
     raw_text: str
     verified: bool
     reason: str
@@ -48,11 +50,11 @@ def _lines(text: str) -> Iterable[str]:
             yield line
 
 
-def _unit(line: str) -> str:
+def _unit(line: str) -> str | None:
     for unit, pattern in _UNITS.items():
         if re.search(pattern, line, re.I):
             return unit
-    return "others"
+    return None
 
 
 def evaluate_service(service_name: str, evidence_texts: Iterable[str]) -> EvidenceDecision:
@@ -70,9 +72,9 @@ def evaluate_service(service_name: str, evidence_texts: Iterable[str]) -> Eviden
             fallback = fallback or line
             unit_type = _unit(line)
             prices = _PRICE.findall(line)
-            if len(mentioned) != 1 or len(prices) != 1 or unit_type == "others" or _PROMO.search(line):
+            if len(mentioned) != 1 or len(prices) != 1 or unit_type is None or _PROMO.search(line):
                 continue
             return EvidenceDecision(Decimal(prices[0]), unit_type, line, True, "priced_evidence")
     if fallback:
         return EvidenceDecision(None, _unit(fallback), fallback, True, "service_existence_evidence")
-    return EvidenceDecision(None, "others", "", False, "missing_service_evidence")
+    return EvidenceDecision(None, None, "", False, "missing_service_evidence")

@@ -18,10 +18,17 @@ def test_normalize_service_area_lower():
 
 
 def test_normalize_service_area_maps_synonyms_and_rejects_locations():
-    assert normalize_service_area("upper neck or double chin") == "multiple_areas"
-    assert normalize_service_area("cheeks, lips, jawline, and under-eyes") == "multiple_areas"
+    assert normalize_service_area("Full Face") == "face"
+    assert normalize_service_area("Full Back (including shoulders)") is None
+    assert normalize_service_area("cheeks, lips, jawline, and under-eyes") is None
     assert normalize_service_area("Denver, Boulder, Fort Collins, RiNo") is None
     assert normalize_service_area("not specified") is None
+
+
+def test_normalize_service_area_maps_facials_to_face_except_back_facials():
+    assert normalize_service_area("Signature Facial") == "face"
+    assert normalize_service_area("Glo2 Facial") == "face"
+    assert normalize_service_area("Back Facial") is None
 
 
 def test_prefer_longer_offer_raw_text_from_content():

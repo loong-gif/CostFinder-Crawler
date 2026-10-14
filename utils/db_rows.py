@@ -9,15 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field
 UnitType = Literal[
     "unit",
     "syringe",
-    "half_syringe",
     "vial",
     "treatment",
     "session",
-    "package",
     "area",
-    "ml",
-    "mg",
-    "others",
+    "shot",
 ]
 
 
@@ -29,7 +25,7 @@ class ClinicServiceInsertRow(BaseModel):
     business_id: int = Field(gt=0)
     service_name: str = Field(min_length=1)
     regular_price: float = Field(gt=0)
-    unit_type: UnitType
+    unit_type: Optional[UnitType] = None
     service_category: Optional[str] = None
     source_url: str = Field(min_length=1)
     service_name_raw: Optional[str] = None

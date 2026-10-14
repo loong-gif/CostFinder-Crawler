@@ -110,6 +110,17 @@ def test_clears_conditions_not_stated_in_offer_evidence() -> None:
     assert decision.offer["is_new_customer_required"] is False
 
 
+def test_plural_members_preserves_explicit_membership_requirement() -> None:
+    raw = "Members receive 10% off all services"
+    decision = validate_offer_evidence(
+        _offer(discount_price=None, discount_percent=10, is_membership_required=True,
+               offer_raw_text=raw, items=[{"service_name": "All services"}]),
+        raw,
+    )
+    assert decision.accepted
+    assert decision.offer["is_membership_required"] is True
+
+
 def test_preserves_explicit_package_quantity_and_exact_derived_unit_price() -> None:
     raw = "Xeomin 50 units Regular $450 Special $350"
     decision = validate_offer_evidence(_offer(regular_price=450), raw)
@@ -119,6 +130,31 @@ def test_preserves_explicit_package_quantity_and_exact_derived_unit_price() -> N
     assert decision.offer["discount_price"] == 350
     assert decision.offer["items"][0]["quantity"] == 50
     assert decision.offer["items"][0]["unit_price"] == 7
+
+
+def test_quantity_conditions_are_not_delivered_quantity() -> None:
+    for wording in ("minimum 40 units", "up to 40 units", "40 units or more"):
+        raw = f"Summer special: Botox $11 per unit, {wording}"
+        decision = validate_offer_evidence(
+            _offer(discount_price=11, offer_raw_text=raw,
+                   items=[{"service_name": "Botox", "quantity": 40, "unit_price": 11}]),
+            raw,
+        )
+        assert decision.accepted
+        assert decision.offer["items"][0]["quantity"] is None
+
+
+def test_percent_only_offer_cannot_borrow_catalogue_regular_price() -> None:
+    raw = "20% off Botox"
+    decision = validate_offer_evidence(
+        _offer(regular_price=13, discount_price=10.4, discount_percent=20,
+               offer_raw_text=raw, items=[{"service_name": "Botox", "quantity": 1}]),
+        raw,
+    )
+    assert decision.accepted
+    assert decision.offer["regular_price"] is None
+    assert decision.offer["discount_price"] is None
+    assert decision.offer["items"][0]["quantity"] is None
 
 
 def test_false_conditions_do_not_require_positive_evidence() -> None:
@@ -276,11 +312,11 @@ def test_persistence_quarantines_unmapped_service_items() -> None:
         promotion_id=2,
         source_url="https://example.com/specials",
         offer=_offer(
-            offer_raw_text="All services 10% off",
+            offer_raw_text="Botox 10% off",
             discount_percent=10,
-            items=[{"service_name": "All services"}],
+            items=[{"service_name": "Botox"}],
         ),
-        evidence="All services 10% off",
+        evidence="Botox 10% off",
     )
 
     assert result["accepted"] is False

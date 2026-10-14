@@ -35,6 +35,23 @@ def test_build_master_from_offer_sets_price_model() -> None:
     assert items[0]["service_name"]
 
 
+def test_build_master_from_offer_preserves_source_item_name() -> None:
+    _master, items = build_master_from_offer(
+        {
+            "discount_price": 120,
+            "conditions": [],
+            "offer_raw_text": "Glow Renewal $120",
+            "items": [{"service_name": "Glow Renewal", "unit_type": "session"}],
+        },
+        business_id=1,
+        promotion_id=2,
+        source_url="https://example.com/services",
+    )
+
+    assert items[0]["item_name"] == "Glow Renewal"
+    assert items[0]["service_name"] == "Others"
+
+
 def test_build_master_from_offer_persists_only_requirement_strings() -> None:
     master, _ = build_master_from_offer(
         {

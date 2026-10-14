@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Fill clinic_promotions.screenshot with Redbin OBS URLs.
+
+Reads promotion rows (promotion_id, source_url), dedupes by exact source_url,
+calls https://screen.redbin.cn/screenshot, writes jsonl + SQL updates.
+
+Does not talk to Supabase directly (agent applies SQL via MCP execute_sql).
+
+Usage:
+  SCREENSHOT_API_KEY=sk_live_... python3 scripts/fill_promotion_screenshots.py \\
+    --input output/clinic_promotions_for_screenshots.json \\
+    --log output/promotion_screenshots.jsonl \\
+    --sql output/promotion_screenshots_updates.sql
+
+  # resume after interrupt
+  ... --resume
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+API_BASE = "https://screen.redbin.cn/screenshot"
+CHROME_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/140.0.0.0 Safari/537.36"
+)
+HTTP_TIMEOUT = 180
+
+
+def load_rows(path: Path) -> list[dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise SystemExit(f"input must be a JSON array: {path}")
+    rows: list[dict[str, Any]] = []
+    for item in data:
+        pid = item.get("promotion_id")
+        url = (item.get("source_url") or "").strip()
+        if pid is None or not url:
+            continue
+        rows.append({"promotion_id": int(pid), "source_url": url})
+    return rows
+
+
+def load_done_urls(log_path: Path) -> set[str]:
+    done: set[str] = set()
+    if not log_path.exists():
+        return done
+    with log_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("ok") and obj.get("source_url") and obj.get("screenshot"):
+                done.add(obj["source_url"])
+    return done
+
+
+def sql_literal(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def capture(api_key: str, url: str) -> dict[str, Any]:
+    params = {
+        "api_key": api_key,
+        "url": url,
+        "full_page": "true",
+        "response_type": "url",
+        "format": "png",
+        "width": "1440",
+        "delay": "8000",
+        "timeout": "120000",
+        "use_cache": "false",
+        "user_agent": CHROME_UA,
+    }
+    req_url = API_BASE + "?" + urllib.parse.urlencode(params)
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req_url, timeout=HTTP_TIMEOUT) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            status = getattr(resp, "status", 200)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:500]
+        return {
+            "ok": False,
+            "source_url": url,
+            "error": f"HTTP {e.code}: {err_body}",
+            "duration_s": round(time.time() - t0, 2),
+        }
+    except Exception as e:  # noqa: BLE001 — surface any network failure
+        return {
+            "ok": False,
+            "source_url": url,
+            "error": f"{type(e).__name__}: {e}",
+            "duration_s": round(time.time() - t0, 2),
+        }
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return {
+            "ok": False,
+            "source_url": url,
+            "error": f"non-json response status={status}: {body[:300]}",
+            "duration_s": round(time.time() - t0, 2),
+        }
+
+    data = payload.get("data") or {}
+    shot = data.get("url")
+    if payload.get("code") != 200 or not shot:
+        return {
+            "ok": False,
+            "source_url": url,
+            "error": f"api code={payload.get('code')} msg={payload.get('msg')} body={body[:300]}",
+            "duration_s": round(time.time() - t0, 2),
+        }
+
+    return {
+        "ok": True,
+        "source_url": url,
+        "screenshot": shot,
+        "width": data.get("width"),
+        "height": data.get("height"),
+        "size": data.get("size"),
+        "api_duration_ms": data.get("duration"),
+        "duration_s": round(time.time() - t0, 2),
+    }
+
+
+def append_jsonl(path: Path, obj: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def write_sql(sql_path: Path, successes: dict[str, str]) -> None:
+    """One UPDATE per source_url; matches all promotion rows sharing that URL."""
+    sql_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "-- Generated by fill_promotion_screenshots.py",
+        "-- Apply on project kdlpkjzcnbkjcvwsvlwn",
+        "BEGIN;",
+    ]
+    for url, shot in sorted(successes.items()):
+        lines.append(
+            "UPDATE public.clinic_promotions "
+            f"SET screenshot = {sql_literal(shot)}, updated_at = now() "
+            f"WHERE source_url = {sql_literal(url)};"
+        )
+    lines.append("COMMIT;")
+    lines.append("")
+    sql_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def supabase_headers(service_key: str) -> dict[str, str]:
+    return {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+
+
+def apply_screenshot(
+    supabase_url: str,
+    service_key: str,
+    screenshot: str,
+    *,
+    promotion_ids: Optional[List[int]] = None,
+    source_url: Optional[str] = None,
+) -> None:
+    """PATCH rows by promotion_id list (preferred) or source_url."""
+    base = supabase_url.rstrip("/")
+    if promotion_ids:
+        ids = ",".join(str(i) for i in promotion_ids)
+        endpoint = f"{base}/rest/v1/clinic_promotions?promotion_id=in.({ids})"
+    elif source_url:
+        # quote for PostgREST reserved chars
+        quoted = '"' + source_url.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        endpoint = f"{base}/rest/v1/clinic_promotions?source_url=eq.{urllib.parse.quote(quoted, safe='')}"
+    else:
+        raise ValueError("promotion_ids or source_url required")
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps({"screenshot": screenshot}).encode("utf-8"),
+        headers=supabase_headers(service_key),
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        resp.read()
+
+
+def self_check() -> None:
+    assert sql_literal("a'b") == "'a''b'"
+    assert sql_literal("https://x.com") == "'https://x.com'"
+    print("self_check ok", file=sys.stderr)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", type=Path, required=False)
+    ap.add_argument("--log", type=Path, default=Path("output/promotion_screenshots.jsonl"))
+    ap.add_argument("--sql", type=Path, default=Path("output/promotion_screenshots_updates.sql"))
+    ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--limit", type=int, default=0, help="max unique URLs (0=all)")
+    ap.add_argument("--apply", action="store_true", help="PATCH Supabase after each success")
+    ap.add_argument("--apply-only", action="store_true", help="apply successes from --log, no capture")
+    ap.add_argument("--self-check", action="store_true")
+    args = ap.parse_args()
+
+    if args.self_check:
+        self_check()
+        return 0
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+    if args.apply_only:
+        if not (supabase_url and service_key):
+            print("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for --apply-only", file=sys.stderr)
+            return 2
+        if not args.input:
+            print("--input required with --apply-only to map urls to ids", file=sys.stderr)
+            return 2
+        rows = load_rows(args.input)
+        by_url: dict[str, list[int]] = {}
+        for r in rows:
+            by_url.setdefault(r["source_url"], []).append(r["promotion_id"])
+        mapping: dict[str, str] = {}
+        if args.log.exists():
+            with args.log.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get("ok") and obj.get("source_url") and obj.get("screenshot"):
+                        mapping[obj["source_url"]] = obj["screenshot"]
+        n = 0
+        for url, shot in mapping.items():
+            apply_screenshot(
+                supabase_url, service_key, shot, promotion_ids=by_url.get(url, [])
+            )
+            n += 1
+            if n % 20 == 0:
+                print(f"applied {n}/{len(mapping)}", flush=True)
+        print(f"applied {n} urls from {args.log}", flush=True)
+        return 0
+
+    if not args.input:
+        print("--input required", file=sys.stderr)
+        return 2
+
+    api_key = os.environ.get("SCREENSHOT_API_KEY", "").strip()
+    if not api_key:
+        print("SCREENSHOT_API_KEY required", file=sys.stderr)
+        return 2
+
+    if args.apply and not (supabase_url and service_key):
+        print("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required for --apply", file=sys.stderr)
+        return 2
+
+    rows = load_rows(args.input)
+    by_url: dict[str, list[int]] = {}
+    for r in rows:
+        by_url.setdefault(r["source_url"], []).append(r["promotion_id"])
+
+    urls = sorted(by_url.keys())
+    done = load_done_urls(args.log) if args.resume else set()
+    pending = [u for u in urls if u not in done]
+    if args.limit and args.limit > 0:
+        pending = pending[: args.limit]
+
+    print(
+        f"rows={len(rows)} unique_urls={len(urls)} done={len(done)} pending={len(pending)} workers={args.workers}",
+        flush=True,
+    )
+
+    successes: dict[str, str] = {}
+    if args.resume and args.log.exists():
+        with args.log.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("ok") and obj.get("source_url") and obj.get("screenshot"):
+                    successes[obj["source_url"]] = obj["screenshot"]
+
+    ok_n = fail_n = 0
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+        futs = {ex.submit(capture, api_key, u): u for u in pending}
+        for i, fut in enumerate(as_completed(futs), 1):
+            result = fut.result()
+            result["promotion_ids"] = by_url.get(result["source_url"], [])
+            append_jsonl(args.log, result)
+            if result.get("ok"):
+                ok_n += 1
+                successes[result["source_url"]] = result["screenshot"]
+                if args.apply:
+                    try:
+                        apply_screenshot(
+                            supabase_url,
+                            service_key,
+                            result["screenshot"],
+                            promotion_ids=result["promotion_ids"],
+                        )
+                        result["applied"] = True
+                    except Exception as e:  # noqa: BLE001
+                        result["applied"] = False
+                        result["apply_error"] = f"{type(e).__name__}: {e}"
+                        append_jsonl(args.log, {**result, "phase": "apply_error"})
+                        print(f"  apply FAIL: {result['apply_error']}", flush=True)
+                print(
+                    f"[{i}/{len(pending)}] OK {result['source_url'][:80]} -> {result['screenshot'][:60]}...",
+                    flush=True,
+                )
+            else:
+                fail_n += 1
+                print(
+                    f"[{i}/{len(pending)}] FAIL {result['source_url'][:80]} :: {result.get('error')}",
+                    flush=True,
+                )
+
+    write_sql(args.sql, successes)
+    print(
+        f"done ok={ok_n} fail={fail_n} sql_updates={len(successes)} log={args.log} sql={args.sql}",
+        flush=True,
+    )
+    return 0 if fail_n == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
