@@ -5,13 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,31 +22,8 @@ from utils.schema_contract import (
     TABLE_PROMO_OFFER_ITEMS,
     TABLE_PROMO_OFFER_MASTER,
 )
-from utils.supabase_rest import (
-    SupabaseRestClient,
-    get_supabase_secret_key,
-    get_supabase_writer_key,
-)
-
-
-def _fetch_all(client: SupabaseRestClient, table: str, select: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = client.fetch_rows(table, select, limit=1000, offset=offset)
-        rows.extend(page)
-        if len(page) < 1000:
-            return rows
-        offset += len(page)
-
-
-def _load_client(*, apply: bool) -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = get_supabase_writer_key() if apply else get_supabase_secret_key()
-    if not base_url or not key:
-        raise RuntimeError("Missing SUPABASE_URL or required Supabase credential")
-    return SupabaseRestClient(base_url, key)
+from utils.supabase_access import fetch_all_rows, load_supabase_client
+from utils.supabase_rest import SupabaseRestClient
 
 
 def _preflight(client: SupabaseRestClient) -> None:
@@ -104,14 +79,14 @@ def _write_offer(client: SupabaseRestClient, master: dict[str, Any], items: list
 
 
 def run(csv_path: Path, *, output: Path, apply: bool) -> dict[str, Any]:
-    client = _load_client(apply=apply)
+    client = load_supabase_client(PROJECT_ROOT, role="writer" if apply else "secret")
     _preflight(client)
     with csv_path.open(newline="", encoding="utf-8-sig") as handle:
         csv_rows = list(csv.DictReader(handle))
-    businesses = _fetch_all(client, TABLE_MASTER_BUSINESS, "business_id,name,website")
-    promotions = _fetch_all(client, TABLE_CLINIC_PROMOTIONS, "promotion_id,business_id,source_url")
-    services = _fetch_all(client, "clinic_services", "service_id,business_id,service_name")
-    existing = _fetch_all(client, TABLE_PROMO_OFFER_MASTER, "id,offer_fingerprint")
+    businesses = fetch_all_rows(client, TABLE_MASTER_BUSINESS, "business_id,name,website", page_size=1000)
+    promotions = fetch_all_rows(client, TABLE_CLINIC_PROMOTIONS, "promotion_id,business_id,source_url", page_size=1000)
+    services = fetch_all_rows(client, "clinic_services", "service_id,business_id,service_name", page_size=1000)
+    existing = fetch_all_rows(client, TABLE_PROMO_OFFER_MASTER, "id,offer_fingerprint", page_size=1000)
     promotions_by_url = {
         normalize_source_url(row.get("source_url")): row
         for row in promotions

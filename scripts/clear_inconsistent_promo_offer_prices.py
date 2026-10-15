@@ -8,20 +8,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.offer_price_evidence import extract_price_evidence, plan_inconsistent_price_field_clears  # noqa: E402
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 TABLE = "promo_offer_master"
 FIELDS = "id,is_active,offer_raw_text,regular_price,discount_price,discount_amount,discount_percent"
@@ -35,24 +34,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_reader() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    read_key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not base_url or not read_key:
-        raise RuntimeError("缺少 SUPABASE_URL 或只读 publishable/anon key")
-    return SupabaseRestClient(base_url, read_key)
-
-
 def fetch_rows(client: SupabaseRestClient) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = client.fetch_rows(TABLE, FIELDS, limit=PAGE_SIZE, offset=offset, order="id.asc")
-        rows.extend(page)
-        if len(page) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
+    return fetch_all_rows(client, TABLE, FIELDS, page_size=PAGE_SIZE, order="id.asc")
 
 
 def build_plan(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -84,12 +67,11 @@ def build_plan(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def main() -> None:
     args = parse_args()
-    reader = load_reader()
+    reader = load_supabase_client(PROJECT_ROOT, role="reader")
     plan = build_plan(fetch_rows(reader))
     applied: List[Dict[str, Any]] = []
     if args.apply:
-        load_dotenv(PROJECT_ROOT / ".env")
-        writer = SupabaseRestClient(os.environ["SUPABASE_URL"], get_supabase_writer_key())
+        writer = load_supabase_client(PROJECT_ROOT, role="writer")
         for item in plan:
             updated = writer.update_row(TABLE, item["id"], item["clear_fields"])
             applied.append({"id": item["id"], "updated": updated})

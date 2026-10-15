@@ -7,18 +7,25 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
-from utils.supabase_rest import SupabaseRestClient
+from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key, get_supabase_writer_key
+
+_CREDENTIALS = {
+    "service": lambda: os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY"),
+    "secret": get_supabase_secret_key,
+    "writer": get_supabase_writer_key,
+    "reader": lambda: os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY"),
+}
 
 
-def load_supabase_client(project_root: Optional[Path] = None) -> SupabaseRestClient:
-    """Create a REST client using the configured server-side credential."""
+def load_supabase_client(project_root: Optional[Path] = None, *, role: str = "service") -> SupabaseRestClient:
+    """Create a REST client; ``role`` picks the credential (service, secret, writer or read-only reader)."""
     root = project_root or Path(__file__).resolve().parents[1]
     load_dotenv(root / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")
-    if not base_url or not service_role_key:
-        raise RuntimeError("Missing SUPABASE_URL and a Supabase server-side credential")
-    return SupabaseRestClient(base_url, service_role_key)
+    base_url = (os.getenv("SUPABASE_URL") or "").strip()
+    key = _CREDENTIALS[role]()
+    if not base_url or not key:
+        raise RuntimeError(f"Missing SUPABASE_URL or the Supabase {role} credential")
+    return SupabaseRestClient(base_url, key)
 
 
 def fetch_all_rows(
