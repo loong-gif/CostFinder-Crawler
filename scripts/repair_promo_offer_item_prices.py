@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.offer_item_price_repair import build_offer_item_price_plan  # noqa: E402
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 TABLE_MASTER = "promo_offer_master"
 TABLE_ITEMS = "promo_offer_items"
@@ -32,38 +31,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_reader() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或只读 publishable/anon key")
-    return SupabaseRestClient(url, key)
-
-
-def fetch_all_rows(client: SupabaseRestClient) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = client.fetch_rows(TABLE_MASTER, SELECT, limit=PAGE_SIZE, offset=offset, order="id.asc")
-        rows.extend(page)
-        if len(page) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
+def fetch_master_rows(client: SupabaseRestClient) -> list[dict[str, Any]]:
+    return fetch_all_rows(client, TABLE_MASTER, SELECT, page_size=PAGE_SIZE, order="id.asc")
 
 
 def main() -> None:
     args = parse_args()
-    plan = build_offer_item_price_plan(fetch_all_rows(load_reader()))
+    reader = load_supabase_client(PROJECT_ROOT, role="reader")
+    plan = build_offer_item_price_plan(fetch_master_rows(reader))
     applied: dict[str, list[dict[str, Any]]] = {"master": [], "items": []}
     errors: list[str] = []
     if args.apply:
-        load_dotenv(PROJECT_ROOT / ".env")
-        writer = SupabaseRestClient(os.environ["SUPABASE_URL"], get_supabase_writer_key())
-        master_timestamps = {row["id"]: row.get("updated_at") for row in fetch_all_rows(load_reader())}
+        writer = load_supabase_client(PROJECT_ROOT, role="writer")
+        fresh_rows = fetch_master_rows(reader)
+        master_timestamps = {row["id"]: row.get("updated_at") for row in fresh_rows}
         item_timestamps = {
             item["offer_item_id"]: item.get("updated_at")
-            for row in fetch_all_rows(load_reader())
+            for row in fresh_rows
             for item in row.get("promo_offer_items", [])
             if item.get("offer_item_id") is not None
         }

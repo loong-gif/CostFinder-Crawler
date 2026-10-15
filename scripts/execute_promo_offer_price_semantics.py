@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -15,12 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
 
 from utils.promo_offer_price_quality import audit_offer_prices
 from utils.promo_offer_price_semantics import SemanticRepairPlan, build_semantic_repair_plan
-from utils.supabase_access import fetch_all_rows
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
+from utils.supabase_access import load_supabase_client, fetch_all_rows
+from utils.supabase_rest import SupabaseRestClient
 
 
 SELECT = (
@@ -37,23 +35,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="应用修复；默认只生成 dry-run 报告")
     parser.add_argument("--output-dir", default=str(ROOT / "outputs" / "promo_offer_price_repairs"))
     return parser.parse_args()
-
-
-def reader() -> SupabaseRestClient:
-    load_dotenv(ROOT / ".env")
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或只读 Supabase 凭据")
-    return SupabaseRestClient(url, key)
-
-
-def writer() -> SupabaseRestClient:
-    load_dotenv(ROOT / ".env")
-    url = os.getenv("SUPABASE_URL")
-    if not url:
-        raise RuntimeError("缺少 SUPABASE_URL")
-    return SupabaseRestClient(url, get_supabase_writer_key())
 
 
 def load_rows(client: SupabaseRestClient) -> list[dict[str, Any]]:
@@ -181,11 +162,13 @@ def _fixed_price_records(rows: list[dict[str, Any]], plan: SemanticRepairPlan) -
 
 def main() -> int:
     args = parse_args()
-    rows = load_rows(reader())
+    reader = load_supabase_client(ROOT, role="reader")
+    writer = load_supabase_client(ROOT, role="writer")
+    rows = load_rows(reader)
     plan = build_semantic_repair_plan(rows)
     # clinic_services is intentionally hidden from public roles; use the
     # controlled server-side credential for this read-only mapping review.
-    services = fetch_all_rows(writer(), "clinic_services", SERVICE_SELECT, page_size=1000, order="service_id.asc")
+    services = fetch_all_rows(writer, "clinic_services", SERVICE_SELECT, page_size=1000, order="service_id.asc")
     projected = _project_rows(rows, plan)
     audit = audit_offer_prices(projected)
     output_dir = Path(args.output_dir).resolve()
@@ -211,13 +194,12 @@ def main() -> int:
     }
 
     if args.apply:
-        write_client = writer()
-        master_result = _apply_master_updates(write_client, plan.master_updates)
+        master_result = _apply_master_updates(writer, plan.master_updates)
         # Master triggers may touch item.updated_at/unit_price. Re-read before
         # applying item patches so optimistic locking reflects live state.
-        fresh_rows = load_rows(reader())
+        fresh_rows = load_rows(reader)
         fresh_plan = build_semantic_repair_plan(fresh_rows)
-        item_result = _apply_item_updates(write_client, fresh_plan.item_updates)
+        item_result = _apply_item_updates(writer, fresh_plan.item_updates)
         result["apply_result"] = {"master": master_result, "items": item_result}
         result["summary"]["applied_master_updates"] = len(master_result["applied"])
         result["summary"]["applied_item_updates"] = len(item_result["applied"])

@@ -23,7 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.offer_evidence_validator import sanitize_conditions
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key, get_supabase_writer_key
+from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 
 
 PAGE_SIZE = 1000
@@ -46,21 +47,8 @@ def _fetch_all(
     *,
     filters: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = client.fetch_rows(
-            table,
-            select,
-            filters=filters,
-            limit=PAGE_SIZE,
-            offset=offset,
-            order="id.asc" if table == "promo_offer_master" else None,
-        )
-        rows.extend(page)
-        if len(page) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
+    order = "id.asc" if table == "promo_offer_master" else None
+    return fetch_all_rows(client, table, select, filters=filters, page_size=PAGE_SIZE, order=order)
 
 
 def _in_filter(values: set[int]) -> str:
@@ -548,7 +536,7 @@ def main() -> int:
     if args.apply:
         plan = json.loads(args.apply.read_text(encoding="utf-8"))
         reader = _load_reader()
-        writer = SupabaseRestClient(os.environ["SUPABASE_URL"], get_supabase_writer_key())
+        writer = load_supabase_client(PROJECT_ROOT, role="writer")
         result = apply_plan(plan, reader, writer)
         output = args.output or args.apply.parent / (
             f"promo_offer_conditions_apply_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
