@@ -13,6 +13,36 @@ def test_fee_cannot_borrow_another_tier():
     assert not prepare_membership_write({'membership_name':'VIP','membership_price':199}, 'VIP $299\nBasic $199')['accepted']
 
 
+def test_markdown_quote_matches_split_visible_plan_and_fee():
+    item = {'membership_name':'EMERALD','membership_price':289,'membership_description':'### EMERALD\n\n$289/Month'}
+    page = {'status':'page_accessible','capture':{'nodes':[
+        {'text':'EMERALD','visible':True,'rects':[{'y':100}],'ancestors':[{'tag':'H3'}]},
+        {'text':'$289/Month','visible':True,'rects':[{'y':140}],'ancestors':[{'tag':'P'}]},
+    ]}}
+    decision = prepare_membership_write(item, 'EMERALD\n$289/Month', page)
+    assert decision['accepted']
+
+
+def test_fee_cannot_cross_the_next_visible_plan_heading():
+    item = {'membership_name':'VIP','membership_price':199,'membership_description':'VIP $199'}
+    page = {'status':'page_accessible','capture':{'nodes':[
+        {'text':'VIP','visible':True,'rects':[{'y':100}],'ancestors':[{'tag':'H3'}]},
+        {'text':'$299/Month','visible':True,'rects':[{'y':140}],'ancestors':[{'tag':'P'}]},
+        {'text':'Basic','visible':True,'rects':[{'y':180}],'ancestors':[{'tag':'H3'}]},
+        {'text':'$199/Month','visible':True,'rects':[{'y':220}],'ancestors':[{'tag':'P'}]},
+    ]}}
+    assert not prepare_membership_write(item, 'VIP $299\nBasic $199', page)['accepted']
+
+
+def test_visible_benefits_survive_unverified_fee():
+    item = {'membership_name':'VIP','membership_price':199,'benefits':['Monthly facial']}
+    page = {'status':'page_accessible','claimResults':[
+        {'recordType':'membership','claim':'Monthly facial','status':'visible_match'}]}
+    decision = prepare_membership_write(item, 'VIP $299\nBasic $199\nMonthly facial', page)
+    assert not decision['accepted']
+    assert decision['benefits'] == item['benefits']
+
+
 def test_rendered_benefits_and_incomplete_capture():
     item = {'membership_name':'VIP','membership_price':199,'benefits':['One facial monthly']}
     evidence = 'VIP $199 per month\nOne facial monthly'

@@ -175,12 +175,13 @@ def infer_service_name_for_item(
     service_name: Any = None,
     item_name: Any = None,
     sibling_count: int = 1,
+    is_package: bool = False,
 ) -> str:
     """Best-effort canonical service name for an offer item row."""
     from utils.offer_extraction_llm import canonicalize_service_name
 
-    del sibling_count  # retained for call-site compatibility
-    text = str(offer_raw_text or "")
+    isolated = sibling_count > 1 or is_package
+    text = str(item_name or service_name or "") if isolated else str(offer_raw_text or "")
     text_cf = text.casefold()
     qty: float | None
     try:
@@ -205,7 +206,7 @@ def infer_service_name_for_item(
             return "Botox"
         return "Neurotoxin"
 
-    name = canonicalize_service_name(service_name, item_name, text)
+    name = canonicalize_service_name(service_name, item_name, text if not isolated else item_name or service_name)
     if name == "Neurotoxin":
         for brand in _NEUROTOXIN_BRANDS:
             if brand.casefold() in text_cf:
@@ -239,6 +240,7 @@ def attach_service_ids_to_items(
     business_id: int,
     items: list[dict[str, Any]],
     fallback_text: str = "",
+    is_package: bool = False,
 ) -> list[dict[str, Any]]:
     attached: list[dict[str, Any]] = []
     sibling_count = len(items)
@@ -250,6 +252,7 @@ def attach_service_ids_to_items(
             service_name=row.get("service_name"),
             item_name=row.get("item_name"),
             sibling_count=sibling_count,
+            is_package=is_package,
         )
         svc = resolve_service_row_for_name(client, business_id=business_id, service_name=name)
         if svc:

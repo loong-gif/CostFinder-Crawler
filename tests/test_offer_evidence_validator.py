@@ -46,6 +46,19 @@ def test_rejects_offer_when_page_evidence_is_blank() -> None:
     assert decision.reason == "missing_source_evidence"
 
 
+def test_strikethrough_price_is_the_regular_price_and_the_other_is_the_sale_price() -> None:
+    raw = "Forehead TOX\n$69.00\n-48%\n~~$135.00~~"
+    decision = validate_offer_evidence(
+        _offer(regular_price=135, discount_price=69, discount_percent=48, offer_raw_text=raw,
+               items=[{"service_name": "Neurotoxin"}]),
+        f"Special Offers\n{raw}",
+    )
+
+    assert decision.accepted is True
+    assert decision.offer["regular_price"] == 135
+    assert decision.offer["discount_price"] == 69
+
+
 def test_clears_discount_price_when_text_only_supports_discount_amount() -> None:
     raw = "Get $75 off your first JUVÉDERM treatment"
     decision = validate_offer_evidence(

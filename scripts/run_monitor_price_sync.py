@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Promotion monitoring, file evidence/plans, and optional journaled REST DML."""
+"""Promotion monitoring, file evidence/plans, and pending SQL files (no database writes)."""
 from __future__ import annotations
 
 import argparse
@@ -22,14 +22,13 @@ from scripts.firecrawl_self_hosted_monitor import load_config, run_monitor
 from utils.monitor_price_extract import extract_evidence, render_page
 from utils.monitor_price_plan import build_plan
 from utils.monitor_price_store import atomic_json, digest, manual_protections, now, read_json, run_lock
-from utils.monitor_price_writer import normalize_source_url
-from utils.monitor_price_rest_writer import apply_plan, recover_journal, SERVICE_COLUMNS
+from utils.monitor_price_writer import SERVICE_COLUMNS, _protect, normalize_source_url, source_graph
+from utils.monitor_pending_sql import render_pending, settle
 from utils.monitor_image_gate import image_write_block, capture_is_current
 from utils.monitor_rendered_browser import confirmed_not_found
-from utils.monitor_price_rest_writer import _protect
-from utils.monitor_price_rest_writer import source_graph
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_visual_receipts import reviewed_browser
+from utils.pending_sql import pending_dir
 from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 
 PROJECT_ID = "kdlpkjzcnbkjcvwsvlwn"
@@ -53,12 +52,15 @@ def database_snapshot() -> dict:
             offset += len(rows)
     snapshot = {name:all_rows(table) for name,table in {
         "promotions":"clinic_promotions", "offers":"promo_offer_master", "items":"promo_offer_items",
-        "businesses":"master_business_info",
-        "confirmations":"offer_confirmations", "audit":"admin_audit_log"}.items()}
+        "businesses":"master_business_info"}.items()}
     snapshot["services"] = all_rows("clinic_services", SERVICE_COLUMNS)
     snapshot["terms"] = all_rows("promo_offer_terms")
     # Read only source ownership, never membership fees or benefits.
     snapshot["memberships"] = all_rows("clinic_memberships", "plan_id,business_id,source_url")
+    names = client.rpc_read("fn_clinic_service_names")
+    if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
+        raise RuntimeError("service_names_unavailable")
+    snapshot["service_names"] = names
     return snapshot
 
 
@@ -113,18 +115,6 @@ def snapshot_business_graph(snapshot: dict, business_id: int) -> dict:
             "terms":[r for r in snapshot.get("terms", []) if r.get("offer_id") in offer_ids]}
 
 
-def target_client():
-    base = os.getenv("SUPABASE_URL", "")
-    key = get_supabase_secret_key()
-    if urlsplit(base).hostname != PROJECT_ID + ".supabase.co":
-        raise RuntimeError("database_project_mismatch")
-    if not key:
-        raise RuntimeError("service_key_missing")
-    # This server-only monitor has explicit service-key authorization. Keep the
-    # general application's restricted-writer resolver unchanged.
-    return SupabaseRestClient(base, key)
-
-
 def verified_batch_results(root: Path, snapshot: dict) -> list[dict]:
     """Acknowledge applied fields against today's DB without replaying old DML.
 
@@ -170,11 +160,25 @@ def retry_failed_scrape_urls(root: Path, config: dict) -> set[str]:
     return needed
 
 
+def expired_active_promotion_urls(snapshot: dict) -> set[str]:
+    """Source URLs for promotions that are still active but past campaign_end_date."""
+    today = date.today()
+    urls: set[str] = set()
+    for promotion in snapshot.get("promotions", []):
+        if promotion.get("is_active") is not True or not promotion.get("source_url"):
+            continue
+        end_date = str(promotion.get("campaign_end_date") or "")[:10]
+        try:
+            if end_date and date.fromisoformat(end_date) < today:
+                urls.add(promotion["source_url"])
+        except ValueError:
+            continue
+    return urls
+
+
 def enqueue_expired_campaign_checks(root: Path, snapshot: dict, config: dict) -> int:
     """Queue one fresh evidence check for each active, dated campaign that expired."""
     today = datetime.now().astimezone().date()
-    configured = {normalize_source_url(url) for monitor in config["monitors"].values()
-                  for group in monitor.get("targets", []) for url in group.get("urls", [])}
     newest: dict[str, tuple[datetime, Path, str]] = {}
     for path in (root / "evidence").glob("*.json"):
         try:
@@ -205,7 +209,7 @@ def enqueue_expired_campaign_checks(root: Path, snapshot: dict, config: dict) ->
             key = normalize_source_url(url)
         except ValueError:
             continue
-        if key not in configured or key not in newest:
+        if key not in newest:
             continue
         event_id = digest(["campaign-expiry", promotion["promotion_id"], end_date, newest[key][1].stem])
         if event_id in existing_ids:
@@ -296,7 +300,7 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
             if cached_browser.get("final_url"):
                 check_promotion_source(cached_browser["final_url"], snapshot)
             stale = stale or not capture_is_current(cached_browser)
-            legacy_image = image_write_block(cached,root / "journals") in {"legacy_image_evidence_requires_refresh", "breakpoint_coverage_incomplete", "variant_capture_proof_mismatch"}
+            legacy_image = image_write_block(cached,pending_dir(root)) in {"legacy_image_evidence_requires_refresh", "breakpoint_coverage_incomplete", "variant_capture_proof_mismatch"}
             policy_changed = (cached.get("image_policy") is not None and
                 cached["image_policy"].get("image_write_enabled") !=
                 (read_json(root / "price_sync_control.json",{}).get("image_write_enabled") is True))
@@ -327,10 +331,10 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
                                       all(v.get("complete") for v in receipt["breakpoint_coverage"].values()))}
         if (not browser or (not capture_is_current(browser) and not browser.get("verified_capture")) or not browser.get("accessible") or
                 event.get("retry_reason") in {"image_capture_incomplete","image_stage_timeout","image_tiles_missing"}):
-            browser = render_page(event["url"], directory)
+            browser = render_page(event["url"], directory, business_id=source.get("business_id"))
         ocr_forced = any(p.get("is_ocr_required") is True for p in graph["promotions"])
         if ocr_forced and not browser.get("image_review_required"):
-            browser = render_page(event["url"], directory, force_ocr=True)
+            browser = render_page(event["url"], directory, force_ocr=True, business_id=source.get("business_id"))
         browser["ocr_forced"] = ocr_forced
         browser["dual_cache_path"] = str(root / "visual_cache" / (digest(normalize_source_url(event["url"]))+".json"))
         browser["image_write_enabled"] = read_json(root / "price_sync_control.json",{}).get("image_write_enabled") is True
@@ -359,7 +363,7 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
             atomic_json(directory / "evidence.json",{"url":event["url"],"http_status":404,
                         "visible_not_found":browser["text"],"screenshot_path":browser.get("screenshot_path")})
         else:
-            evidence = extract_evidence(artifact, browser, directory)
+            evidence = extract_evidence(artifact, browser, directory, None, snapshot["service_names"])
             plan = build_plan(source, graph, evidence, protections)
         plan["event_id"] = event["event_id"]
         plan["evidence_path"] = str(directory / "evidence.json")
@@ -394,17 +398,25 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
 
 
 def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_limit: int | None = None,
-                   retryable_only: bool = False, retry_probe_urls: set[str] | None = None,
-                   recovery_probe: bool = False) -> dict:
+                   retryable_only: bool = False, retry_probe_urls: set[str] | None = None) -> dict:
     limits = RetryLimits(root)
     probes = {normalize_source_url(url) for url in (retry_probe_urls or set())}
     protection_path = root / "manual_protections.json"
-    protections = manual_protections(snapshot, read_json(protection_path, {}))
+    protections = manual_protections(read_json(protection_path, {}))
     atomic_json(protection_path, protections)
     pending = []
     for path in (root / "events").glob("*.json"):
         event = read_json(path)
-        if event.get("status") not in {"completed", "superseded"}:
+        if event.get("status") == "pending_sql":
+            # SQL 文件已由会话中的 agent 执行并移入 applied/ 则事件完成；文件丢失则重新渲染
+            settled = settle(event["receipt"], root)
+            if settled != "pending_sql":
+                event["status"] = settled
+                if settled == "retryable":
+                    event.update(retry_reason="pending_sql_missing")
+                    event.pop("receipt")
+                atomic_json(path, event)
+        if event.get("status") not in {"completed", "superseded", "pending_sql"}:
             pending.append((event.get("created_at", ""), path, event))
     pending.sort(key=lambda row:row[0])
     latest = {}
@@ -419,86 +431,13 @@ def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_lim
             selected.append(path)
     if event_limit:
         selected = selected[:event_limit]
-    client = target_client() if write_enabled else None
-    # An unfinished earlier plan owns its source until recovered/resumed. Never
-    # substitute newer evidence for a partially written frozen source graph.
-    blocked = {}
-    recovered = set()
-    refresh_required = {}
-    recovery_results = {}
-    if write_enabled:
-        for journal_path in (root / "journals").glob("*.json"):
-            journal = read_json(journal_path)
-            if journal.get("stage") in {"completed", "superseded"}:
-                continue
-            source = journal.get("plan", {}).get("source", {})
-            if not source.get("url"):
-                continue
-            canonical = normalize_source_url(source["url"])
-            if limits.paused("recovery", source["url"]) and not recovery_probe:
-                blocked[canonical] = {**limits.review("recovery", source["url"]), "resume_required": True}
-                recovery_results[canonical] = blocked[canonical]
-                continue
-            try:
-                bound = bind_source(source["url"], snapshot)
-                if bound["business_id"] != source["business_id"]:
-                    raise RuntimeError("source_business_changed")
-                old_id = journal.get("plan", {}).get("event_id")
-                browser = read_json(root / "sync" / str(old_id) / "browser.json", {})
-                if browser.get("final_url"):
-                    check_promotion_source(browser["final_url"], snapshot)
-                    if urlsplit(browser["final_url"]).hostname.lower().removeprefix("www.") != urlsplit(source["url"]).hostname.lower().removeprefix("www."):
-                        raise RuntimeError("source_redirect_requires_review")
-            except (RuntimeError, ValueError) as exc:
-                blocked[canonical] = {"status": "review", "category": str(exc), "resume_required": True}
-                recovery_results[canonical] = {"url": source["url"], **blocked[canonical]}
-                continue
-            receipt = recover_journal(journal_path, client)
-            if receipt["status"] == "retryable" and journal.get("transport") == "rest":
-                receipt = apply_plan(journal["plan"], client, root / "journals", protections)
-            if receipt["status"] in {"completed", "superseded"}:
-                limits.succeeded("recovery", source["url"])
-            else:
-                limits.failed("recovery", source["url"], receipt.get("category", "recovery_requires_review"))
-            recovery_results[canonical] = {"url": source["url"], **receipt}
-            if receipt["status"] == "superseded":
-                refresh_required[canonical] = journal["plan"]["prepared_at"]
-            elif receipt["status"] != "completed":
-                blocked[canonical] = receipt
-            else:
-                recovered.add(canonical)
-                # Update the original event even if a newer event superseded it.
-                old_id = journal.get("plan", {}).get("event_id")
-                old_path = root / "events" / f"{old_id}.json"
-                if old_id and old_path.exists():
-                    old_event = read_json(old_path)
-                    old_event.update(status="completed", receipt=receipt)
-                    atomic_json(old_path, old_event)
-    # Recover prior writes first; freeze all new plans before new source DML.
     plans = []
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {}
         for path in selected:
             event = read_json(path)
             canonical = normalize_source_url(event["url"])
-            if canonical in refresh_required:
-                event = read_json(path)
-                event.update(status="retryable", retry_reason="fresh_scrape_required",
-                             fresh_evidence_after=refresh_required[canonical])
-                event.pop("receipt", None)
-                atomic_json(path, event)
-            if canonical in recovered:
-                event = read_json(path)
-                if event.get("status") != "completed":
-                    event.update(status="retryable", retry_reason="source_recovered_refresh_evidence")
-                    event.pop("receipt", None)
-                    atomic_json(path, event)
-                    plans.append((path, {"status": "deferred", "review": [{"reason": "source_recovered_refresh_evidence", "blocking": False}]}))
-                else:
-                    plans.append((path, {"status": "completed"}))
-            elif canonical in blocked:
-                plans.append((path, {"status": "review", "review": [{"reason": blocked[canonical]["category"], "blocking": True}]}))
-            elif limits.paused("processing", event["url"]) and canonical not in probes:
+            if limits.paused("processing", event["url"]) and canonical not in probes:
                 event.update(status="review")
                 atomic_json(path, event)
                 plans.append((path, {"status": "review", "review": [{"reason": "retry_limit_reached", "blocking": True}]}))
@@ -528,41 +467,20 @@ def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_lim
     results = []
     for path, plan in plans:
         event = read_json(path)
-        canonical = normalize_source_url(event["url"])
-        if canonical in blocked:
-            event.update(status="review", receipt=blocked[canonical])
-            atomic_json(path, event)
-            results.append({"url": event["url"], **blocked[canonical]})
-            continue
-        if event.get("status") == "completed":
-            results.append({"url": event["url"], **event["receipt"]})
-            continue
         if plan["status"] != "ready":
             results.append({"url":event["url"],"status":event.get("status","review"), "review":plan.get("review",[])})
             continue
         if not write_enabled:
             results.append({"url":event["url"],"status":"writes_disabled", "operations":len(plan["operations"]),"review":plan.get("review",[])})
             continue
-        # Apply only after earlier source requests have been reconciled.
-        receipt = apply_plan(plan,client,root / "journals",protections)
-        if receipt["status"] in {"completed", "superseded"}:
-            limits.succeeded("recovery", event["url"])
-        else:
-            limits.failed("recovery", event["url"], receipt.get("category", "recovery_requires_review"))
-        if receipt["status"] == "superseded":
-            event.update(status="retryable", retry_reason="fresh_scrape_required",
-                         fresh_evidence_after=plan["prepared_at"], retired_plan_receipt=receipt)
-            event.pop("receipt", None)
-        else:
-            event.update(status=receipt["status"],receipt=receipt)
-        if receipt["status"] == "completed" and plan.get("image_retry_reason"):
+        receipt = render_pending(plan, protections, root)
+        event.update(status=receipt["status"], receipt=receipt)
+        if receipt["status"] == "pending_sql" and plan.get("image_retry_reason"):
             event.update(status="retryable",retry_reason=plan["image_retry_reason"],text_receipt=receipt)
             limits.failed("processing",event["url"],plan["image_retry_reason"])
             if limits.paused("processing",event["url"]):event["status"]="review"
         atomic_json(path,event)
         results.append({"url":event["url"],**receipt,"status":event["status"]})
-    represented = {normalize_source_url(row["url"]) for row in results}
-    results.extend(row for canonical, row in recovery_results.items() if canonical not in represented)
     return {"generated_at":now(),"write_enabled":write_enabled,"sources":results,
             "source_status_counts":dict(Counter(row["status"] for row in results)),
             "previously_verified":verified_batch_results(root, snapshot),
@@ -599,11 +517,11 @@ def main() -> int:
         if not args.skip_scrape:
             config = load_config(args.config)
             quality_urls = data_quality_recheck_urls(root)
+            snapshot_for_scrape = (
+                read_json(args.database_snapshot) if args.database_snapshot else database_snapshot()
+            )
+            quality_urls.update(expired_active_promotion_urls(snapshot_for_scrape))
             if getattr(args, "recheck_data_quality_only", False):
-                early_snapshot = read_json(args.database_snapshot) if args.database_snapshot else database_snapshot()
-                quality_urls.update(p["source_url"] for p in early_snapshot.get("promotions", [])
-                                    if p.get("is_active") and p.get("source_url") and p.get("campaign_end_date")
-                                    and str(p["campaign_end_date"])[:10] < date.today().isoformat())
                 config = {"monitors":{"data_quality":{"targets":[{"urls":sorted(quality_urls)}]}}}
             elif quality_urls:
                 configured_urls = {url for definition in config["monitors"].values()
@@ -641,8 +559,7 @@ def main() -> int:
         weekly_probe = bool(reports) and not args.retry_transient_only
         probe_urls = {url for report in reports for url in report.get("successful_urls", [])} if weekly_probe else set()
         report = process_events(root,snapshot,write_enabled=enabled,event_limit=args.event_limit,
-                                retryable_only=args.retry_transient_only, retry_probe_urls=probe_urls,
-                                recovery_probe=weekly_probe)
+                                retryable_only=args.retry_transient_only, retry_probe_urls=probe_urls)
         report["monitors"] = reports
         report["expiry_checks_enqueued"] = expiry_checks
         report["quality_checks_enqueued"] = quality_checks

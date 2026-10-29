@@ -12,6 +12,9 @@ from urllib.parse import urlsplit
 
 import requests
 
+from utils.pipeline_run import forbid_direct_write
+from utils.raw_file_store import RAW_FILE_TABLES, RawFileStore
+
 PRODUCTION_PROJECT_REF = "kdlpkjzcnbkjcvwsvlwn"
 
 
@@ -38,6 +41,7 @@ class SupabaseRestClient:
 
     def assert_write_project(self) -> None:
         # Replica reads remain allowed; a default connector must never choose a writer.
+        forbid_direct_write(f"REST write to {self.base_url}")
         parsed = urlsplit(self.base_url)
         if parsed.scheme != "https" or parsed.hostname != PRODUCTION_PROJECT_REF + ".supabase.co":
             raise RuntimeError("database_project_mismatch")
@@ -52,6 +56,10 @@ class SupabaseRestClient:
         offset: Optional[int] = None,
         order: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        if table in RAW_FILE_TABLES:
+            return RawFileStore().fetch_rows(
+                table, select, filters=filters, limit=limit, offset=offset, order=order
+            )
         params: Dict[str, str] = {"select": select}
         if filters:
             params.update(filters)
@@ -74,6 +82,8 @@ class SupabaseRestClient:
           ``{"promo_website_id": "eq.123"}``).
         - Otherwise it is treated as a simple scalar id and mapped to ``id=eq.<value>``.
         """
+        if table in RAW_FILE_TABLES:
+            return RawFileStore().update_row(table, row_id_or_filters, payload)
         self.assert_write_project()
         if isinstance(row_id_or_filters, dict):
             params = dict(row_id_or_filters)
@@ -95,6 +105,8 @@ class SupabaseRestClient:
     def insert_rows(
         self, table: str, rows: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
+        if table in RAW_FILE_TABLES:
+            return RawFileStore().insert_rows(table, rows)
         self.assert_write_project()
         response = self.session.post(
             f"{self.base_url}/{table}",
@@ -114,6 +126,8 @@ class SupabaseRestClient:
         filters: Dict[str, str],
     ) -> List[Dict[str, Any]]:
         """Delete rows matching PostgREST filters."""
+        if table in RAW_FILE_TABLES:
+            return RawFileStore().delete_rows(table, filters)
         self.assert_write_project()
         response = self.session.delete(
             f"{self.base_url}/{table}",
@@ -140,6 +154,8 @@ class SupabaseRestClient:
         on_conflict : str, optional
             PostgREST ``on_conflict`` column name for merge-duplicates.
         """
+        if table in RAW_FILE_TABLES:
+            return RawFileStore().upsert_rows(table, rows, on_conflict=on_conflict)
         self.assert_write_project()
         headers = {"Prefer": "return=representation,resolution=merge-duplicates"}
         params: Dict[str, str] = {}
@@ -152,6 +168,12 @@ class SupabaseRestClient:
             headers=headers,
             timeout=90,
         )
+        response.raise_for_status()
+        return response.json()
+
+    def rpc_read(self, function: str) -> Any:
+        """调用只读（stable）数据库函数；不经写入守卫。"""
+        response = self.session.get(f"{self.base_url}/rpc/{function}", timeout=90)
         response.raise_for_status()
         return response.json()
 

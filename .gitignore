@@ -34,9 +34,18 @@ wheels/
 # 输出文件
 /output/
 /outputs/
+/archive/*
+!/archive/one-off/
+!/archive/one-off-tests/
+/archive/one-off/outputs/
+/archive/one-off/inputs/
+/archive/one-off/*.png
+/archive/one-off/*_report*/
+/archive/one-off/*_dryrun/
 /.tmp/
 reports/
 *.log
+*.err
 *.csv
 *.json
 !config/firecrawl_monitor_migration.json
@@ -81,3 +90,13 @@ firecrawl_server.pub
 
 # Local architecture review reports (generated, not committed)
 architecture-review-*.html
+
+# Local artifacts: screenshots, doc exports, package-manager cache
+/*.png
+/bridge/
+.pnpm-store/
+/offer_repair_qa_*.md
+
+# Local runtime state and raw Firecrawl cache (production DB has no raw tables)
+/state/
+/_box_xfer/

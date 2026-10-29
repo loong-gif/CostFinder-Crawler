@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,7 +26,8 @@ from utils.schema_contract import (  # noqa: E402
     TABLE_FIRECRAWL_SCRAPE_RAW,
     TABLE_PROMO_OFFER_MASTER,
 )
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,25 +38,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_client() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    key = get_supabase_writer_key()
-    if not base_url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或 writer key")
-    return SupabaseRestClient(base_url, key)
+TABLE_ORDER = {
+    TABLE_CLINIC_SERVICES: "service_id.asc",
+    TABLE_CLINIC_MEMBERSHIPS: "plan_id.asc",
+    TABLE_CLINIC_PROMOTIONS: "promotion_id.asc",
+    "master_business_info": "business_id.asc",
+}
 
 
 def fetch_rows(client: SupabaseRestClient, table: str, select: str) -> List[Dict[str, Any]]:
     try:
-        return client.fetch_rows(table, select, limit=5000)
+        return fetch_all_rows(client, table, select, order=TABLE_ORDER.get(table, "id.asc"))
     except Exception:
         return []
 
 
 def main() -> int:
     args = parse_args()
-    client = load_client()
+    client = load_supabase_client(PROJECT_ROOT, role="writer")
     services = fetch_rows(client, TABLE_CLINIC_SERVICES, CLINIC_SERVICE_SELECT)
     memberships = fetch_rows(client, TABLE_CLINIC_MEMBERSHIPS, CLINIC_MEMBERSHIP_SELECT)
     promotions = fetch_rows(client, TABLE_CLINIC_PROMOTIONS, CLINIC_PROMOTION_SELECT)

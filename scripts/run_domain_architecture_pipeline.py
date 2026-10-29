@@ -54,6 +54,7 @@ from utils.membership_paths import is_membership_page_url
 from utils.membership_plans import find_existing_plan_id
 from utils.search_scrape_gate import search_page_has_price
 from utils.offer_extraction_llm import build_client_from_env, canonicalize_service_name
+from utils.offer_schema import base_offer_schema, with_service_enum
 from utils.offer_fingerprint import compute_offer_fingerprint
 from utils.promo_offer_items_db import is_blanket_offer_text, link_item_to_service, upsert_offer_items
 from utils.schema_contract import (
@@ -81,6 +82,8 @@ DOMAIN_QUERIES = {
 
 
 def load_schema(name: str) -> dict[str, Any]:
+    if name == "offer_extraction_schema.json":
+        return with_service_enum(base_offer_schema(), list(SERVICE_NAME_ENUM_VALUES))
     return json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))
 
 
@@ -393,7 +396,11 @@ def persist_promotions_and_offers(
         offers_payload = llm_extract(
             llm,
             offer_schema,
-            task="Extract every concrete purchasable offer on this promotion page.",
+            task=(
+                "Extract every concrete purchasable offer on this promotion page. "
+                "OR alternatives (or/and/,/或, one shared price/discount): purchase_type=independent_options or split singles, is_package=false, one item_name per option. "
+                "AND bundle (one total for multiple treatments): purchase_type=bundle, is_package=true, price_model=total, separate items[] per component, item unit_price=null."
+            ),
             source_url=url,
             markdown=md,
         )
@@ -439,7 +446,14 @@ def link_item_services(client: Any, *, business_id: int) -> int:
         for item in items:
             if item.get("service_id"):
                 continue
-            name = canonicalize_service_name(hint)
+            from utils.clinic_service_extraction import infer_service_name_for_item
+            name = infer_service_name_for_item(
+                offer_raw_text=hint,
+                item_name=item.get("item_name"),
+                service_name=item.get("service_name"),
+                sibling_count=len(items),
+                is_package=len(items) > 1,
+            )
             service_enum = service_name_enum_hint(name)
             if service_enum is None:
                 continue
@@ -533,7 +547,7 @@ def resolve_business(client: Any, *, domain: str, business_id: Optional[int]) ->
         if rows:
             return rows[0]
     needle = domain.lower().strip()
-    rows = fetch_all_rows(client, "master_business_info", "business_id,name,website", limit=5000)
+    rows = fetch_all_rows(client, "master_business_info", "business_id,name,website", order="business_id.asc")
     for row in rows:
         site = str(row.get("website") or "").lower()
         if needle in site or site in needle:
@@ -661,7 +675,11 @@ def main() -> None:
                 offers = llm_extract(
                     llm,
                     offer_schema,
-                    task="Extract every concrete purchasable offer on this promotion page.",
+                    task=(
+                "Extract every concrete purchasable offer on this promotion page. "
+                "OR alternatives (or/and/,/或, one shared price/discount): purchase_type=independent_options or split singles, is_package=false, one item_name per option. "
+                "AND bundle (one total for multiple treatments): purchase_type=bundle, is_package=true, price_model=total, separate items[] per component, item unit_price=null."
+            ),
                     source_url=url,
                     markdown=md,
                 )

@@ -110,7 +110,7 @@ class SelfHostedMonitor:
             headers=self.headers,
             json={
                 "url": url,
-                "formats": ["markdown"],
+                "formats": ["markdown", "rawHtml"] if crawler_first_enabled() else ["markdown"],
                 "onlyMainContent": True,
                 "excludeTags": ["nav", "footer", "script", "style", "noscript"],
             },
@@ -133,6 +133,48 @@ class SelfHostedMonitor:
 
     def scrape(self, url: str) -> str:
         return response_markdown(self.scrape_document(url))
+
+
+def crawler_first_enabled() -> bool:
+    """Opt-in: reuse an earlier real render when crawler content is unchanged and cleanly visible."""
+    return os.getenv("MONITOR_RENDER_MODE", "always").strip().lower() == "crawler_first"
+
+
+def reusable_render(url: str, page: Any, previous: dict[str, Any], state_dir: Path, now_ts: str) -> dict[str, Any] | None:
+    """Return the previous rendered evidence when this capture needs no new browser render.
+
+    Reuse requires: crawler content identical to the last rendered capture, the filtered crawler
+    HTML assessed as cleanly visible (``assess_page`` finds no reason to need a browser), and the
+    last real render younger than ``MONITOR_RENDER_MAX_AGE_DAYS`` (default 14). Anything else
+    (new/changed page, empty or suspicious content, old render) is rendered in the browser.
+    """
+    from utils.crawler_visibility import assess_page
+
+    payload = page.response or {}
+    raw_html = ((payload.get("data") or {}).get("rawHtml") if isinstance(payload, dict) else None) or ""
+    if page.status == "error" or not previous.get("artifact_id") or not previous.get("rendered_at"):
+        return None
+    if previous.get("content_digest") != digest(page.markdown):
+        return None
+    try:
+        age_days = (datetime.fromisoformat(now_ts) - datetime.fromisoformat(previous["rendered_at"])).days
+    except (TypeError, ValueError):
+        return None
+    if age_days > int(os.getenv("MONITOR_RENDER_MAX_AGE_DAYS", "14")):
+        return None
+    assessment = assess_page(page.markdown, raw_html, facts=page.facts)
+    if assessment.needs_browser:
+        return None
+    evidence_path = state_dir / "evidence" / (str(previous["artifact_id"]) + ".json")
+    try:
+        rendered = json.loads(evidence_path.read_text(encoding="utf-8")).get("rendered") or {}
+    except (OSError, ValueError):
+        return None
+    browser = rendered.get("browser") or {}
+    if not browser.get("accessible") or not browser.get("visual_digest"):
+        return None
+    return {**rendered, "reused_from_artifact": previous["artifact_id"], "reused_at": now_ts,
+            "visibility_source": "crawler_html_filtered", "crawler_visible_digest": assessment.visible_digest}
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -263,7 +305,13 @@ def run_monitor(
         cache = browser_cache if browser_cache is not None else {}
         def capture_one(url):
             page=build_page_results(monitor,[url],old_pages,workers=1)[0]
-            if url in cache:
+            reuse = reusable_render(url, page, old_pages.get(url) or {}, state_dir, utc_now()) if crawler_first_enabled() else None
+            if crawler_first_enabled() and isinstance(page.response, dict) and isinstance(page.response.get("data"), dict):
+                page.response["data"].pop("rawHtml", None)  # assessed above; keep evidence files small
+            if reuse is not None:
+                result = reuse
+                cache[url] = result
+            elif url in cache:
                 result=cache[url]
             else:
                 directory=state_dir / "rendered" / uuid4().hex
@@ -322,6 +370,10 @@ def run_monitor(
         snapshot["pages"][page.url].update(content_digest=content_digest, artifact_id=artifact_id)
         if browser.get("accessible"):
             snapshot["pages"][page.url].update(visual_digest=browser.get("visual_digest"),context_digest=browser.get("context_digest"))
+            if rendered.get("reused_from_artifact"):
+                snapshot["pages"][page.url]["rendered_at"] = previous.get("rendered_at")
+            else:
+                snapshot["pages"][page.url]["rendered_at"] = utc_now()
         if previous.get("revision"):
             snapshot["pages"][page.url]["revision"] = previous["revision"]
         event = event_by_url.get(page.url)

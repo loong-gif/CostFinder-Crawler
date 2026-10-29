@@ -142,12 +142,27 @@ def test_new_customer_cannot_borrow_another_sales_price():
     assert any(i["rule"] == "regular_price_baseline" for i in result["issues"])
 
 
+def test_F_from_price_dropped_rule():
+    g = graph()
+    offer(g, offer_raw_text="Botox from $99", price_model="total")
+    assert any(i["rule"] == "F_from_price_dropped" for i in audit_snapshot(g, at=AT)["issues"])
+
+
+def test_I_itemless_inactive_stale():
+    g = graph()
+    g["offers"].append({"id": 9, "business_id": 7, "promotion_id": 1, "membership_plan_id": None,
+                        "is_active": False, "price_model": "total", "created_at": "2026-10-01T00:00:00+00:00",
+                        "offer_raw_text": "shell", "discount_price": None, "regular_price": None,
+                        "is_membership_required": False, "is_new_customer_required": False, "conditions": []})
+    assert any(i["rule"] == "I_itemless_offer" for i in audit_snapshot(g, at=AT)["issues"])
+
+
 def test_from_minimum_quantity_and_unknown_total_output():
     g = graph()
     offer(g, offer_raw_text="Botox from $99, minimum 20 units")
     g["items"][0]["delivered_units"] = 20
     report = audit_snapshot(g, at=AT)
-    assert {i["rule"] for i in report["issues"]} >= {"from_price", "unsupported_quantity"}
+    assert {i["rule"] for i in report["issues"]} >= {"F_from_price_dropped", "unsupported_quantity"}
     # Malformed persisted from semantics must never become a usable rate.
     assert report["price_output"][0]["usable_unit_price"] is None
 
@@ -171,7 +186,17 @@ def test_queue_preserves_pause_instead_of_daily_unbounded_retries():
 @pytest.mark.parametrize("method,args", [("update_row", ("clinic_services", 1, {})),
     ("insert_rows", ("clinic_services", [{}])), ("delete_rows", ("clinic_services", {})),
     ("upsert_rows", ("clinic_services", [{}])), ("rpc", ("write_anything", {}))])
-def test_wrong_project_is_rejected_before_any_request(method, args):
+def test_rest_writes_are_rejected_before_any_request(method, args):
+    # 直接写库路径一律被 forbid_direct_write 拒绝，不论项目是否匹配，且不发出任何请求。
+    from utils.pipeline_run import DirectDatabaseWrite
     client = SupabaseRestClient("https://ebamlycrvgtivuluipvn.supabase.co", "unused-test-key")
-    with pytest.raises(RuntimeError, match="database_project_mismatch"):
+    with pytest.raises(DirectDatabaseWrite):
         getattr(client, method)(*args)
+
+
+def test_stated_units_ignore_thresholds_and_neighbouring_prices():
+    from utils.data_quality_audit import _stated_fixed_units
+    assert _stated_fixed_units("BBL + MOXI combo 3 SESSIONS $3,000.00") == {3}
+    assert _stated_fixed_units("get $40 off 20 units Jeuveau ; Minimum 20 units required.") == set()
+    assert _stated_fixed_units("Special $1400 ; Treatment(s) within 6 months") == set()
+    assert _stated_fixed_units("Requires purchase of 2 treatment areas ; 50+ units") == set()

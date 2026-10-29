@@ -15,6 +15,8 @@ from utils.monitor_price_extract import extract_evidence
 from utils.monitor_price_store import atomic_json, manual_protections, run_lock
 from utils.monitor_rendered_browser import resources_complete
 
+SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
+
 
 def test_empty_response_and_retry_payloads_saved_without_event_or_snapshot_change(tmp_path,monkeypatch):
     from scripts.firecrawl_self_hosted_monitor import ScrapeFailure
@@ -63,9 +65,9 @@ def test_replanning_retired_journal_requires_new_scrape_not_fresh_prepared_times
     atomic_json(old,{"url":url,"captured_at":old_time,"markdown":"old quote"})
     atomic_json(event_path,{"event_id":"1","url":url,"artifact_path":str(old),"status":"retryable",
                 "retry_reason":"fresh_scrape_required","fresh_evidence_after":old_time})
-    snapshot={"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"}]}
+    snapshot={"promotions":[],"services":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
     calls=[]
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a:calls.append("browser") or {"accessible":True,"final_url":url})
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:calls.append("browser") or {"accessible":True,"final_url":url})
     monkeypatch.setattr("scripts.run_monitor_price_sync.extract_evidence",lambda artifact,*a:calls.append(artifact["markdown"]) or {})
     monkeypatch.setattr("scripts.run_monitor_price_sync.build_plan",lambda *a:{"status":"ready","operations":[],"review":[]})
     plan=prepare_event(event_path,snapshot,{},tmp_path)
@@ -158,12 +160,12 @@ def test_overlapping_run_rejected(tmp_path):
             with run_lock(tmp_path): pass
 
 
-def test_protections_keep_admin_and_business_decisions():
-    result=manual_protections({"confirmations":[{"id":"x","offer_id":8,"kind":"correction","status":"resolved"},
-        {"id":"y","offer_id":9,"kind":"confirmed","status":"dismissed"}],
-        "audit":[{"id":"a","target_type":"deal","target_id":"10","action":"deal_delisted"}]})
-    assert {x["id"] for x in result["entries"]} == {8,10}
-    assert manual_protections({"confirmations":[],"audit":[]},result)["entries"] == result["entries"]
+def test_protections_keep_only_manual_file_entries():
+    assert manual_protections()["entries"] == []
+    previous={"entries":[{"table":"promo_offer_master","id":8,"reason":"manual"}],"offer_ids":[9]}
+    result=manual_protections(previous)
+    assert result["entries"] == previous["entries"] and result["offer_ids"] == [9]
+    assert result["promotion_ids"] == []
 
 
 def test_source_binding_does_not_choose_between_branches():
@@ -196,7 +198,7 @@ def test_cached_ready_membership_plan_is_replaced_with_review(tmp_path,monkeypat
             "operations":[{"table":"clinic_promotions","action":"insert"}]}
     atomic_json(directory / "plan.json",cached)
     atomic_json(directory / "browser.json",{"final_url":final_url})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a:pytest.fail("cached source must stop before rendering"))
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:pytest.fail("cached source must stop before rendering"))
     plan=prepare_event(path,{"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"}]},{},tmp_path)
     assert plan["status"] == "review" and plan["operations"] == []
     assert plan["review"] == [{"reason":"membership_source_requires_review"}]
@@ -209,9 +211,9 @@ def test_live_same_domain_membership_redirect_stops_before_extraction(tmp_path,m
     artifact=tmp_path / "artifact.json"
     atomic_json(artifact,{"url":"https://a.test/specials","markdown":"Botox price $10"})
     atomic_json(path,{"event_id":"1","status":"pending","url":"https://a.test/specials","artifact_path":str(artifact)})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a:{"accessible":True,"final_url":"https://a.test/membership"})
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:{"accessible":True,"final_url":"https://a.test/membership"})
     monkeypatch.setattr("scripts.run_monitor_price_sync.extract_evidence",lambda *a:pytest.fail("membership must not extract"))
-    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"businesses":[{"business_id":1,"website":"a.test"}]}
+    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
     plan=prepare_event(path,snapshot,{},tmp_path)
     assert plan["status"] == "review" and plan["operations"] == []
     assert plan["review"] == [{"reason":"membership_source_requires_review"}]
@@ -228,12 +230,12 @@ def test_extraction_http_failures_preserve_queue_with_safe_categories(tmp_path,m
     artifact=tmp_path / "artifact.json"
     atomic_json(artifact,{"url":"https://a.test/specials","markdown":"Botox price $10"})
     atomic_json(path,{"event_id":"1","status":"pending","url":"https://a.test/specials","artifact_path":str(artifact)})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a:{"accessible":True,"final_url":"https://a.test/specials"})
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:{"accessible":True,"final_url":"https://a.test/specials"})
     def fail(*args):
         response=Response();response.status_code=code
         raise HTTPError("do not persist credential-bearing HTTP exception text",response=response)
     monkeypatch.setattr("scripts.run_monitor_price_sync.extract_evidence",fail)
-    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"businesses":[{"business_id":1,"website":"a.test"}]}
+    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
     plan=prepare_event(path,snapshot,{},tmp_path)
     assert plan["status"] == "review" and plan["operations"] == []
     assert plan["review"] == [{"reason":reason}]
@@ -255,7 +257,7 @@ class FakeLLM:
 def test_hidden_markdown_price_cannot_pass_visibility(tmp_path):
     evidence=extract_evidence({"url":"https://a.test","markdown":"Botox special $10/unit"},
         {"accessible":True,"complete":True,"text":"No current specials","image_review_required":False},tmp_path,
-        FakeLLM([{"offer_raw_text":"Botox special $10/unit","items":[]}]))
+        FakeLLM([{"offer_raw_text":"Botox special $10/unit","items":[]}]),SERVICE_NAMES)
     assert evidence["offers"][0]["visibility"] == "unverified"
     assert evidence["complete"] is False
 
@@ -263,15 +265,15 @@ def test_hidden_markdown_price_cannot_pass_visibility(tmp_path):
 def test_unverified_image_blocks_removal_but_text_claim_is_visible(tmp_path):
     evidence=extract_evidence({"url":"https://a.test","markdown":""},
         {"accessible":True,"complete":True,"text":"Botox special $10/unit","image_review_required":True},tmp_path,
-        FakeLLM([{"offer_raw_text":"Botox special $10/unit","items":[]}]))
+        FakeLLM([{"offer_raw_text":"Botox special $10/unit","items":[]}]),SERVICE_NAMES)
     assert evidence["offers"][0]["visibility"] == "visible_match"
     assert evidence["complete"] is False
 
 
 def test_complete_empty_extract_does_not_require_explicit_no_specials(tmp_path):
     browser={"accessible":True,"complete":True,"text":"No current specials","image_review_required":False}
-    assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([]))["complete"]
-    assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([],"No current specials"))["complete"]
+    assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([]),SERVICE_NAMES)["complete"]
+    assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([],"No current specials"),SERVICE_NAMES)["complete"]
 
 
 def test_latest_event_supersedes_old_price_before_any_write(tmp_path,monkeypatch):
@@ -282,7 +284,7 @@ def test_latest_event_supersedes_old_price_before_any_write(tmp_path,monkeypatch
         selected.append(path.name)
         return {"status":"ready","operations":[],"review":[]}
     monkeypatch.setattr("scripts.run_monitor_price_sync.prepare_event",prepare)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.apply_plan",lambda *a:pytest.fail("writes disabled"))
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_pending",lambda *a:pytest.fail("writes disabled"))
     report=process_events(tmp_path,{"confirmations":[],"audit":[]},write_enabled=False)
     assert selected == ["2.json"]
     assert report["sources"][0]["status"] == "writes_disabled"
@@ -306,27 +308,26 @@ def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.time.sleep",lambda _:None)
     monkeypatch.setattr("scripts.run_monitor_price_sync.database_snapshot",lambda:{"confirmations":[],"audit":[]})
     monkeypatch.setattr("scripts.run_monitor_price_sync.enqueue_expired_campaign_checks",lambda *a:0)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.target_client",lambda:object())
     monkeypatch.setattr("scripts.run_monitor_price_sync.prepare_event",lambda path,*a:
         {"status":"review","operations":[],"review":[{"reason":"unknown_service"}]} if path.stem=="review"
         else {"status":"ready","operations":[{"id":4,"values":{"discount_price":12}}],"review":[]})
     writes=[]
-    def apply(plan,*a):
+    def render(plan,protections,state_dir):
         writes.extend(plan["operations"])
-        return {"status":"completed","category":"verified"}
-    monkeypatch.setattr("scripts.run_monitor_price_sync.apply_plan",apply)
+        return {"status":"pending_sql","sql_path":str(state_dir / "pending_sql" / "x.sql")}
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_pending",render)
     monkeypatch.setattr("sys.argv",["sync","--state-dir",str(tmp_path),"--config",str(config)])
     assert main() == 2  # Failed page remains visible to the scheduler for retry.
     report=json.loads((tmp_path / "sync_report.json").read_text())
     assert writes == [{"id":4,"values":{"discount_price":12}}]
     assert report["write_enabled"] is True
     assert report["scrape_failed_pages"] == 1
-    assert report["source_status_counts"] == {"completed":1,"review":1}
+    assert report["source_status_counts"] == {"pending_sql":1,"review":1}
     assert report["failure_scope"] == "page_or_source_only"
     archived=next((tmp_path / "runs").glob("*.json"))
     assert json.loads(archived.read_text()) == report
     assert report["run_type"] == "full_monitor"
-    assert not list((tmp_path / "journals").glob("*.json"))
+    assert not (tmp_path / "journals").exists()
 
 
 def test_prior_verified_records_are_recognized_without_replaying_or_hiding_new_differences(tmp_path):
@@ -376,3 +377,22 @@ def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path,re
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan["status"] == "ready",plan
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
+
+
+def test_database_snapshot_reads_service_names_through_the_read_only_rpc(monkeypatch):
+    import scripts.run_monitor_price_sync as runner
+    class Client:
+        calls=[]
+        def __init__(self,*args): pass
+        def fetch_rows(self,table,columns,**kwargs): return []
+        def rpc_read(self,name):
+            Client.calls.append(name)
+            return SERVICE_NAMES
+    monkeypatch.setenv("SUPABASE_URL","https://kdlpkjzcnbkjcvwsvlwn.supabase.co")
+    monkeypatch.setattr(runner,"SupabaseRestClient",Client)
+    monkeypatch.setattr(runner,"get_supabase_secret_key",lambda:"key")
+    snapshot=runner.database_snapshot()
+    assert Client.calls==["fn_clinic_service_names"] and snapshot["service_names"]==SERVICE_NAMES
+    Client.rpc_read=lambda self,name:[]
+    with pytest.raises(RuntimeError,match="service_names_unavailable"):
+        runner.database_snapshot()

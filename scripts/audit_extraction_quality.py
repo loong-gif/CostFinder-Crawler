@@ -5,13 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -33,7 +30,8 @@ from utils.schema_contract import (  # noqa: E402
     TABLE_PROMO_OFFER_ITEMS,
     TABLE_PROMO_OFFER_MASTER,
 )
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
 DEFAULT_RESULT_DIR = PROJECT_ROOT / "output" / "results"
@@ -57,15 +55,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_client() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    key = get_supabase_writer_key()
-    if not base_url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或 writer key")
-    return SupabaseRestClient(base_url, key)
-
-
 def fetch_all(
     client: SupabaseRestClient,
     table: str,
@@ -73,29 +62,8 @@ def fetch_all(
     *,
     limit: Optional[int],
 ) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    offset = 0
-    remaining = limit
-    while True:
-        page_limit = PAGE_SIZE if remaining is None else min(PAGE_SIZE, remaining)
-        batch = client.fetch_rows(
-            table,
-            select,
-            limit=page_limit,
-            offset=offset,
-            order=TABLE_ORDER.get(table, "id.asc"),
-        )
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-        if remaining is not None:
-            remaining -= len(batch)
-            if remaining <= 0:
-                break
-    return rows
+    order = TABLE_ORDER.get(table, "id.asc")
+    return fetch_all_rows(client, table, select, page_size=PAGE_SIZE, order=order, limit=limit)
 
 
 def fetch_raw_urls(client: SupabaseRestClient) -> tuple[list[str], list[str]]:
@@ -149,14 +117,14 @@ def main() -> int:
     report_dir = Path(args.report_dir).expanduser().resolve()
     result_dir = Path(args.result_dir).expanduser().resolve()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    client = load_client()
+    client = load_supabase_client(PROJECT_ROOT, role="writer")
 
     services = fetch_all(client, TABLE_CLINIC_SERVICES, CLINIC_SERVICE_SELECT, limit=args.limit)
     memberships = fetch_all(client, TABLE_CLINIC_MEMBERSHIPS, CLINIC_MEMBERSHIP_SELECT, limit=args.limit)
     promotions = fetch_all(client, TABLE_CLINIC_PROMOTIONS, CLINIC_PROMOTION_SELECT, limit=args.limit)
     offers = fetch_all(client, TABLE_PROMO_OFFER_MASTER, OFFER_MASTER_WITH_ITEMS_SELECT, limit=args.limit)
     offer_items = fetch_all(client, TABLE_PROMO_OFFER_ITEMS, OFFER_ITEM_SELECT, limit=args.limit)
-    businesses = fetch_all(client, "master_business_info", "business_id,name,website", limit=5000)
+    businesses = fetch_all(client, "master_business_info", "business_id,name,website", limit=None)
     scrape_urls, search_urls = fetch_raw_urls(client)
 
     report = run_full_audit(

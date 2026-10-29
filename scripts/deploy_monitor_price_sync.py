@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Deploy the existing monitor task with price writes disabled by default.
+"""Deploy the existing monitor task with pending-SQL generation disabled by default.
 
 File payloads (including explicitly selected credentials) travel over SSH stdin,
-never command arguments or output. This tool performs no database operations.
+never command arguments or output. This tool performs no database operations; the
+deployed jobs never write the database, they only produce SQL files under
+``$BASE/state/pending_sql/`` that a session pulls back, reviews and runs through the Supabase MCP.
 """
 from __future__ import annotations
 
@@ -36,6 +38,10 @@ def deploy(host: str, include_credentials: bool):
     files += [ROOT / relative for relative in (
         "scripts/firecrawl_self_hosted_monitor.py","scripts/run_monitor_price_sync.py",
         "scripts/run_data_quality_audit.py",
+        "scripts/crawl_scheduler.py","scripts/seed_crawl_schedule.py",
+        "scripts/process_discovery_results.py","scripts/select_next_city.py","scripts/crawl_report.py",
+        "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
+        "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",
         "scripts/monitor_rendered_page.js","requirements_monitor_price_sync.txt",
         "service_name_dict.json","config/firecrawl_monitor_migration.json")]
     payload = {str(path.relative_to(ROOT)):path.read_bytes() for path in files}
@@ -43,23 +49,26 @@ def deploy(host: str, include_credentials: bool):
         values = dotenv_values(ROOT / ".env")
         keys = ("SUPABASE_URL","SUPABASE_SECRET_KEY","SUPABASE_SERVICE_ROLE_KEY",
                 "FIRECRAWL_SELF_HOSTED_API_URL","FIRECRAWL_SELF_HOSTED_API_KEY",
-                "LLM_API_KEY","LLM_API_URL","LLM_API_BASE","LLM_MODEL","LLM_BACKEND","GEMINI_API_KEY","DB_URL")
+                "LLM_API_KEY","LLM_API_URL","LLM_API_BASE","LLM_MODEL","LLM_BACKEND","GEMINI_API_KEY")
         payload[".env"] = ("\n".join(key+"="+json.dumps(values[key]) for key in keys if values.get(key))+"\n").encode()
+    payload["run_crawl_due.sh"] = (ROOT / "scripts/run_crawl_due.sh").read_bytes()
     payload["run_monitor_validation.sh"] = (
         '#!/bin/sh\nset -eu\nBASE="'+BASE+'"\nmkdir -p "$BASE/logs" "$BASE/state"\n'
         'exec >>"$BASE/logs/monitor.log" 2>&1\ndate -u\n'
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\nexec "$BASE/.venv/bin/python" "$BASE/scripts/run_monitor_price_sync.py" '
+        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\nexec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" monitor '
         '--state-dir "$BASE/state" --config "$BASE/config/firecrawl_monitor_migration.json"\n').encode()
     payload["run_monitor_retry.sh"] = (
         '#!/bin/sh\nset -eu\nBASE="'+BASE+'"\nmkdir -p "$BASE/logs" "$BASE/state"\n'
         'exec >>"$BASE/logs/retry.log" 2>&1\ndate -u\n'
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\nexec "$BASE/.venv/bin/python" "$BASE/scripts/run_monitor_price_sync.py" '
+        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\nexec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" monitor '
         '--state-dir "$BASE/state" --config "$BASE/config/firecrawl_monitor_migration.json" --retry-transient-only\n').encode()
     # Triggered hourly in server (Pacific) time; only the 09:00 Shanghai hour runs, so DST cannot shift it.
     payload["run_data_quality_daily.sh"] = (
         '#!/bin/sh\nset -eu\n[ "$(TZ=Asia/Shanghai date +%H)" = "09" ] || exit 0\nBASE="'+BASE+'"\n'
         'mkdir -p "$BASE/logs" "$BASE/state"\nexec >>"$BASE/logs/data_quality.log" 2>&1\ndate -u\n'
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\nexec "$BASE/.venv/bin/python" "$BASE/scripts/run_data_quality_audit.py" '
+        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\n'
+        '"$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" deactivate-expired --out-dir "$BASE/state/pending_sql"\n'
+        'exec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" quality '
         '--state-dir "$BASE/state" --recheck\n').encode()
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream,mode="w:gz") as archive:
@@ -71,6 +80,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 base=Path("/home/loong/costfinder_monitor")
 state=base/"state"; state.mkdir(parents=True,exist_ok=True)
+(state/"pending_sql").mkdir(exist_ok=True)
 lock=open(state/".monitor.lock","a+")
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -78,7 +88,7 @@ backup.mkdir(parents=True,exist_ok=True)
 control=state/"price_sync_control.json"
 if control.exists(): shutil.copy2(control,backup/"price_sync_control.json")
 # Pause writes before replacing files, while holding the task's shared lock.
-control.write_text(json.dumps({"schema_version":1,"write_enabled":False,"reason":"awaiting_service_key_validation"})+"\\n")
+control.write_text(json.dumps({"schema_version":1,"write_enabled":False,"reason":"awaiting_pending_sql_validation"})+"\\n")
 archive=tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.buffer.read())),mode="r:gz")
 count=0
 for member in archive.getmembers():
@@ -92,6 +102,7 @@ for member in archive.getmembers():
 (base/"run_monitor_validation.sh").chmod(0o755)
 (base/"run_monitor_retry.sh").chmod(0o755)
 (base/"run_data_quality_daily.sh").chmod(0o755)
+(base/"run_crawl_due.sh").chmod(0o755)
 print(json.dumps({"files_deployed":count,"backup":str(backup),"write_enabled":False}))
 '''
     print(remote_python(code,stdin=base64.b64encode(stream.getvalue()),host=host))

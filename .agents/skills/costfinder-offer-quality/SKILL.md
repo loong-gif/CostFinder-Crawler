@@ -20,21 +20,19 @@ description: Use when reviewing, extracting, importing, repairing, or accepting 
 - 只有当来源给出所需数值且计价基准一致时才计算派生价格；否则保留可证明字段，其余置空或进入 review。
 - `total`、`per_unit`、百分比优惠和整单减免必须保持各自计价口径。最低购买数量是门槛，不是固定交付数量。
 - 一个 Offer 只表达一套共同价格与资格条件。不同服务、价格或适用条件拆成不同 Offer；套餐可以有多个原子 Item。
-- `promo_offer_items.item_name` 使用映射后的 `clinic_services.service_name`；Service 必须属于同一 `business_id`。
+- `promo_offer_items.item_name` 保留来源原文的商业条目名，不用推断的 `clinic_services.service_name` 替换；`service_id` 是独立的同 `business_id` 关联，广域 offer 保持 NULL（见 `AGENTS.md`）。
 - `conditions` 的存储形态以当前 schema 和 `utils/offer_evidence_validator.py` 为准。保留 `NULL`（未可靠处理）与空数组（已确认无额外条件）的区别，不重复 `is_membership_required` 或 `is_new_customer_required` 已表达的条件。
 
 ## Active 状态闭环
 
-Firecrawl Monitor 按用户确认的 `AGENTS.md` 例外执行：未知服务可保持 NULL，
-不阻断已核验价格、数量和条件的同步；未知年份日期保持 NULL。
-保留唯一正确的已有映射和 ID，且未完整映射时 `is_offer_extracted=false`。
+Firecrawl Monitor 同步例外见 `AGENTS.md` 与 `docs/monitor_price_sync.md`。
 该入口不以 `active_null_service_items=0` 作为价格同步门禁；其他入口的下述要求仍适用。
 
 active 数据至少满足：
 
 - active Offer 的上游 Promotion 或 Membership 仍有效；
 - active Offer 至少有一个 Item；
-- active Item 的 `service_id` 已解析；
+- active Item 的 `service_id` 已解析（广域 offer 除外）；
 - `per_unit` Item 有与 Offer 口径一致的 `unit_price`；
 - Item 与 Service 不跨 Business、不名称错配、不在同一 Offer 内重复映射。
 

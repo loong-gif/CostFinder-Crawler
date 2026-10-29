@@ -18,9 +18,7 @@ description: Use when auditing or synchronizing CostFinder clinic_promotions aga
 
 ## 同步方式
 
-Firecrawl Monitor 已获用户明确授权：没有确定服务或年份时对应字段保存 NULL，
-不阻断价格及其他明确业务字段；不猜服务 ID，不新建服务，不改 Schema。
-未完整映射时保留 `is_offer_extracted=false`，旧 Ego Lite 核验可按确切抓取对象复用。
+Firecrawl Monitor 同步例外见 `AGENTS.md` 与 `docs/monitor_price_sync.md`。
 完成状态应区分“价格等字段已同步”和“服务映射完整”，不以映射缺失否定已完成的同步。
 
 1. 从 live 证据构建 expected Offers，每条保留能直接支持价格、适用范围和限制条件的原文。

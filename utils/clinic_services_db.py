@@ -9,6 +9,7 @@ from utils.clinic_services_botox import BotoxServiceFields
 from utils.clinic_services_from_offers import ClinicServiceFromOfferFields
 from utils.clinic_service_taxonomy import service_name_enum_hint
 from utils.schema_contract import CLINIC_SERVICE_SELECT, TABLE_CLINIC_SERVICES
+from utils.supabase_access import fetch_all_rows
 from utils.supabase_rest import SupabaseRestClient
 
 TABLE = TABLE_CLINIC_SERVICES
@@ -61,12 +62,12 @@ def fetch_rows_for_refresh(
     filters: Dict[str, str] = {"service_name": f"eq.{service_name}"}
     if business_id is not None:
         filters["business_id"] = f"eq.{business_id}"
-    rows = client.fetch_rows(
+    rows = fetch_all_rows(
+        client,
         TABLE,
         CLINIC_SERVICE_SELECT,
         filters=filters,
-        limit=5000,
-        order="business_id.asc",
+        order="business_id.asc,service_id.asc",
     )
     if older_than_days is None:
         return rows

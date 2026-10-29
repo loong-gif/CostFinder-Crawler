@@ -49,12 +49,32 @@
     try {decoded=await Promise.race([image.decode().then(()=>true),new Promise(r=>setTimeout(()=>r(false),2000))]);} catch(e) {}
     backgrounds.push({src,decoded});
   }
+  // A clipping container only matters when it actually hides text or media; decorative overflow
+  // (menus, rounded corners, animation wrappers) is common and hides nothing a reader could miss.
+  const hidesContent = el => {
+    const box = el.getBoundingClientRect();
+    const outside = r => r.width > 0 && r.height > 0 && (r.bottom > box.bottom + 2 || r.top < box.top - 2 ||
+      r.right > box.right + 2 || r.left < box.left - 2);
+    for (const media of el.querySelectorAll('img,video,canvas,svg image')) {
+      if (outside(media.getBoundingClientRect())) return true;
+    }
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const n = walker.currentNode;
+      if (!n.textContent.trim() || !n.parentElement || !visible(n.parentElement)) continue;
+      const range = document.createRange(); range.selectNodeContents(n);
+      if ([...range.getClientRects()].some(outside)) return true;
+    }
+    return false;
+  };
   const unreviewed_regions = elements.filter(visible).filter(el=> {
     if(el===document.body || el===document.documentElement) return false;
     const s=getComputedStyle(el);
-    return (el.tagName.includes('-') && !el.shadowRoot) ||
-      (/auto|scroll|hidden|clip/.test(s.overflowY) && el.scrollHeight>el.clientHeight+2) ||
-      (/auto|scroll|hidden|clip/.test(s.overflowX) && el.scrollWidth>el.clientWidth+2);
+    // A custom element with no light-DOM text may render through a closed shadow root we cannot read.
+    if (el.tagName.includes('-') && !el.shadowRoot && !el.textContent.trim() && !el.querySelector('img,video,canvas')) return true;
+    const clipsY = /auto|scroll|hidden|clip/.test(s.overflowY) && el.scrollHeight>el.clientHeight+2;
+    const clipsX = /auto|scroll|hidden|clip/.test(s.overflowX) && el.scrollWidth>el.clientWidth+2;
+    return (clipsY || clipsX) && hidesContent(el);
   }).length;
   const canvases=elements.filter(el=>el.tagName==='CANVAS').filter(visible);
   regions.push(...canvases.map(el=>({kind:'canvas',...bounds(el)})));

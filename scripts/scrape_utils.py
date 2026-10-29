@@ -3,7 +3,7 @@
 
 Centralizes the `discover_scrape_path()` / `scrape_one()` logic that used to be
 duplicated in scripts/verify_clinic_service_prices.py and
-scripts/one_off/audit_membership_benefits.py, and adds a feature on top:
+one-off/audit_membership_benefits.py, and adds a feature on top:
 
 - Elements hidden via `hidden`, `aria-hidden="true"`, all-breakpoint Elementor
   `elementor-hidden-*` classes, or known screen-reader-only classes are removed

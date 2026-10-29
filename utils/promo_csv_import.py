@@ -80,13 +80,15 @@ def _build_items(row: Mapping[str, Any], *, per_unit: bool, discount_price: floa
         name = canonicalize_service_name(label)
         if name == "Others":
             continue
-        item: dict[str, Any] = {"service_name": name}
+        # item_name 保留来源标签，service_name 只用于匹配服务
+        item: dict[str, Any] = {"item_name": str(label).strip(), "service_name": name}
         quantity = _positive_quantity(value)
         if quantity is not None and not per_unit:
             item["quantity"] = int(quantity) if quantity.is_integer() else quantity
         items.append(item)
     if not items:
-        item = {"service_name": canonicalize_service_name(row.get("service_name"), row.get("offer_raw_text"))}
+        item = {"item_name": str(row.get("service_name") or "").strip() or str(row.get("offer_raw_text") or "").strip(),
+                "service_name": canonicalize_service_name(row.get("service_name"), row.get("offer_raw_text"))}
         quantity = _positive_quantity(row.get("delivered_unit"))
         if quantity is not None and not per_unit:
             item["quantity"] = int(quantity) if quantity.is_integer() else quantity

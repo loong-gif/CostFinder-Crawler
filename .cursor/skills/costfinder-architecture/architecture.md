@@ -2,9 +2,7 @@
 
 > 表名以 `utils/schema_contract.py` 为准。会员 canonical：`clinic_memberships`。
 
-Firecrawl Monitor 的用户确认规则以 `AGENTS.md` 和 `docs/monitor_price_sync.md` 为准：
-已核验优惠允许服务关联及未知年份日期为 NULL，仍同步有证据的业务字段，服务未完整匹配时
-保持 `is_offer_extracted=false`。不建服务、不改 Schema；下文其他流水线要求不因此变更。
+Firecrawl Monitor 同步例外见 `AGENTS.md` 与 `docs/monitor_price_sync.md`。
 
 ```mermaid
 graph LR
@@ -72,8 +70,7 @@ graph LR
 | `promo_offer_master` | offer_extraction_schema | 价格/门槛/指纹 |
 | `promo_offer_items` | offer_extraction_schema.items | 服务行 + 数量 |
 
-广域 membership service offers（例如 all services）在写入时展开为同一 business
-当前 `clinic_services` 目录的快照；`promo_offer_items.service_id` 仍必须非空。
+广域 offer（all services、gift card 等）保持一个 Offer，`promo_offer_items.service_id = NULL`（见 `AGENTS.md`）。
 产品优惠在正式产品目录建立前不进入可激活的 service Offer。
 
 ## Legacy 提醒

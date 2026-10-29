@@ -1,6 +1,11 @@
 # 核心依赖
 beautifulsoup4==4.12.3
 lxml>=5.4.0,<6
+markdown-it-py>=3,<5
+markdownify>=1.2,<2
+pglast>=7,<9
+playwright>=1.59.0,<2
+python-dateutil>=2.9,<3
 pandas==2.2.0
 requests>=2.31.0,<3
 

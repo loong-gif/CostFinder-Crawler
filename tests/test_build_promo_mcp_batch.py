@@ -22,6 +22,14 @@ def test_importer_resolves_database_fingerprint_and_preserves_unknown_quantity()
     assert "NULLIF(i->>'quantity','')::smallint" in source
 
 
+def test_importer_keeps_source_item_name_and_matches_service_by_canonical_name() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "SELECT m.id,NULLIF(i->>'item_name',''),s.service_id" in source
+    assert "upper(s.service_name)=upper(i->>'service_name')" in source
+    assert "i.item_name IS DISTINCT FROM s.service_name" not in source
+
+
 def test_atomic_offer_insert_defaults_missing_new_customer_flag_to_false() -> None:
     source = ATOMIC_WRITES.read_text(encoding="utf-8")
 

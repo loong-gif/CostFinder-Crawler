@@ -36,7 +36,9 @@ def test_offer_schema_embeds_service_items() -> None:
 
     assert offer["properties"]["items"]["minItems"] == 1
     assert "items" in offer["required"]
+    assert "enum" not in item["properties"]["service_name"]
     assert item["required"] == [
+        "item_name",
         "service_name",
         "quantity",
         "unit_price",

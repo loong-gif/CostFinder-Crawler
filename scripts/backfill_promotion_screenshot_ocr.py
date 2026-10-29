@@ -19,8 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.backfill_clinic_promotions_firecrawl_gemini import GEMINI_MODEL
-from scripts.extract_clinic_promotions_from_scrape_raw import llm_extract_promotions, merge_promotion_items
+from utils.gemini_client import GEMINI_MODEL, build_gemini_client  # noqa: F401
+from utils.promo_extraction import llm_extract_promotions, merge_promotion_items
 from utils.offer_extraction_llm import GeminiNativeClient
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
@@ -50,14 +50,6 @@ def without_http_proxy():
         for key, value in saved.items():
             if value is not None:
                 os.environ[key] = value
-
-
-def build_gemini_client(environ: dict[str, str] | None = None) -> GeminiNativeClient:
-    env = environ if environ is not None else os.environ
-    api_key = str(env.get("GEMINI_API_KEY") or "").strip().strip("'\"")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")
-    return GeminiNativeClient(api_key=api_key, model=GEMINI_MODEL)
 
 
 def _now() -> str:

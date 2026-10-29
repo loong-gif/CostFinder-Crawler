@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -21,14 +20,9 @@ from utils.clinic_promotions_db import upsert_promotion
 from utils.firecrawl_client import get_firecrawl_client, load_firecrawl_env, scrape_page_markdown
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url, save_scrape_response, scrape_request_fingerprint
 from utils.scrape_markdown import prepare_scrape_markdown
+from utils.promo_paths import PROMO_SUBSTRING_RE as PROMOTION_PATH_RE, has_promo_substring, normalized_host as _normalized_host  # noqa: F401
 from utils.supabase_access import fetch_all_rows, load_supabase_client
 
-PROMOTION_PATH_RE = re.compile(r"(?:special|promo)", re.IGNORECASE)
-
-
-def _normalized_host(url: str) -> str:
-    host = (urlparse(url).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
 
 
 def map_links_to_urls(links: Iterable[Any]) -> list[str]:
@@ -60,7 +54,7 @@ def discover_promotion_urls(website: str, mapped_urls: Iterable[str]) -> list[st
         parsed = urlparse(canonical)
         if not canonical or _normalized_host(canonical) != root_host:
             continue
-        if not PROMOTION_PATH_RE.search(parsed.path or ""):
+        if not has_promo_substring(parsed.path or ""):
             continue
         if canonical not in seen:
             seen.add(canonical)
