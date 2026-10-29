@@ -5,14 +5,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,7 +25,8 @@ from utils.promo_offer_audit import (  # noqa: E402
     audit_rows,
 )
 from utils.schema_contract import OFFER_MASTER_WITH_ITEMS_SELECT  # noqa: E402
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 TABLE_NAME = "promo_offer_master"
 DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports"
@@ -43,45 +42,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_supabase_client() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    service_role_key = get_supabase_writer_key()
-    if not base_url or not service_role_key:
-        raise RuntimeError("缺少 SUPABASE_URL 或 writer key")
-    return SupabaseRestClient(base_url, service_role_key)
-
-
-def fetch_all_rows(client: SupabaseRestClient, *, limit: Optional[int]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    offset = 0
-    remaining = limit
-    while True:
-        page_limit = PAGE_SIZE if remaining is None else min(PAGE_SIZE, remaining)
-        batch = client.fetch_rows(
-            TABLE_NAME,
-            OFFER_MASTER_WITH_ITEMS_SELECT,
-            limit=page_limit,
-            offset=offset,
-            order="id.asc",
-        )
-        if not batch:
-            break
-        rows.extend(batch)
-        if len(batch) < page_limit:
-            break
-        offset += page_limit
-        if remaining is not None:
-            remaining -= len(batch)
-            if remaining <= 0:
-                break
-    return rows
+def fetch_offer_rows(client: SupabaseRestClient, *, limit: Optional[int]) -> List[Dict[str, Any]]:
+    return fetch_all_rows(client, TABLE_NAME, OFFER_MASTER_WITH_ITEMS_SELECT, page_size=PAGE_SIZE, order="id.asc", limit=limit)
 
 
 def fetch_lookup_sets(client: SupabaseRestClient) -> tuple[set, set, dict]:
-    master_rows = client.fetch_rows("master_business_info", "business_id", limit=5000)
-    plan_rows = client.fetch_rows("clinic_memberships", "plan_id", limit=5000)
-    service_rows = client.fetch_rows("clinic_services", "service_id,business_id,service_name", limit=5000)
+    master_rows = fetch_all_rows(client, "master_business_info", "business_id", order="business_id.asc")
+    plan_rows = fetch_all_rows(client, "clinic_memberships", "plan_id", order="plan_id.asc")
+    service_rows = fetch_all_rows(
+        client, "clinic_services", "service_id,business_id,service_name", order="service_id.asc"
+    )
     master_ids = {row["business_id"] for row in master_rows if row.get("business_id") is not None}
     plan_ids = {row["plan_id"] for row in plan_rows if row.get("plan_id") is not None}
     svc_by_id = {row["service_id"]: row for row in service_rows if row.get("service_id") is not None}
@@ -179,8 +149,8 @@ def main() -> None:
     result_dir = Path(args.result_dir).expanduser().resolve()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    client = load_supabase_client()
-    rows = fetch_all_rows(client, limit=args.limit)
+    client = load_supabase_client(PROJECT_ROOT, role="writer")
+    rows = fetch_offer_rows(client, limit=args.limit)
     master_ids, plan_ids, svc_by_id = fetch_lookup_sets(client)
 
     exact_duplicates = build_exact_duplicate_groups(rows)

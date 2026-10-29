@@ -122,7 +122,7 @@ def run(csv_path: Path, *, output: Path, apply: bool) -> dict[str, Any]:
             service_id = service_ids.get((int(entry.master["business_id"]), service_name))
             if service_id is None:
                 unresolved_services.append({"source_row": entry.source_row, "business_id": entry.master["business_id"], "service_name": service_name})
-            items.append({key: value for key, value in item.items() if key != "service_name"} | {"item_name": service_name, "service_id": service_id})
+            items.append({key: value for key, value in item.items() if key != "service_name"} | {"service_id": service_id})
         if items:
             resolved_entries.append((entry, items))
     eligible = [(entry, items) for entry, items in resolved_entries if entry.master["offer_fingerprint"] not in existing_fingerprints]

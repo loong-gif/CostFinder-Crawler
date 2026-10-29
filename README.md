@@ -52,6 +52,8 @@ python scripts/sag_persistent_pilot.py --city Tucson --clinic-limit 20
 
 Run the test suite with `python -m pytest`.
 
+**2026-10-20:** Monitor variant reconciliation (expected/skipped/captures), batch gate checks F–I, and NakedMD repair notes — non-member tiers map to member `regular_price`, not separate offers. Plans now write `delivered_units` as an integer (the column is `smallint`; `2.0` was rejected and left 8 Oct-18 journals in review). Gate G now ignores thresholds ("minimum 20 units", "50+") and only fails when no item delivers the stated fixed count; full-database gate A–I is at zero (11 documented retained rows) after `one-off/fix_batch_gate_20261020.py`. See `docs/monitor_price_sync.md`.
+
 ## Repository conventions
 
 - `schema/live_schema_snapshot.json` is a checked-in contract of the live database.

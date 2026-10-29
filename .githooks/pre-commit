@@ -1,0 +1,5 @@
+#!/bin/sh
+# 拒绝一次性脚本：one-off/ 不得存在，scripts/ 新脚本必须接入流程入口，代码目录不得出现带日期的文件
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+exec .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_no_one_off_scripts.py

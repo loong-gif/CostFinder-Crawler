@@ -31,8 +31,8 @@ from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS, TABLE_CLINIC_PROMOTIONS, TABLE_PROMO_OFFER_MASTER
 from utils.service_price_guard import derive_offer_item_pricing
 from utils.offer_purchase_semantics import (
-    canonical_offer_semantics, normalize_purchase_offers, offer_update_identity,
-    service_supported_by_source, usable_unit_price,
+    canonical_offer_semantics, new_customer_tier_merge_patch, normalize_purchase_offers,
+    offer_service_tier_identity, offer_update_identity, service_supported_by_source, usable_unit_price,
 )
 
 RouteKind = Literal["service", "promo", "quarantine"]
@@ -111,9 +111,15 @@ def build_master_from_offer(
     items_in = offer.get("items") or []
     items_in = derive_offer_item_pricing(offer, evidence=str(offer.get("offer_raw_text") or ""))
     first = items_in[0] if items_in else {}
+    is_pkg = offer.get("is_package") is True or offer.get("purchase_type") == "bundle"
+    sibling_count = len(items_in)
+    master_scope = str(offer.get("offer_raw_text") or "")
+    if sibling_count > 1 or is_pkg:
+        master_scope = str(first.get("item_name") or first.get("service_name") or master_scope)
     service_name = canonicalize_service_name(
         first.get("service_name"),
-        offer.get("offer_raw_text"),
+        first.get("service_area"),
+        master_scope if sibling_count <= 1 and not is_pkg else first.get("item_name") or first.get("service_name"),
     ) or "Others"
     master: dict[str, Any] = {
         "business_id": business_id,
@@ -169,10 +175,13 @@ def build_master_from_offer(
             or raw.get("service_name")
             or "Offer item"
         ).strip()
+        item_scope = raw_text
+        if sibling_count > 1 or is_pkg:
+            item_scope = str(raw.get("item_name") or raw.get("service_name") or "")
         name = canonicalize_service_name(
             raw.get("service_name"),
             raw.get("service_area"),
-            raw_text,
+            item_scope,
         ) or str(raw.get("service_name") or "Offer item")
         # Keep the source-facing title separate from the canonical name used
         # for service matching. Unknown dictionary values must remain visible
@@ -319,16 +328,50 @@ def persist_promo_offer(
     evidence: str,
     membership_plan_id: Optional[int] = None,
     seen_fingerprints: set[str] | None = None,
+    _skip_purchase_normalize: bool = False,
+    allow_unmapped_items: bool = False,
+    trust_persisted_offer: bool = False,
 ) -> dict[str, Any]:
-    normalized, purchase_reviews = normalize_purchase_offers([offer], evidence)
-    if len(normalized) != 1:
-        return {"accepted": False, "reason": purchase_reviews[0]["reason"] if purchase_reviews else "purchase_requires_split",
-                "action": "quarantined"}
-    offer = normalized[0]
-    decision = validate_offer_evidence(
-        offer,
-        evidence,
-    )
+    if not _skip_purchase_normalize:
+        normalized, purchase_reviews = normalize_purchase_offers([offer], evidence)
+        rejected = [review for review in purchase_reviews if review.get("reason") != "generic_offer_scope"]
+        if rejected:
+            return {"accepted": False, "reason": rejected[0]["reason"], "action": "quarantined"}
+        if len(normalized) > 1:
+            writes = [
+                persist_promo_offer(
+                    client,
+                    business_id=business_id,
+                    promotion_id=promotion_id,
+                    source_url=source_url,
+                    offer=branch,
+                    evidence=evidence,
+                    membership_plan_id=membership_plan_id,
+                    seen_fingerprints=seen_fingerprints,
+                    _skip_purchase_normalize=True,
+                    allow_unmapped_items=allow_unmapped_items,
+                    trust_persisted_offer=trust_persisted_offer,
+                )
+                for branch in normalized
+            ]
+            accepted = [write for write in writes if write.get("accepted")]
+            if len(accepted) == len(writes):
+                return {"accepted": True, "action": "inserted", "split_writes": writes, "promos": len(accepted)}
+            return {
+                "accepted": False,
+                "reason": next((w.get("reason") for w in writes if not w.get("accepted")), "purchase_split_partial"),
+                "action": "quarantined",
+                "split_writes": writes,
+            }
+        offer = normalized[0] if normalized else offer
+    if trust_persisted_offer:
+        from utils.offer_evidence_validator import OfferEvidenceDecision
+        decision = OfferEvidenceDecision(True, "", offer, ())
+    else:
+        decision = validate_offer_evidence(
+            offer,
+            evidence,
+        )
     if not decision.accepted:
         return {
             "accepted": False,
@@ -382,9 +425,10 @@ def persist_promo_offer(
         business_id=business_id,
         items=items,
         fallback_text=str(validated_offer.get("offer_raw_text") or ""),
+        is_package=validated_offer.get("is_package") is True or validated_offer.get("purchase_type") == "bundle",
     )
     # Only explicit blanket wording can remain outside the service catalogue.
-    if not blanket and any(item.get("service_id") is None for item in linked_items):
+    if not allow_unmapped_items and not blanket and any(item.get("service_id") is None for item in linked_items):
         return {
             "accepted": False,
             "reason": "unmapped_service_item",
@@ -435,8 +479,17 @@ def persist_promo_offer(
         )
         if any(int(row["business_id"]) != int(business_id) for row in services if row.get("business_id") is not None):
             return {"accepted": False, "reason": "service_business_mismatch", "action": "quarantined"}
-        if any(row.get("service_name") and not service_supported_by_source(row["service_name"], master["offer_raw_text"]) for row in services):
-            return {"accepted": False, "reason": "service_not_named_in_source", "action": "quarantined"}
+        by_id = {int(row["service_id"]): row for row in services if row.get("service_id") is not None}
+        for item in linked_items:
+            sid = item.get("service_id")
+            if sid is None:
+                continue
+            row = by_id.get(int(sid))
+            if not row or not row.get("service_name"):
+                continue
+            scope = str(item.get("item_name") or item.get("service_name") or master["offer_raw_text"])
+            if not service_supported_by_source(row["service_name"], scope):
+                return {"accepted": False, "reason": "service_not_named_in_source", "action": "quarantined"}
     # Live SQL computes fingerprints from items and prices. Compare source
     # identity and semantics directly instead of trusting a Python fingerprint.
     existing_rows = client.fetch_rows(
@@ -470,6 +523,14 @@ def persist_promo_offer(
         matches = [row for row in existing_rows if
             normalize_offer_raw_text(row.get("offer_raw_text")) == normalize_offer_raw_text(master.get("offer_raw_text"))
             and all(row.get(k) == master.get(k) for k in ("is_membership_required", "is_new_customer_required", "conditions"))]
+    tier_key = offer_service_tier_identity(master, linked_items)
+    if not matches:
+        tier_matches = [row for row in existing_rows if row.get("is_active")
+                        and offer_service_tier_identity(row, row.get("promo_offer_items") or []) == tier_key]
+        if len(tier_matches) == 1:
+            matches = tier_matches
+        elif len(tier_matches) > 1:
+            return {"accepted": False, "reason": "ambiguous_offer_identity", "action": "quarantined"}
     if len(matches) > 1:
         return {"accepted": False, "reason": "ambiguous_offer_identity", "action": "quarantined"}
     if matches:
@@ -490,7 +551,12 @@ def persist_promo_offer(
         ]
         fields = ("regular_price", "discount_price", "discount_percent", "discount_amount",
                   "price_model", "is_package", "is_new_customer_required", "is_membership_required", "conditions")
-        patch = {field: master.get(field) for field in fields if existing.get(field) != master.get(field)}
+        tier_patch = new_customer_tier_merge_patch(existing, master)
+        if tier_patch is not None:
+            patch = {field: tier_patch[field] for field in fields if field in tier_patch
+                     and existing.get(field) != tier_patch[field]}
+        else:
+            patch = {field: master.get(field) for field in fields if existing.get(field) != master.get(field)}
         # SQL retains structural comparisons when the source states both
         # prices. They are QA arithmetic, not additional extracted facts.
         if master.get("regular_price") is not None and master.get("discount_price") is not None:
@@ -525,7 +591,16 @@ def persist_promo_offer(
                           {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()})
         if len(activated) != 1:
             return {"accepted": False, "reason": "offer_activation_conflict", "action": "quarantined"}
-        verified = _verify_offer_write(client, offer_id, master, linked_items)
+        if tier_patch is not None:
+            for row in existing_rows:
+                if int(row["id"]) == offer_id or not row.get("is_active"):
+                    continue
+                if offer_service_tier_identity(row, row.get("promo_offer_items") or []) != tier_key:
+                    continue
+                client.update_row(TABLE_PROMO_OFFER_MASTER, {"id": f"eq.{row['id']}", "is_active": "is.true"},
+                                  {"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()})
+        expected_master = {**existing, **master, **(tier_patch or {})}
+        verified = _verify_offer_write(client, offer_id, expected_master, linked_items)
         if not verified:
             return {"accepted": False, "reason": "offer_readback_mismatch", "action": "quarantined", "offer_id": offer_id}
         return {"accepted": True, "action": "updated", "offer_id": offer_id, "items": len(linked_items)}

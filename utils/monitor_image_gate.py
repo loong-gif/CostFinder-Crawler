@@ -1,4 +1,4 @@
-"""File policy checked at the final REST boundary, including frozen journals."""
+"""File policy checked at the pending-SQL rendering boundary (the control file lives next to pending_sql/)."""
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 

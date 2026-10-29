@@ -11,10 +11,13 @@ from utils.monitor_image_gate import image_write_block
 from utils.monitor_price_store import atomic_json, now
 from utils.monitor_price_extract import extraction_schema, extract_evidence
 from utils.offer_extraction_llm import GeminiNativeClient
-from utils.monitor_price_rest_writer import _steps, apply_plan
+from utils.monitor_pending_sql import render_pending
+from utils.monitor_price_writer import render_apply
 from test_monitor_price_plan import SOURCE, _graph, _offer, _evidence
 from utils.monitor_price_plan import build_plan
-from test_monitor_price_rest_writer import FakeRest, plan_for as rest_plan
+
+SERVICE_NAMES = ['Botox', 'Dermal Filler', 'Others']
+from test_monitor_price_writer import plan_for as rest_plan, state as writer_state
 
 
 def image_offer():
@@ -94,7 +97,7 @@ def test_two_blind_rounds_batch_limits_and_no_candidate_truth_or_db_inputs(tmp_p
         def create_json_response_with_images(self,prompt,**kw):
             self.calls.append((prompt,kw))
             return {'offers':[],'all_offers_extracted':True},{'model':'gemini-3.5-flash-lite','raw_response':{}}
-    client=Client();result=blind_image_reads(browser,tmp_path,client,extraction_schema())
+    client=Client();result=blind_image_reads(browser,tmp_path,client,extraction_schema(SERVICE_NAMES))
     assert [len(k['images']) for _,k in client.calls]==[8,3,8,3]
     for _,call in client.calls:
         assert len(call['images'])<=8 and sum(len(data) for data,mime in call['images'])<=10*1024*1024
@@ -120,7 +123,7 @@ def test_legacy_receipt_is_image_evidence_even_when_helper_says_no_image(tmp_pat
         def create_json_response(self,*a,**kw):return {'offers':[_offer()], 'all_offers_extracted':True}
     browser={'accessible':True,'complete':True,'image_review_required':False,'text':_offer()['offer_raw_text'],
              'prior_visual_receipt':{'job_id':'old'},'image_write_enabled':False}
-    evidence=extract_evidence({'url':SOURCE['url']},browser,tmp_path,Client())
+    evidence=extract_evidence({'url':SOURCE['url']},browser,tmp_path,Client(),SERVICE_NAMES)
     plan=build_plan(SOURCE,_graph(),evidence,{})
     assert plan['operations']==[] and evidence['image_policy']['hold_parent_fields']
     plan['evidence_path']=str(tmp_path/'evidence.json')
@@ -138,7 +141,11 @@ def test_shadow_keeps_parent_fields_and_image_siblings_while_text_price_updates(
     assert plan['status']=='ready'
     parent=next(op for op in plan['operations'] if op['table']=='clinic_promotions')
     assert parent['values']=={'is_offer_extracted':False}
-    assert not any(op['table']=='promo_offer_master' and op['id']==99 for op in _steps(plan))
+    sql=render_apply(plan,{})
+    updates=[line for line in sql.splitlines() if line.strip().startswith('update public.')]
+    assert updates and not any('where id = 99' in line or 'offer_item_id = 98' in line for line in updates)
+    # The image sibling is version-checked after the writes instead of being touched.
+    assert "(99, " in next(l for l in sql.splitlines() if 'unexpected_row_or_trigger_change: promo_offer_master' in l)
     assert next(op for op in plan['operations'] if op['table']=='promo_offer_master')['values']['discount_price']==400
 
 
@@ -175,35 +182,30 @@ def test_empty_candidates_incomplete_proof_cannot_deactivate_or_change_parent(tm
         assert image_write_block(plan,tmp_path/'journals')=='breakpoint_coverage_incomplete'
 
 
-def test_image_switch_off_prevents_rest_dml_without_poisoning_journal(tmp_path):
-    client=FakeRest();plan=rest_plan(client)
+def test_image_switch_off_prevents_pending_sql_without_leaving_a_file(tmp_path):
+    plan=rest_plan()
     plan['image_policy']={'depends_on_images':True,'dual_read_verified':True}
-    receipt=apply_plan(plan,client,tmp_path/'journals',{})
-    assert receipt['category']=='image_writes_disabled' and not client.writes
-    assert not list((tmp_path/'journals').glob('*.json'))
+    receipt=render_pending(plan,{},tmp_path)
+    assert receipt['category']=='image_writes_disabled' and receipt['status']=='review'
+    assert not (tmp_path/'pending_sql').exists()
 
 
-def test_global_pause_stops_text_dml_at_final_boundary(tmp_path):
-    client=FakeRest();plan=rest_plan(client)
+def test_global_pause_stops_text_sql_at_the_final_boundary(tmp_path):
+    plan=rest_plan()
     plan['image_policy']={'depends_on_images':False}
     atomic_json(tmp_path/'price_sync_control.json',{'write_enabled':False,'image_write_enabled':True})
-    assert apply_plan(plan,client,tmp_path/'journals',{})['category']=='writes_disabled'
-    assert not client.writes
+    assert render_pending(plan,{},tmp_path)['category']=='writes_disabled'
+    assert not (tmp_path/'pending_sql').exists()
 
 
-def test_pause_between_steps_stops_remaining_dml_and_preserves_journal(tmp_path):
-    client=FakeRest();plan=rest_plan(client)
-    write=client._write
-    def pause_after_write(*args,**kwargs):
-        result=write(*args,**kwargs)
-        atomic_json(tmp_path/'price_sync_control.json',{'write_enabled':False})
-        return result
-    client._write=pause_after_write
-    receipt=apply_plan(plan,client,tmp_path/'journals',{})
-    assert receipt['category']=='writes_disabled' and receipt['resume_required']
-    assert len(client.writes)==1
-    journal=json.loads(next((tmp_path/'journals').glob('*.json')).read_text())
-    assert journal['next_step']==1 and journal['requests_sent']==1
+def test_pause_after_a_rendered_file_blocks_further_files_and_keeps_the_rendered_one(tmp_path):
+    plan=rest_plan();plan['image_policy']={'depends_on_images':False};plan['event_id']='first'
+    receipt=render_pending(plan,{},tmp_path)
+    assert receipt['status']=='pending_sql' and Path(receipt['sql_path']).is_file()
+    atomic_json(tmp_path/'price_sync_control.json',{'write_enabled':False})
+    second=dict(plan,event_id='second')
+    assert render_pending(second,{},tmp_path)['category']=='writes_disabled'
+    assert [p.name.split('_',1)[1] for p in (tmp_path/'pending_sql').glob('*.sql')]==['first.sql']
 
 
 def test_hidden_iframe_skips_subtree_and_query_failure_stays_partial():
@@ -235,7 +237,7 @@ def test_obscured_dom_and_dual_agreement_cannot_release_hidden_price(tmp_path,mo
             return {'offers':[candidate],'all_offers_extracted':True}
     browser={'accessible':True,'complete':False,'text':candidate['offer_raw_text'],
              'failures':['image_obscured'],'image_review_required':True,'image_write_enabled':True}
-    evidence=extract_evidence({'url':'https://test'},browser,tmp_path,Client())
+    evidence=extract_evidence({'url':'https://test'},browser,tmp_path,Client(),SERVICE_NAMES)
     assert not evidence['image_candidates'] and not evidence['complete']
     assert all(o['visibility']=='unverified' for o in evidence['offers'])
     assert evidence['image_rejections'][0]['reason']=='image_obscured'
@@ -305,23 +307,26 @@ def test_image_retry_budget_and_deadline_do_not_need_model_call(tmp_path):
     class Client:
         def create_json_response_with_images(self,*a,**k):raise AssertionError('no remaining budget')
     with pytest.raises(RuntimeError,match='image_stage_timeout'):
-        blind_image_reads(browser,tmp_path,Client(),extraction_schema())
+        blind_image_reads(browser,tmp_path,Client(),extraction_schema(SERVICE_NAMES))
 
 
 def test_flag_only_change_and_independent_text_offer_preserve_protected_image_sibling(tmp_path):
-    client=FakeRest()
-    sibling=deepcopy(client.state['promo_offer_master'][0]);sibling.update(id=21,offer_raw_text='Other image offer $100')
-    client.state['promo_offer_master'].append(sibling)
-    item=deepcopy(client.state['promo_offer_items'][0]);item.update(offer_item_id=31,offer_id=21,item_name='Other')
-    client.state['promo_offer_items'].append(item)
-    before=deepcopy((sibling,item))
-    plan=rest_plan(client)
+    data=writer_state()
+    sibling=deepcopy(data['offers'][0]);sibling.update(id=21,offer_raw_text='Other image offer $100')
+    data['offers'].append(sibling)
+    item=deepcopy(data['items'][0]);item.update(offer_item_id=31,offer_id=21,item_name='Other')
+    data['items'].append(item)
+    plan=rest_plan(data)
     plan['operations'].append({'table':'clinic_promotions','action':'update','id':10,'values':{'is_offer_extracted':False}})
     plan['image_policy']={'version':1,'depends_on_images':False,'hold_parent_fields':True}
-    receipt=apply_plan(plan,client,tmp_path/'journals',{'offer_ids':[21]})
-    assert receipt['status']=='completed',receipt
-    assert next(r for r in client.state['promo_offer_master'] if r['id']==21)==before[0]
-    assert next(r for r in client.state['promo_offer_items'] if r['offer_item_id']==31)==before[1]
+    receipt=render_pending(plan,{'offer_ids':[21]},tmp_path)
+    assert receipt['status']=='pending_sql',receipt
+    sql=Path(receipt['sql_path']).read_text()
+    # The protected sibling and its item are snapshotted before and compared after the batch.
+    assert "v_protected := " in sql and "raise exception 'protected_row_changed'" in sql
+    assert "promo_offer_master where id = any('{21}'::bigint[])" in sql
+    assert "update public.promo_offer_master set discount_price = 80 where id = 20;" in sql
+    assert "where id = 21" not in sql and "offer_item_id = 31" not in sql.split("set constraints all immediate;")[0].split("update public.promo_offer_items")[-1]
 
 
 def test_404_requires_both_response_visible_page_and_saved_screenshot(tmp_path):
@@ -363,7 +368,7 @@ def test_price_in_dom_with_image_only_minimum_is_shadowed(tmp_path,monkeypatch):
         def create_json_response(self,*a,**kw):return {'offers':[dom],'all_offers_extracted':True}
     monkeypatch.setattr('utils.monitor_price_extract.blind_image_reads',lambda *a:{'accepted':[picture],'rejected':[],'complete':True})
     result=extract_evidence({'url':SOURCE['url']},{'url':SOURCE['url'],'text':text,'accessible':True,
-        'complete':True,'image_review_required':True,'image_write_enabled':False},tmp_path,Client())
+        'complete':True,'image_review_required':True,'image_write_enabled':False},tmp_path,Client(),SERVICE_NAMES)
     assert result['offers']==[] and len(result['image_candidates'])==1
     assert result['image_policy']['hold_parent_fields'] and not result['complete']
 
@@ -380,7 +385,7 @@ def test_dom_image_price_conflict_holds_only_conflicting_candidate(tmp_path,monk
         def create_json_response(self,*a,**kw):return {'offers':[dom,facial],'all_offers_extracted':True}
     monkeypatch.setattr('utils.monitor_price_extract.blind_image_reads',lambda *a:{'accepted':[picture],'rejected':[],'complete':True})
     result=extract_evidence({'url':SOURCE['url']},{'url':SOURCE['url'],'text':text,'accessible':True,
-        'complete':True,'image_review_required':True,'image_write_enabled':True},tmp_path,Client())
+        'complete':True,'image_review_required':True,'image_write_enabled':True},tmp_path,Client(),SERVICE_NAMES)
     assert [o['offer_raw_text'] for o in result['offers']]==['Facial special $99']
     assert result['image_rejections'][-1]['reason']=='image_text_price_conflict'
 
@@ -539,7 +544,7 @@ def test_both_blind_batches_keep_footer_context_without_cross_round_pixels(tmp_p
         def create_json_response_with_images(self,prompt,**kwargs):
             self.inputs.append([body.decode() for body,mime in kwargs['images']])
             return {'offers':[],'all_offers_extracted':True},{'model':'gemini-3.5-flash-lite','raw_response':{}}
-    client=Client();blind_image_reads(browser,tmp_path,client,extraction_schema())
+    client=Client();blind_image_reads(browser,tmp_path,client,extraction_schema(SERVICE_NAMES))
     assert client.inputs==[['a7','a8','a0','a1','a2','a3','a4','a5'],['a7','a8','a6'],
                           ['b7','b8','b0','b1','b2','b3','b4','b5'],['b7','b8','b6']]
 

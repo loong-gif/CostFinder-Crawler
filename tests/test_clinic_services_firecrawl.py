@@ -423,3 +423,35 @@ def test_process_business_persists_direct_public_raw_evidence_during_dry_run(mon
     assert result["status"] == "no_accepted_services"
     assert len(saved) == 4
     assert all(item["success"] for item in saved)
+
+
+class _CappedClient:
+    """Mimics PostgREST max-rows: a single request never returns more than 1000 rows."""
+
+    MAX_ROWS = 1000
+
+    def __init__(self, tables: dict[str, list[dict]]) -> None:
+        self.tables = tables
+
+    def fetch_rows(self, table, select, *, filters=None, limit=None, offset=None, order=None):
+        rows = self.tables[table][offset or 0:]
+        cap = min(limit, self.MAX_ROWS) if limit is not None else self.MAX_ROWS
+        return rows[:cap]
+
+
+def test_load_targets_reads_past_postgrest_row_cap() -> None:
+    from scripts import run_clinic_services_firecrawl as runner
+
+    client = _CappedClient(
+        {
+            "master_business_info": [
+                {"business_id": index, "name": f"b{index}", "website": f"https://b{index}.example"}
+                for index in range(1, 1201)
+            ],
+            "clinic_services": [{"service_id": index, "business_id": index} for index in range(1, 1201)],
+        }
+    )
+    targets = runner.load_targets(
+        client, limit=None, business_id=None, after_business_id=None, refresh_only=True, retry_failed=False
+    )
+    assert len(targets) == 1200

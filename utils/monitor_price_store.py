@@ -81,35 +81,10 @@ def run_lock(root: Path):
             fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def manual_protections(snapshot: dict, previous: dict | None = None) -> dict:
-    """Conservatively retain traceable business corrections and admin decisions."""
+def manual_protections(previous: dict | None = None) -> dict:
+    """Protections are only the entries and IDs added to the file by hand."""
     result = dict(previous or {})
-    entries = list(result.get("entries", []))
-    known = {(row.get("table"), str(row.get("id")), row.get("evidence_id")) for row in entries}
-    for row in snapshot.get("confirmations", []):
-        # A dismissed confirmation is not a confirmed business value.
-        if row.get("status") == "dismissed":
-            continue
-        entry = {"table": "promo_offer_master", "id": row["offer_id"],
-                 "reason": "business_confirmation_" + str(row.get("kind")),
-                 "evidence_id": row["id"], "recorded_at": row.get("updated_at")}
-        key = (entry["table"], str(entry["id"]), entry["evidence_id"])
-        if key not in known:
-            entries.append(entry); known.add(key)
-    for row in snapshot.get("audit", []):
-        target = row.get("target_type")
-        table = {"deal": "promo_offer_master", "offer": "promo_offer_master",
-                 "promotion": "clinic_promotions", "item": "promo_offer_items",
-                 "service": "clinic_services", "membership": "clinic_memberships"}.get(target)
-        if not table or not str(row.get("target_id", "")).isdigit():
-            continue
-        entry = {"table": table, "id": int(row["target_id"]),
-                 "reason": "admin_" + str(row.get("action")),
-                 "evidence_id": row["id"], "recorded_at": row.get("created_at")}
-        key = (entry["table"], str(entry["id"]), entry["evidence_id"])
-        if key not in known:
-            entries.append(entry); known.add(key)
-    result.update(schema_version=1, updated_at=now(), entries=entries)
+    result.update(schema_version=1, updated_at=now(), entries=list(result.get("entries", [])))
     for key in ("offer_ids", "item_ids", "promotion_ids", "membership_ids", "service_ids"):
         result.setdefault(key, [])
     return result

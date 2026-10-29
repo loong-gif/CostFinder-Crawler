@@ -76,5 +76,5 @@ description: Use when changing CostFinder crawlers, Firecrawl raw tables, LLM ex
 域级 trace 可对照示例跑断言：
 
 ```bash
-python .cursor/skills/costfinder-architecture/scripts/validate_trace.py examples/louloumedspa.com.trace.json
+python .cursor/skills/costfinder-architecture/scripts/validate_trace.py <domain>.trace.json  # 示例见 examples/louloumedspa.com.md
 ```

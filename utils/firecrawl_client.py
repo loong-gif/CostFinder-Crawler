@@ -190,6 +190,31 @@ def _build_firecrawl_client(
     return Firecrawl(**client_kwargs)
 
 
+class SelfHostedFirecrawl:
+    """爬虫层统一使用的自托管 Firecrawl（v1 API）。"""
+
+    def __init__(self, api_url: str, api_key: str = "", timeout: float = 120) -> None:
+        self.api_url = api_url.rstrip("/")
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.trust_env = False
+        self.session.headers["Content-Type"] = "application/json"
+        if api_key:
+            self.session.headers["Authorization"] = f"Bearer {api_key}"
+
+    def scrape(self, url: str, formats: tuple[str, ...] = ("markdown",)) -> dict[str, Any]:
+        response = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout,
+                                     json={"url": url, "formats": list(formats), "onlyMainContent": True})
+        response.raise_for_status()
+        return response.json()["data"]
+
+
+def self_hosted_firecrawl(*, project_root: Path | None = None) -> SelfHostedFirecrawl:
+    load_firecrawl_env(project_root)
+    return SelfHostedFirecrawl(os.environ["FIRECRAWL_SELF_HOSTED_API_URL"].strip("'\""),
+                               os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""))
+
+
 def scrape_page_markdown(fc: Any, url: str) -> tuple[str, dict[str, Any]]:
     """Scrape one URL with project defaults (onlyMainContent + blockAds + denoise)."""
     from utils.firecrawl_scrape_raw_db import DEFAULT_SCRAPE_FORMATS

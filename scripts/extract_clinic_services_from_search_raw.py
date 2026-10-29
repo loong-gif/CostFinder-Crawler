@@ -25,6 +25,7 @@ from utils.search_raw_service_evidence import (
     pick_service_evidence_for_business,
     resolve_business_for_website,
 )
+from utils.supabase_access import fetch_all_rows
 from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 
 SYSTEM_PROMPT = (
@@ -130,10 +131,8 @@ def businesses_to_process(
         )
         return rows
     if repair_article_urls:
-        service_rows = client.fetch_rows(
-            TABLE_CLINIC_SERVICES,
-            "business_id,source_url",
-            limit=5000,
+        service_rows = fetch_all_rows(
+            client, TABLE_CLINIC_SERVICES, "business_id,source_url", order="service_id.asc"
         )
         bad_business_ids = sorted(
             {
@@ -155,10 +154,8 @@ def businesses_to_process(
             if rows:
                 businesses.append(rows[0])
         return businesses
-    return client.fetch_rows(
-        "master_business_info",
-        "business_id,name,website",
-        limit=5000,
+    return fetch_all_rows(
+        client, "master_business_info", "business_id,name,website", order="business_id.asc"
     )
 
 
@@ -182,10 +179,8 @@ def run(
         limit=500,
     )
     search_rows = [row for row in search_rows if row.get("success")]
-    businesses = client.fetch_rows(
-        "master_business_info",
-        "business_id,name,website,address,city",
-        limit=5000,
+    businesses = fetch_all_rows(
+        client, "master_business_info", "business_id,name,website,address,city", order="business_id.asc"
     )
     multilocation_hosts = detect_multilocation_hosts(
         [

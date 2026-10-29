@@ -66,6 +66,16 @@ def test_price_change_preserves_master_and_item_ids():
     assert not any("offer_fingerprint" in op["values"] or "updated_at" in op["values"] for op in plan["operations"])
 
 
+def test_inserted_item_units_are_integer_for_smallint_column():
+    graph = _graph()
+    graph["offers"], graph["items"] = [], []
+    offer = _offer(items=[{"item_name": "Botox", "service_id": 12, "delivered_units": 50.0, "unit_price": None}])
+    plan = build_plan(SOURCE, graph, _evidence([offer]), {})
+    assert plan["status"] == "ready", plan
+    inserted = [op["values"] for op in plan["operations"] if op["table"] == "promo_offer_items" and op["action"] == "insert"]
+    assert inserted and all(type(v["delivered_units"]) is int for v in inserted)
+
+
 def _changed_condition_offer():
     return _offer(offer_raw_text=RAW + ". Not valid with other offers", conditions=["Not valid with other offers"])
 
@@ -228,7 +238,8 @@ def test_existing_service_dictionary_alias_resolves_only_unique_catalog_match():
     offer = _offer(items=[{"item_name":"Botulinum toxin","delivered_units":50}])
     plan = build_plan(SOURCE, graph, _evidence([offer]), {})
     assert plan["status"] == "ready", plan
-    assert _operation(plan, "promo_offer_items", 5)["values"]["item_name"] == "Neurotoxin"
+    values = _operation(plan, "promo_offer_items", 5)["values"]
+    assert values["item_name"] == "Botulinum toxin" and values.get("service_id", 12) == 12
     graph["services"].append({"service_id":13,"business_id":7,"service_name":"Botulinum toxin","service_area":None})
     ambiguous = build_plan(SOURCE, graph, _evidence([offer]), {})
     assert ambiguous["status"] == "ready", ambiguous
@@ -590,3 +601,81 @@ def test_legacy_null_conditions_match_empty_current_conditions_preserving_id():
     assert plan["status"] == "ready",plan
     assert all(op["action"] == "update" for op in plan["operations"])
     assert _operation(plan,"promo_offer_master",4)["values"]["discount_price"] == 400
+
+
+def test_empty_page_without_live_rows_is_a_noop_not_review():
+    graph = _graph()
+    graph["promotions"][0]["is_active"] = False
+    graph["offers"][0]["is_active"] = False
+    evidence = _evidence([], complete=False, markdown="Botox treatment information")
+    plan = build_plan(SOURCE, graph, evidence, {})
+    assert plan["status"] == "ready" and plan["operations"] == [], plan
+    assert plan["notes"][-1]["reason"] == "no_offers_and_no_live_rows"
+
+
+def test_empty_page_with_live_rows_still_requires_review():
+    evidence = _evidence([], complete=False, markdown="Botox treatment information")
+    plan = build_plan(SOURCE, _graph(), evidence, {})
+    assert plan["status"] == "review"
+    assert plan["review"][-1]["reason"] == "inaccessible_empty_or_unresolved_evidence"
+
+
+def test_unsupported_item_quantity_is_written_as_null_not_reviewed():
+    raw = "Botox Regular $450 Special $350"
+    offer = _offer(offer_raw_text=raw, items=[{"item_name": "Botox", "service_id": 12, "delivered_units": 50}])
+    graph = _graph()
+    graph["offers"][0]["offer_raw_text"] = raw
+    plan = build_plan(SOURCE, graph, _evidence([offer]), {})
+    assert plan["status"] == "ready", plan
+    assert not any(r["reason"] == "unsupported_scope_or_quantity" for r in plan["review"])
+    assert _operation(plan, "promo_offer_items", 5)["values"]["delivered_units"] is None
+
+
+def test_unsupported_new_customer_flag_is_cleared_only_when_page_is_silent():
+    offer = _offer(is_new_customer_required=True)
+    silent = build_plan(SOURCE, _graph(), _evidence([offer]), {})
+    assert silent["status"] == "ready" and silent["operations"] == [], silent
+    mentioned = build_plan(SOURCE, _graph(), _evidence([offer], markdown=RAW + "\nNew patient special"), {})
+    assert any(r["reason"] == "unsupported_scope_or_quantity" for r in mentioned["review"]), mentioned
+
+
+def test_variant_reconciliation_mismatch_blocks_write():
+    variant = _offer(
+        offer_raw_text="Naked TOX\nMember\n10 Units TOX Package\n$69.90",
+        discount_price=69.9,
+        regular_price=79.9,
+        is_membership_required=True,
+        conditions=["Member", "10 Units TOX Package"],
+        items=[{"item_name": "Naked TOX", "service_id": 12, "delivered_units": 10, "unit_price": None}],
+        purchase_variant=True,
+    )
+    evidence = _evidence([variant], product_variant_reconciliation=[{
+        "variant_expected": 2, "variant_skipped": [], "variant_capture_count": 1}])
+    plan = build_plan(SOURCE, _graph(), evidence, {})
+    assert any(r["reason"] == "variant_reconciliation_mismatch" for r in plan["review"]), plan
+
+
+def test_variant_units_one_triggers_reconciliation_review():
+    variant = _offer(
+        offer_raw_text="Naked TOX\nMember\n10 Units TOX Package\n$69.90",
+        discount_price=69.9,
+        is_membership_required=True,
+        conditions=["Member", "10 Units TOX Package"],
+        items=[{"item_name": "Naked TOX", "service_id": 12, "delivered_units": 1, "unit_price": None}],
+        purchase_variant=True,
+    )
+    evidence = _evidence([variant], product_variant_reconciliation=[{
+        "variant_expected": 1, "variant_skipped": [], "variant_capture_count": 1}])
+    plan = build_plan(SOURCE, _graph(), evidence, {})
+    assert any(r["reason"] == "variant_reconciliation_mismatch" for r in plan["review"]), plan
+
+
+def test_regular_price_lines_are_ignored_not_reviewed():
+    price_list = _offer(offer_raw_text="Botox $12 per unit", regular_price=None, discount_price=12,
+                        price_model="per_unit", items=[{"item_name": "Botox", "service_id": 12}])
+    graph = _graph()
+    graph["promotions"][0]["is_active"] = False
+    graph["offers"][0]["is_active"] = False
+    plan = build_plan(SOURCE, graph, _evidence([price_list]), {})
+    assert plan["status"] == "ready" and plan["operations"] == [], plan
+    assert [n["reason"] for n in plan["notes"]][-1] == "no_offers_and_no_live_rows"

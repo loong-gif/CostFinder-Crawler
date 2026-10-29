@@ -103,7 +103,10 @@ def extract_offers(
             "Output one offer per distinct price line. "
             "Set regular_price for standard menu/list prices; leave discount_price, discount_percent, and discount_amount null. "
             "Fill any one of discount_price / discount_percent / discount_amount for explicit specials only. "
-            "Set items[].service_name to the standardized treatment (e.g. Dysport, Jeuveau, Dermal Filler)."
+            "Set items[].service_name to the standardized treatment (e.g. Dysport, Jeuveau, Dermal Filler). "
+            "Set items[].item_name to the source-facing treatment label. "
+            "OR lines (one price/discount, pick one): purchase_type=independent_options, is_package=false, one item per option. "
+            "AND combo totals: purchase_type=bundle, is_package=true, one item per bundled component, item unit_price=null."
         ),
         source_url=source_url,
         markdown=markdown,

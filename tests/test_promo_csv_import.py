@@ -39,7 +39,7 @@ def test_build_import_plan_uses_existing_promotion_and_per_unit_price():
     assert item.master["offer_fingerprint"] == hashlib.sha1(
         b"p:7|botox 40 units for 400"
     ).hexdigest()
-    assert item.items == [{"service_name": "Botox", "unit_price": 10.0}]
+    assert item.items == [{"item_name": "Botox", "service_name": "Botox", "unit_price": 10.0}]
 
 
 def test_build_import_plan_deduplicates_equivalent_source_rows():
@@ -126,15 +126,15 @@ def test_build_import_plan_does_not_activate_offer_under_inactive_promotion():
 
 def test_build_import_plan_splits_package_content_into_items():
     plan = build_import_plan(
-        [_row(is_package="TRUE", service_name="Package", offer_content='{"Botox":20,"Dermal Filler":1}', unit_type="treatment")],
+        [_row(is_package="TRUE", service_name="Package", offer_content='{"Botox Cosmetic":20,"Juvederm Voluma":1}', unit_type="treatment")],
         promotions_by_url={"https://example.com/specials": {"promotion_id": 7, "business_id": 9}},
         businesses_by_domain={},
         today="2026-07-25",
     )
 
     assert plan.accepted[0].items == [
-        {"service_name": "Botox", "quantity": 20},
-        {"service_name": "Dermal Filler", "quantity": 1},
+        {"item_name": "Botox Cosmetic", "service_name": "Botox", "quantity": 20},
+        {"item_name": "Juvederm Voluma", "service_name": "Juvéderm", "quantity": 1},
     ]
 
 
@@ -158,7 +158,7 @@ def test_build_import_plan_defaults_only_a_single_total_item_to_one() -> None:
         today="2026-07-25",
     )
 
-    assert plan.accepted[0].items == [{"service_name": "Botox", "quantity": 1}]
+    assert plan.accepted[0].items == [{"item_name": "Botox", "service_name": "Botox", "quantity": 1}]
 
     package = build_import_plan(
         [_row(is_package="TRUE", unit_type="treatment", delivered_unit="", offer_content='{"Botox": null}')],
@@ -167,7 +167,7 @@ def test_build_import_plan_defaults_only_a_single_total_item_to_one() -> None:
         today="2026-07-25",
     )
 
-    assert package.accepted[0].items == [{"service_name": "Botox"}]
+    assert package.accepted[0].items == [{"item_name": "Botox", "service_name": "Botox"}]
 
 
 def test_build_import_plan_derives_regular_price_only_from_explicit_savings():
@@ -190,6 +190,6 @@ def test_build_import_plan_copies_per_unit_price_to_each_explicit_item():
     )
 
     assert plan.accepted[0].items == [
-        {"service_name": "Botox", "unit_price": 13.5},
-        {"service_name": "Dysport", "unit_price": 13.5},
+        {"item_name": "Botox", "service_name": "Botox", "unit_price": 13.5},
+        {"item_name": "Dysport", "service_name": "Dysport", "unit_price": 13.5},
     ]

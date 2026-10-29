@@ -487,6 +487,109 @@
       "notification": {},
       "retentionDays": 30,
       "judgeEnabled": true
+    },
+    "daily_05": {
+      "name": "costfinder_clinic_promotions_price_daily_05",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "type": "scrape",
+          "urls": [
+            "https://allurantmedical.com/end-of-summer-sale/",
+            "https://aphroditelaserskincare.com/special",
+            "https://bluewaterwellnesscenter.com/promotions",
+            "https://calistamedspa.com/services",
+            "https://cienegaspa.com/services/botox",
+            "https://clarebellaokc.com/specials",
+            "https://contouramedspa.com/pages/seasonal-specials",
+            "https://cosmetiqmedicine.com/tag/botox-specials-portland-oregon",
+            "https://doctorqazi.com/shop/category/limited-time-promos-28",
+            "https://doctorqazi.com/specials",
+            "https://dolcemd.com/special-offers",
+            "https://downtownfaces.com/specials",
+            "https://drbayati.com/about/specials",
+            "https://drkevinsadati.com/patient-resources/specials",
+            "https://drosman.com/50-off-dysport-special",
+            "https://drosman.com/botox-50-off-special-savings",
+            "https://drtimlove.com/our-specials",
+            "https://elconhealth.com/specials",
+            "https://elevatewellnessandaesthetics.com/monthly-specials",
+            "https://europeanwellness.com/product/your-best-kiss-ever-filler-special",
+            "https://facialaestheticsinc.com/offers",
+            "https://fitzaesthetic.com/specials",
+            "https://fixstudios.com/pages/botox-specials-cincinnati",
+            "https://fixxmedicalspa.com/treatments/injectables",
+            "https://francoaesthetics.com/specials",
+            "https://greyaestheticsoc.com/specials",
+            "https://halestormaesthetics.com/specials",
+            "https://houseofaestheticsmedspa.com/botox-special-50-off",
+            "https://houseofaestheticsmedspa.com/specials",
+            "https://hsoffer.h-md.com/monthly-promos",
+            "https://liquidbeauty.com/specials",
+            "https://liquidbeauty.com/specials/new-patient-offer",
+            "https://louloumedspa.com/services/botox-dysport-and-daxxify-in-oklahoma-city-ok",
+            "https://lovelymedspa.com",
+            "https://luminousmedaesthetics.com/services",
+            "https://mariposaokc.com/specials",
+            "https://maxwell-aesthetics.com/specials-promotions/",
+            "https://myskinappeal.com/specials/",
+            "https://nubellamedspa.com/nu-bella-store",
+            "https://nubellamedspa.com/nu-bella-store/p/botox-beauty-vault",
+            "https://omeedahadiatmd.com/specials",
+            "https://petrasweightlossclinic.com/specials",
+            "https://rawbeautyaesthetics.com/product/toxbank",
+            "https://renewedmedicalhealth.com/",
+            "https://simplicitylaser.com/collections/all",
+            "https://skinlabinjectables.com/specials",
+            "https://skinspirit.com/current-specials",
+            "https://skinspirit.com/special-offers",
+            "https://smoothmd.com/collections/all-treatments",
+            "https://topangabeauty.com/price-list"
+          ]
+        }
+      ]
+    },
+    "daily_06": {
+      "name": "costfinder_clinic_promotions_price_daily_06",
+      "schedule": {
+        "cron": "0 0 * * *",
+        "timezone": "America/Los_Angeles"
+      },
+      "status": "active",
+      "targets": [
+        {
+          "type": "scrape",
+          "urls": [
+            "https://totalwomenhealthcare.com/pricing",
+            "https://vasuskinsolutions.com/best-botox-boulder/",
+            "https://wildrosenewport.com/copy-of-new-client-specials",
+            "https://www.beautyandbodylounge.com/monthly-specials/",
+            "https://www.beautynowok.com/private-event",
+            "https://www.bonakdaraesthetics.com/specials",
+            "https://www.conciergeaesthetics.com/treatments/injectables/botox-cosmetic",
+            "https://www.doctorrevive.com/deals.html",
+            "https://www.loweplasticsurgery.com/specials-and-pricing-2",
+            "https://www.nakedmd.com/collections/1st-time-patient-promo",
+            "https://www.nakedmd.com/collections/filler",
+            "https://www.nakedmd.com/collections/new-client-offer",
+            "https://www.nakedmd.com/collections/offers",
+            "https://www.nakedmd.com/products/forehead-neurotoxin-tox-treatment",
+            "https://www.nakedmd.com/products/neck-band-tox-treatment",
+            "https://www.plumpmedicalspa.com/specials",
+            "https://www.premierokc.com/promotions",
+            "https://www.richlandmd.com/founding-member",
+            "https://www.sculptedmedspas.com/offers",
+            "https://www.skinani.com/specials/",
+            "https://www.totaldermatology.com/resources/specials-promotions-2",
+            "https://www.youthbar.com/service-pricing-boulder-colorado",
+            "https://youngerlook.com/non-surgical/botox-dysport-xeomine"
+          ]
+        }
+      ]
     }
   }
 }

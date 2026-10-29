@@ -15,13 +15,15 @@ import unicodedata
 from urllib.parse import urlparse
 from typing import Any
 
-from utils.offer_evidence_validator import validate_offer_evidence, stated_paid_and_delivered
+from utils.offer_evidence_validator import (
+    _NEW_CUSTOMER_SIGNAL, stated_paid_and_delivered, validate_offer_evidence,
+)
 from utils.offer_fingerprint import normalize_url
 from utils.service_price_guard import infer_explicit_per_unit_price
 from utils.monitor_price_writer import WriterError, normalize_source_url
 from utils.offer_extraction_llm import canonicalize_service_name
 from utils.promo_offer_items_db import is_blanket_offer_text
-from utils.offer_purchase_semantics import service_supported_by_source
+from utils.offer_purchase_semantics import new_customer_tier_merge_patch, service_supported_by_source
 
 
 PROMOTIONS = "clinic_promotions"
@@ -30,9 +32,6 @@ ITEMS = "promo_offer_items"
 TERMS = "promo_offer_terms"
 _PRICE_FIELDS = ("regular_price", "discount_price", "discount_percent", "discount_amount")
 _MONEY = re.compile(r"\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%")
-_AGENTS_BLANKET = re.compile(
-    r"all services|any service|all products|all treatments|gift card|skin ?care products", re.I
-)
 
 
 class _Review(ValueError):
@@ -46,10 +45,6 @@ def _text(value: Any) -> str:
 
 def _raw_identity(value: Any) -> str:
     return _text(_MONEY.sub(" ", str(value or "")))
-
-
-def _blanket(value: Any) -> bool:
-    return bool(_AGENTS_BLANKET.search(str(value or ""))) or is_blanket_offer_text(value)
 
 
 def _service_name_key(value: Any) -> str:
@@ -130,6 +125,60 @@ def _campaign_key(row: dict) -> tuple:
     return (_text(row.get("promotion_title")), row.get("campaign_start_date"), row.get("campaign_end_date"))
 
 
+_UNIT_IN_TEXT = re.compile(r"\b(\d+)\s*(units?|sessions?|syringes?|treatments?)\b", re.I)
+_NON_MEMBER = re.compile(r"\bnon[- ]?members?\b", re.I)
+
+
+def _variant_reconciliation_records(evidence: dict) -> list[dict]:
+    recon = evidence.get("product_variant_reconciliation") or []
+    if recon:
+        return recon
+    if evidence.get("variant_expected") is not None:
+        return [{"variant_expected": evidence.get("variant_expected", 0),
+                 "variant_skipped": evidence.get("variant_skipped") or [],
+                 "variant_capture_count": len(evidence.get("variant_captures") or [])}]
+    return []
+
+
+def _variant_catalog_complete(evidence: dict) -> bool:
+    records = _variant_reconciliation_records(evidence)
+    if records:
+        return all((rec.get("variant_capture_count") or 0) + len(rec.get("variant_skipped") or [])
+                   == (rec.get("variant_expected") or 0) for rec in records if rec.get("variant_expected"))
+    if evidence.get("variant_expected"):
+        return (len(evidence.get("variant_captures") or []) + len(evidence.get("variant_skipped") or [])
+                == evidence["variant_expected"])
+    return evidence.get("variant_capture_complete") is True
+
+
+def _check_variant_reconciliation(evidence: dict, raw_offers: list, warning) -> None:
+    for rec in _variant_reconciliation_records(evidence):
+        expected = int(rec.get("variant_expected") or 0)
+        if expected <= 0:
+            continue
+        skipped = rec.get("variant_skipped") or []
+        captured = int(rec.get("variant_capture_count") or 0)
+        if captured + len(skipped) != expected:
+            warning("variant_reconciliation_mismatch", None)
+    purchasable = sum(int(rec.get("variant_capture_count") or 0) for rec in _variant_reconciliation_records(evidence))
+    if not purchasable:
+        purchasable = len(evidence.get("variant_captures") or [])
+    variant_offers = [offer for offer in raw_offers if offer.get("purchase_variant")]
+    if purchasable and len(variant_offers) != purchasable:
+        warning("variant_reconciliation_mismatch", None)
+    for index, raw in enumerate(raw_offers):
+        if not raw.get("purchase_variant"):
+            continue
+        blob = " ".join([str(raw.get("offer_raw_text") or ""), *(
+            c if isinstance(c, str) else str(c.get("requirement", "")) for c in (raw.get("conditions") or []))])
+        if not _UNIT_IN_TEXT.search(blob):
+            continue
+        for item in raw.get("items") or []:
+            delivered = item.get("delivered_units", item.get("quantity"))
+            if delivered is None or delivered == 1:
+                warning("variant_reconciliation_mismatch", index)
+
+
 def _promotion_content(existing: dict | None, quotes: list[str], complete: bool) -> list:
     if complete or existing is None:
         return quotes
@@ -149,7 +198,7 @@ def _resolve_items(offer: dict, services: list[dict], business_id: int) -> list[
     raw_items = offer.get("items")
     if not isinstance(raw_items, list) or not raw_items or any(not isinstance(i, dict) for i in raw_items):
         raise _Review("missing_or_invalid_items")
-    blanket = _blanket(offer.get("offer_raw_text"))
+    blanket = is_blanket_offer_text(offer.get("offer_raw_text"))
     items = []
     for item in raw_items:
         candidate_name = item.get("service_name")
@@ -177,11 +226,12 @@ def _resolve_items(offer: dict, services: list[dict], business_id: int) -> list[
             if area:
                 candidates = [s for s in candidates if _text(s.get("service_area")) == area]
             if len(candidates) == 1:
-                service = candidates[0]
-                service_id, stored_name = service["service_id"], (str(item.get("item_name") or name).strip() if offer.get("purchase_variant") else service["service_name"])
+                service_id = candidates[0]["service_id"]
             else:
                 # Store the evidenced item without guessing a catalogue FK.
-                service_id, stored_name = None, str(item.get("item_name") or name).strip()
+                service_id = None
+            # item_name keeps the source title; the catalogue name is only the FK's label.
+            stored_name = str(item.get("item_name") or name).strip()
         quantity = _number(item.get("delivered_units", item.get("quantity")), "delivered_units", positive=True)
         _number(item.get("unit_price"), "unit_price")
         if offer.get("quantity_kind", "fixed") != "fixed":
@@ -189,7 +239,7 @@ def _resolve_items(offer: dict, services: list[dict], business_id: int) -> list[
         if quantity is not None and (quantity != quantity.to_integral_value() or quantity > 32767):
             raise _Review("unrepresentable_delivered_quantity")
         items.append({"item_name": stored_name, "service_id": service_id,
-                      "delivered_units": float(quantity) if quantity is not None else None,
+                      "delivered_units": int(quantity) if quantity is not None else None,
                       "unit_price": None})
     keys = [i["service_id"] if i["service_id"] is not None else _text(i["item_name"]) for i in items]
     if len(keys) != len(set(keys)):
@@ -226,10 +276,17 @@ def _validated_offer(raw: dict, markdown: str, items: list[dict]) -> tuple[dict 
         return None, decision.reason
     if any(issue.field in _PRICE_FIELDS for issue in decision.issues):
         return None, "unsupported_price_evidence"
-    # Clearing a qualification/area/quantity would change scope. Quarantine it.
+    # Unsupported quantity/unit/area fields are written as NULL (the validator already cleared them). Still
+    # quarantine an unevidenced item rate (price evidence) and a new-customer flag the page itself mentions.
     unsafe = [issue for issue in decision.issues if issue.field not in _PRICE_FIELDS and not issue.field.endswith(".service_name")]
-    if unsafe:
+    if any(issue.field.endswith(".unit_price") for issue in unsafe):
+        return None, "unsupported_price_evidence"
+    if any(issue.field == "is_new_customer_required" for issue in unsafe) and _NEW_CUSTOMER_SIGNAL.search(markdown):
         return None, "unsupported_scope_or_quantity"
+    for issue in unsafe:
+        cleared = re.fullmatch(r"items\[(\d+)\]\.quantity", issue.field)
+        if cleared and int(cleared.group(1)) < len(items):
+            items[int(cleared.group(1))]["delivered_units"] = None
     offer = decision.offer
     model = raw.get("price_model", "total")
     quantity_kind = raw.get("quantity_kind", "fixed")
@@ -309,7 +366,7 @@ def _item_key(item: dict, blanket: bool = False) -> tuple:
 
 
 def _identity(master: dict, items: list[dict]) -> tuple:
-    blanket = _blanket(master.get("offer_raw_text"))
+    blanket = is_blanket_offer_text(master.get("offer_raw_text"))
     composition = tuple(sorted((_item_key(i, blanket) for i in items), key=repr))
     conditions = master.get("conditions")
     return (composition, _raw_identity(master.get("offer_raw_text")) if blanket else None,
@@ -319,10 +376,11 @@ def _identity(master: dict, items: list[dict]) -> tuple:
 
 
 def _offer_match_key(master: dict, items: list[dict]) -> tuple:
-    """Match changing copy/conditions to the same unique service offer."""
-    return (_identity(master, items)[0], _identity(master, items)[1],
-            bool(master.get("is_membership_required")),
-            bool(master.get("is_new_customer_required")))
+    """Same service/composition; new-patient vs returning is one offer."""
+    blanket = is_blanket_offer_text(master.get("offer_raw_text"))
+    composition = tuple(sorted((_item_key(i, blanket) for i in items), key=repr))
+    return (composition, _raw_identity(master.get("offer_raw_text")) if blanket else None,
+            bool(master.get("is_membership_required")))
 
 
 def _catalog_items(items: list[dict], services: list[dict]) -> list[dict]:
@@ -334,8 +392,7 @@ def _nullable_item_match(old: dict, old_items: list[dict], new: dict, new_items:
     """Fallback only for absent mappings, preserving unique existing IDs."""
     if len(old_items) != len(new_items) or not any(i.get("service_id") is None for i in [*old_items, *new_items]):
         return False
-    if (bool(old.get("is_membership_required")), bool(old.get("is_new_customer_required"))) != (
-            bool(new.get("is_membership_required")), bool(new.get("is_new_customer_required"))):
+    if bool(old.get("is_membership_required")) != bool(new.get("is_membership_required")):
         return False
     return sorted(_service_name_key(i.get("item_name")) for i in old_items) == sorted(
         _service_name_key(i.get("item_name")) for i in new_items)
@@ -454,6 +511,7 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
         raw_offers = evidence.get("offers")
         if not isinstance(raw_offers, list):
             raise _Review("invalid_evidence_offers")
+        _check_variant_reconciliation(evidence, raw_offers, warning)
         empty_quote = str(evidence.get("no_current_offers_quote") or "").strip()
         explicitly_empty = (not raw_offers and evidence.get("explicitly_empty") is True
                             and plan["evidence_summary"]["complete"] and bool(empty_quote)
@@ -469,11 +527,18 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
             if len(page_expired_matches) != 1:
                 warning("expired_campaign_identity_requires_review")
                 page_expired_matches = []
-        page_empty_verified = (not raw_offers and evidence.get("complete") is True
-                               and evidence.get("all_offers_extracted") is True
-                               and evidence.get("accessible") is True
-                               and evidence.get("image_review_complete") is True
-                               and (bool(page_expired_matches) or all(q and q not in _text(markdown) for q in current_quotes)))
+        page_without_offers_verified = (evidence.get("complete") is True
+                                        and evidence.get("all_offers_extracted") is True
+                                        and evidence.get("accessible") is True
+                                        and evidence.get("image_review_complete") is True
+                                        and (bool(page_expired_matches) or all(q and q not in _text(markdown) for q in current_quotes)))
+        page_empty_verified = not raw_offers and page_without_offers_verified
+        nothing_live = (not any(p.get("is_active") is True for p in promotions)
+                        and not any(o.get("is_active") is True for o in offers))
+        # An accessible page without offers cannot change a source that has nothing live: no-op, not review.
+        if not raw_offers and plan["evidence_summary"]["accessible"] and markdown.strip() and nothing_live:
+            plan["notes"].append({"reason": "no_offers_and_no_live_rows", "blocking": False})
+            return plan
         if not plan["evidence_summary"]["accessible"] or (not markdown.strip() and not page_empty_verified) or (not raw_offers and not explicitly_empty and not page_empty_verified):
             raise _Review("inaccessible_empty_or_unresolved_evidence")
         if evidence.get("image_policy", {}).get("hold_parent_fields"):
@@ -481,6 +546,7 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
         existing_items = {o["id"]: [i for i in items if i["offer_id"] == o["id"]] for o in offers}
         expected: list[tuple[dict, list[dict], dict, dict, int]] = []
         expired_campaigns = list(page_expired_matches)
+        non_promo = 0
         for index, raw in enumerate(raw_offers):
             if not isinstance(raw, dict):
                 warning("invalid_offer_evidence", index)
@@ -495,10 +561,14 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
             try:
                 resolved_items = _resolve_items(raw, services, business_id)
                 master, reason = _validated_offer(raw, markdown, resolved_items)
+                if master is None and reason == "no_supported_promo_fact":
+                    non_promo += 1
+                    plan["notes"].append({"reason": reason, "offer_index": index, "blocking": False})
+                    continue
                 if master is None:
                     warning(reason, index)
                     continue
-                if not _blanket(master["offer_raw_text"]) and any(i["service_id"] is None for i in resolved_items):
+                if not is_blanket_offer_text(master["offer_raw_text"]) and any(i["service_id"] is None for i in resolved_items):
                     plan["notes"].append({"reason": "service_mapping_pending", "offer_index": index, "blocking": False})
                 campaign = _campaign(raw, evidence)
                 if observed_date and campaign["campaign_end_date"] and campaign["campaign_end_date"] < observed_date:
@@ -512,12 +582,26 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                         plan["notes"].append({"reason":"expired_campaign_verified", "promotion_id":matches[0]["promotion_id"], "blocking":False})
                     continue
                 if master["price_model"] == "from":
-                    plan["notes"].append({"reason":"starting_price_variant_set_incomplete", "offer_index":index, "blocking":False})
+                    if _variant_reconciliation_records(evidence) and not _variant_catalog_complete(evidence):
+                        warning("starting_price_variant_set_incomplete", index)
+                        continue
+                    plan["notes"].append({"reason": "starting_price_variant_set_incomplete",
+                                          "offer_index": index, "blocking": False})
                     plan["evidence_summary"]["complete"] = False
+                if raw.get("is_membership_required") and raw.get("regular_price") is None:
+                    promo_blob = _text(markdown)
+                    if _NON_MEMBER.search(promo_blob) or _NON_MEMBER.search(str(raw.get("offer_raw_text") or "")):
+                        warning("member_regular_price_missing", index)
                 terms = _term_values(master)
                 expected.append((master, resolved_items, campaign, terms, index))
             except (_Review, WriterError) as exc:
                 warning(str(exc), index)
+        # A page whose only extracted lines are regular prices carries no promotion: treat it as an empty page.
+        if raw_offers and not expected and non_promo == len(raw_offers):
+            if nothing_live:
+                plan["notes"].append({"reason": "no_offers_and_no_live_rows", "blocking": False})
+                return plan
+            page_empty_verified = page_without_offers_verified
         expired_page_verified = bool(expired_campaigns and plan["evidence_summary"]["complete"] and not plan["review"])
         if not expected and not explicitly_empty and not page_empty_verified and not expired_page_verified:
             raise _Review(plan["review"][-1]["reason"] if plan["review"] else "no_validated_offers")
@@ -566,7 +650,7 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                                 "source_url": existing_promotion["source_url"] if existing_promotion else url,
                                 "is_active": True,
                                 "promotion_content": _promotion_content(existing_promotion, promotion_quotes[campaign_key], complete),
-                                "is_offer_extracted": complete and not plan["notes"] and not any(_blanket(q) for q in promotion_quotes[campaign_key]),
+                                "is_offer_extracted": complete and not plan["notes"] and not any(is_blanket_offer_text(q) for q in promotion_quotes[campaign_key]),
                                 **{k: v for k, v in campaign.items() if v is not None or k != "promotion_title"}}
                 if evidence.get("image_policy", {}).get("hold_parent_fields"):
                     if existing_promotion is not None:
@@ -593,7 +677,7 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                     and _term_values(o)["min_quantity"] == terms["min_quantity"]]
                 if len(narrower) == 1:
                     candidates = narrower
-            if not candidates and not _blanket(master["offer_raw_text"]):
+            if not candidates and not is_blanket_offer_text(master["offer_raw_text"]):
                 candidates = [o for o in offers if o["promotion_id"] == promotion_id
                               and _nullable_item_match(o, _catalog_items(existing_items[o["id"]], services), master, desired_items)]
             if len(candidates) > 1 and raw_offers[offer_index].get("purchase_variant"):
@@ -619,11 +703,15 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                 continue
             successful_campaigns.add(campaign_key)
             master_values = {**master, "business_id": business_id, "promotion_id": promotion_id, "membership_plan_id": None}
+            if existing_offer is not None:
+                tier = new_customer_tier_merge_patch(existing_offer, master)
+                if tier:
+                    master_values = {**existing_offer, **master_values, **tier}
             offer_id = emit(OFFERS, master_values, existing_offer)
             if existing_offer:
                 matched.add(offer_id)
             old_items = existing_items.get(offer_id, [])
-            blanket = _blanket(master["offer_raw_text"])
+            blanket = is_blanket_offer_text(master["offer_raw_text"])
             for desired in desired_items:
                 matches = [i for i in old_items if _item_key(i, blanket) == _item_key(desired, blanket)]
                 if not matches:
@@ -635,7 +723,7 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                     old = matches[0]
                     service = next((s for s in services if s["service_id"] == old.get("service_id")), None)
                     if service and _service_name_key(service["service_name"]) == _service_name_key(desired["item_name"]):
-                        desired = {**desired, "service_id": service["service_id"], "item_name": service["service_name"]}
+                        desired = {**desired, "service_id": service["service_id"]}
                 emit(ITEMS, {**desired, "offer_id": offer_id}, matches[0] if matches else None)
             current_term = next((t for t in graph.get("terms", []) if t.get("offer_id") == offer_id), None)
             term_payload = {**terms, "offer_id": offer_id}

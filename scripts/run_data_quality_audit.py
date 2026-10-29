@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the issue log on production; default read-only, PATCH repairs are explicit."""
+"""Audit the issue log on production (read-only); --apply renders reviewed repairs as pending SQL."""
 from __future__ import annotations
 
 import argparse
@@ -8,16 +8,18 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 from utils.data_quality_audit import audit_snapshot, source_key
-from utils.data_quality_writer import read_snapshot, apply_audit, recover_repairs
+from utils.data_quality_writer import read_snapshot, render_audit
 from utils.monitor_price_store import atomic_json, manual_protections, now, read_json, run_lock
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
+from utils.supabase_rest import PRODUCTION_PROJECT_REF, SupabaseRestClient, get_supabase_secret_key
 
 
 def load_captures(root):
@@ -75,7 +77,12 @@ def merge_queue(previous, entries):
     return {"updated_at": now(), "entries": result}
 
 
-def recheck_catalog_and_memberships(queue, snapshot, root):
+def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
+    """Render and verify queued sources; stop starting new ones after ``deadline`` (a monotonic time).
+
+    Entries not reached keep their pending/review status and are picked up by the next run, so a
+    single run can no longer hold the shared monitor lock for hours.
+    """
     from utils.monitor_rendered_browser import render_page
     from utils.rendered_visibility_gate import current_page_manifest
     from utils.offer_extraction_llm import build_client_from_env
@@ -87,8 +94,12 @@ def recheck_catalog_and_memberships(queue, snapshot, root):
     schema["properties"]["all_memberships_extracted"] = {"type": "boolean"}
     schema["required"].append("all_memberships_extracted")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    deferred = 0
     for index, entry in enumerate(queue["entries"]):
         if entry.get("source_kind") not in {"membership", "service"} or entry.get("status") not in {"pending", "review"}:
+            continue
+        if deadline is not None and time.monotonic() >= deadline:
+            deferred += 1
             continue
         directory = root / "data_quality" / "captures" / f"{stamp}_{index}"
         entry["last_attempt_at"] = now()
@@ -143,6 +154,7 @@ def recheck_catalog_and_memberships(queue, snapshot, root):
             entry.update(status="paused" if attempts >= 3 else "review", attempts=attempts, last_error=category)
             atomic_json(directory / "failure.json", {"reason": category, "recorded_at": now()})
     atomic_json(root / "data_quality" / "recheck_queue.json", queue)
+    return deferred
 
 
 def main():
@@ -150,34 +162,34 @@ def main():
     parser.add_argument("--state-dir", type=Path, default=ROOT / "output/data_quality_state")
     parser.add_argument("--snapshot", type=Path, help="Offline snapshot; always read-only")
     parser.add_argument("--captures", type=Path, help="Verified capture manifest for offline regression/audit")
-    parser.add_argument("--apply", action="store_true", help="Apply only frozen ready PATCH repairs")
+    parser.add_argument("--apply", action="store_true",
+                        help="Render frozen ready repairs as <state-dir>/pending_sql/*.sql (never writes the database)")
     parser.add_argument("--recheck", action="store_true", help="Refresh flagged sources and run promotion-only Monitor checks")
     parser.add_argument("--approved-plan", type=Path, help="With --apply: only repairs also present in this reviewed plan.json")
+    parser.add_argument("--max-seconds", type=float,
+                        default=float(os.getenv("DATA_QUALITY_RECHECK_MAX_SECONDS", "1800")),
+                        help="Stop starting new rendered rechecks after this many seconds (0 = unlimited); "
+                             "unfinished entries stay queued for the next run")
     args = parser.parse_args()
     if args.apply and not args.approved_plan:
         parser.error("--apply requires --approved-plan from a reviewed read-only run")
-    if args.snapshot and (args.apply or args.recheck):
-        parser.error("offline snapshots cannot write or trigger external rechecks")
+    if args.snapshot and args.recheck:
+        parser.error("offline snapshots cannot trigger external rechecks")
     load_dotenv(ROOT / ".env")
     root = args.state_dir
     with run_lock(root):
-        client = None
-        protections = read_json(root / "manual_protections.json", {})
-        recovered = []
+        protections = manual_protections(read_json(root / "manual_protections.json", {}))
         if args.snapshot:
             snapshot = read_json(args.snapshot)
             if snapshot.get("project_ref") != "kdlpkjzcnbkjcvwsvlwn":
                 raise RuntimeError("snapshot_project_mismatch")
         else:
-            client = SupabaseRestClient(os.getenv("SUPABASE_URL", ""), get_supabase_secret_key())
-            client.assert_write_project()
-            if args.apply:
-                recovered = recover_repairs(client, root / "data_quality/journals", protections)
-            snapshot = read_snapshot(client)
-            protections = manual_protections(snapshot, protections)
+            base = os.getenv("SUPABASE_URL", "")
+            if urlsplit(base).hostname != PRODUCTION_PROJECT_REF + ".supabase.co":
+                raise RuntimeError("database_project_mismatch")
+            snapshot = read_snapshot(SupabaseRestClient(base, get_supabase_secret_key()))
         captures = read_json(args.captures) if args.captures else load_captures(root)
         report = audit_snapshot(snapshot, captures, protections=protections)
-        report["recovery_receipts"] = recovered
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         directory = root / "data_quality/runs" / stamp
         atomic_json(directory / "snapshot.json", snapshot)
@@ -186,35 +198,28 @@ def main():
         queue = merge_queue(read_json(root / "data_quality/recheck_queue.json", {}), report["rechecks"])
         atomic_json(root / "data_quality/recheck_queue.json", queue)
         if args.recheck:
-            recheck_catalog_and_memberships(queue, snapshot, root)
+            deadline = time.monotonic() + args.max_seconds if args.max_seconds > 0 else None
+            deferred = recheck_catalog_and_memberships(queue, snapshot, root, deadline)
             captures = load_captures(root)
             report = audit_snapshot(snapshot, captures, protections=protections)
+            report["rechecks_deferred"] = deferred
             atomic_json(directory / "plan.json", report)
         if args.apply:
             # Execute only what was reviewed; anything new waits for the next review.
             approved = {_repair_key(r) for r in read_json(args.approved_plan)["repairs"]}
             report["unapproved_repairs"] = [r for r in report["repairs"] if _repair_key(r) not in approved]
             report["repairs"] = [r for r in report["repairs"] if _repair_key(r) in approved]
-            report["apply"] = apply_audit(report, snapshot, client, root / "data_quality/journals", protections)
-            after = read_snapshot(client)
-            report["remaining"] = audit_snapshot(after, captures, protections=protections)
-            atomic_json(directory / "after.json", after)
-            # A batch is complete only when checks A-E return no undocumented rows.
-            from utils.batch_gate_checks import run_batch_gate
-            try:
-                report["batch_gate"] = run_batch_gate(ROOT, read_json(root / "data_quality/gate_retained.json", {}))
-            except (OSError, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
-                report["batch_gate"] = {"passed": False, "error": str(exc)[:300]}
-            report["apply"]["completed"] = bool(report["apply"].get("completed")) and report["batch_gate"]["passed"]
+            # Rendering only: the SQL runs later through the Supabase MCP, then the batch gate runs.
+            report["apply"] = render_audit(report, snapshot, root, protections)
         atomic_json(directory / "report.json", report)
         atomic_json(root / "data_quality/report.json", report)
     if args.recheck:
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/run_monitor_price_sync.py"),
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/promo_pipeline.py"), "monitor",
                                  "--state-dir", str(root), "--recheck-data-quality-only"], check=False)
         atomic_json(directory / "promotion_recheck.json", {"exit_code": result.returncode})
     print(json.dumps({"report": str(directory / "report.json"), **report["counts"],
-                      "apply_completed": report.get("apply", {}).get("completed"),
-                      "batch_gate_passed": report.get("batch_gate", {}).get("passed")}, ensure_ascii=False))
+                      "pending_sql_files": [r["sql_path"] for r in report.get("apply", {}).get("rendered", [])],
+                      "apply_skipped": report.get("apply", {}).get("skipped", [])}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

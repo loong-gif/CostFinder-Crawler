@@ -8,12 +8,24 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from utils.monitor_price_writer import normalize_source_url, WriterError, _AGENTS_BLANKET_RE
+from utils.monitor_price_writer import normalize_source_url, WriterError
 from utils.offer_purchase_semantics import (canonical_offer_semantics, usable_unit_price,
                                            service_supported_by_source, is_generic_offer_scope)
 from utils.offer_evidence_validator import _quantity_supported
 from utils.offer_field_normalize import normalize_service_area
 from utils.promo_offer_items_db import is_blanket_offer_text
+
+# Thresholds ("minimum 40 units", "50+ units", "up to 4 treatments") are not delivered pack sizes.
+_UNIT_WORDS = r"(?:units?|sessions?|syringes?|treatments?)"
+_QUALIFIED_UNITS = re.compile(r"(?:minimum|min\.?|at least|up to|maximum|max\.?)\s+(?:of\s+)?\d+"
+                              rf"|\d+\s*\+|\d+\s*{_UNIT_WORDS}\s*(?:or more|minimum|min\.?|\+)"
+                              rf"|\d+[- ]?{_UNIT_WORDS}[- ]minimum", re.I)
+_FIXED_UNITS = re.compile(r"\b([2-9]|[1-9]\d+)\s+(?:units|sessions|syringes|treatments)\b", re.I)
+
+
+def _stated_fixed_units(text: str) -> set[int]:
+    thresholds = {int(re.search(r"\d+", m.group()).group()) for m in _QUALIFIED_UNITS.finditer(text)}
+    return {int(n) for n in _FIXED_UNITS.findall(_QUALIFIED_UNITS.sub(" ", text))} - thresholds
 
 TABLES = {
     "promotions": ("clinic_promotions", "promotion_id"),
@@ -205,6 +217,19 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
     duplicates = defaultdict(list)
     terms = {r["offer_id"]: r for r in snapshot.get("terms", [])}
     for offer in snapshot.get("offers", []):
+        if offer.get("is_active") or items[offer["id"]]:
+            continue
+        created = offer.get("created_at")
+        try:
+            stale = bool(created and (at - datetime.fromisoformat(str(created).replace("Z", "+00:00"))) > timedelta(hours=24))
+        except (TypeError, ValueError):
+            stale = False
+        if stale:
+            parent = promotions.get(offer.get("promotion_id")) or memberships.get(offer.get("membership_plan_id")) or {}
+            kind = "membership" if offer.get("membership_plan_id") else "promotion"
+            finding("I_itemless_offer", "promo_offer_master", offer, "inactive offer shell without items",
+                    parent=parent, kind=kind)
+    for offer in snapshot.get("offers", []):
         if not offer.get("is_active"):
             continue
         parent = promotions.get(offer.get("promotion_id")) or memberships.get(offer.get("membership_plan_id")) or {}
@@ -214,7 +239,7 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
         restriction = terms.get(offer["id"])
         terms_key = None if restriction is None else json.dumps({k: v for k, v in restriction.items()
             if k not in {"offer_id", "updated_at", "created_at"}}, sort_keys=True)
-        blanket = is_blanket_offer_text(raw) or bool(_AGENTS_BLANKET_RE.search(raw)) or is_generic_offer_scope(raw)
+        blanket = is_blanket_offer_text(raw) or is_generic_offer_scope(raw)
         # Unlinked titles the blanket text never names are expansion artifacts, not composition.
         identity_parts = ([{**i, "item_name": None, "service_name": None} for i in parts]
                           if blanket and parts and all(i.get("service_id") is None
@@ -224,10 +249,41 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
         if not parts:
             finding("missing_items", "promo_offer_master", offer, "active offer has no components", parent=parent, kind=kind)
         if re.search(r"\b(?:from|starting\s+at)\s*\$", raw, re.I) and offer.get("price_model") != "from":
-            finding("from_price", "promo_offer_master", offer, "starting price stored as a definite total", parent=parent, kind=kind)
-        if re.search(r"\bor\b", raw, re.I):
-            finding("independent_options", "promo_offer_master", offer, "classify purchasing alternatives before splitting", parent=parent, kind=kind)
+            finding("F_from_price_dropped", "promo_offer_master", offer, "starting price stored as a definite total",
+                    parent=parent, kind=kind)
+        promo_lines = parent.get("promotion_content") if isinstance(parent.get("promotion_content"), list) else []
+        blob = raw + " " + " ".join(str(c) for c in (offer.get("conditions") or []))
+        if promo_lines:
+            blob += " " + " ".join(str(line) for line in promo_lines)
+        stated_units = set()
+        if (offer.get("price_model") or "total") == "total":
+            stated_units = _stated_fixed_units(" ; ".join([raw, *(str(c) for c in (offer.get("conditions") or []))]))
+        missing_units = stated_units - {i.get("delivered_units") for i in parts}
+        if offer.get("is_membership_required") and re.search(r"\bnon[- ]?members?\b", blob, re.I):
+            regular = offer.get("regular_price")
+            discount = offer.get("discount_price")
+            stated = re.search(r"non[- ]?member[^$\d]{0,48}\$?\s*(\d[\d,]*(?:\.\d+)?)", blob, re.I)
+            stated_price = float(stated.group(1).replace(",", "")) if stated else None
+            compare = re.search(r"(?:regular(?:\s+price)?|compare)[^$\d]{0,12}\$?\s*(\d[\d,]*(?:\.\d+)?)", blob, re.I)
+            compare_price = float(compare.group(1).replace(",", "")) if compare else None
+            distinct_compare = (stated_price is not None and compare_price is not None
+                                and abs(compare_price - stated_price) > 0.02)
+            if distinct_compare:
+                wrong_regular = regular is None or abs(float(regular) - compare_price) > 0.02
+                detail = "compare-at price is regular_price; non-member sale stays its own offer"
+            else:
+                wrong_regular = stated_price is not None and regular is not None and abs(float(regular) - stated_price) > 0.02
+                detail = "non-member tier must be regular_price on the member offer"
+            if regular is None or (discount is not None and regular <= discount) or wrong_regular:
+                finding("H_member_nonmember_regular", "promo_offer_master", offer, detail, parent=parent, kind=kind)
+        from utils.offer_purchase_semantics import offer_has_unsplit_or
+        if offer_has_unsplit_or(raw, is_package=offer.get("is_package"), item_count=len(parts)):
+            finding("independent_options", "promo_offer_master", offer,
+                    "classify purchasing alternatives before splitting", parent=parent, kind=kind)
         for item in parts:
+            if missing_units and (item.get("delivered_units") is None or item.get("delivered_units") == 1):
+                finding("G_units_in_text_not_delivered", "promo_offer_items", item,
+                        "fixed pack size in text requires delivered_units from variant", parent=parent, kind=kind)
             report["price_output"].append({"offer_id": offer["id"], "offer_item_id": item["offer_item_id"],
                                           "price_model": offer.get("price_model"),
                                           "usable_unit_price": usable_unit_price(offer, item, raw)})

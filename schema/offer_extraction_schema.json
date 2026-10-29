@@ -16,7 +16,11 @@
           "purchase_type": {
             "type": "string",
             "enum": ["single", "independent_options", "bundle"],
-            "description": "独立购买的同折扣品牌列表或二选一为 independent_options；必须共同购买的组成才为 bundle。赠品留在原文和限制里，仅主要购买项目作为 item。不要按 or/and 字符本身决定。每个商品可购买规格单独输出，包括资格和规格名称。"
+            "description": "OR（互斥多选一、多品牌共享同一折扣，连接词可为 or/and/,/／/或）：输出 independent_options 或由归一化层拆成多条 single；每条仅 1 个 item、is_package=false。AND（多项目打包单一总价共同交付）：输出 bundle、is_package=true、price_model=total，每个组成部分单独一条 items（含 quantity，单项 unit_price=null）。赠品仅写在 conditions/原文，不作为付费 item。不要按连接词字符 alone 决定，看是否可独立购买 vs 必须打包。"
+          },
+          "is_package": {
+            "type": "boolean",
+            "description": "true 仅当多个服务项按单一促销总价共同交付（组合套餐）；互斥选项或多品牌共享折扣必须为 false。"
           },
           "price_model": {
             "type": "string",
@@ -25,7 +29,7 @@
           "regular_price": {
             "type": ["number", "null"],
             "exclusiveMinimum": 0,
-            "description": "页面明确标注的原价或常规价；不得根据 rewards、积分或价格区间反推。"
+            "description": "页面明确标注的原价或常规价；不得根据 rewards、积分或价格区间反推。同一 Offer 同时列出会员价与非会员价时，只输出会员 Offer，非会员价填入其 regular_price，不要单独输出非会员 Offer；“save $X”是节省额，不是原价。"
           },
           "discount_price": {
             "type": ["number", "null"],
@@ -83,25 +87,14 @@
             "items": {
               "type": "object",
               "properties": {
+                "item_name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "页面原文中的商业项目名称（如 Botox、Versa Fillers、RF Microneedling），与 service_name 标准库候选解耦。"
+                },
                 "service_name": {
                   "type": ["string", "null"],
-                  "enum": [
-                    "Botox",
-                    "Dysport",
-                    "Daxxify",
-                    "Letybo",
-                    "Xeomin",
-                    "Jeuveau",
-                    "Dermal Filler",
-                    "Sculptra",
-                    "Juvéderm",
-                    "Restylane",
-                    "Belotero",
-                    "Radiesse",
-                    "Others",
-                    null
-                  ],
-                  "description": "用于匹配 clinic_services.service_name 的标准服务名候选，不是数据库 service_id。无法可靠标准化时为 Others 或 null。"
+                  "description": "用于匹配 clinic_services.service_name 的标准服务名候选，不是数据库 service_id。枚举值在运行时由数据库 clinic_service_name_enum 注入（utils/offer_schema.py）。无法可靠标准化时为 Others 或 null。"
                 },
                 "quantity": {
                   "type": ["number", "null"],
@@ -137,6 +130,7 @@
                 }
               },
               "required": [
+                "item_name",
                 "service_name",
                 "quantity",
                 "unit_price",
@@ -148,6 +142,8 @@
           }
         },
         "required": [
+          "purchase_type",
+          "is_package",
           "price_model",
           "regular_price",
           "discount_price",

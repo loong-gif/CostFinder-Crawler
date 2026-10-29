@@ -37,7 +37,8 @@ from utils.clinic_service_taxonomy import (
     live_clinic_service_payload,
     service_name_enum_hint,
 )
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key, get_supabase_writer_key
+from utils.supabase_rest import SupabaseRestClient
+from utils.supabase_access import fetch_all_rows, load_supabase_client
 
 SCHEMA_PATH = PROJECT_ROOT / "schema" / "clinic_services_firecrawl_extraction_schema.json"
 AUDIT_DIR = PROJECT_ROOT / "output" / "results"
@@ -58,19 +59,12 @@ def load_schema() -> dict[str, Any]:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def load_client(*, dry_run: bool) -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    url = os.getenv("SUPABASE_URL", "").strip()
-    key = get_supabase_secret_key() if dry_run else get_supabase_writer_key()
-    if not url:
-        raise RuntimeError("Missing SUPABASE_URL")
-    return SupabaseRestClient(url, key)
-
-
 def load_targets(client: SupabaseRestClient, *, limit: int | None, business_id: int | None,
                  after_business_id: int | None, refresh_only: bool, retry_failed: bool) -> list[dict[str, Any]]:
     filters = {"business_id": f"eq.{business_id}"} if business_id is not None else None
-    businesses = client.fetch_rows("master_business_info", "business_id,name,website", filters=filters, limit=5000)
+    businesses = fetch_all_rows(
+        client, "master_business_info", "business_id,name,website", filters=filters, order="business_id.asc"
+    )
     targets = [
         row for row in businesses
         if str(row.get("website") or "").strip()
@@ -78,7 +72,7 @@ def load_targets(client: SupabaseRestClient, *, limit: int | None, business_id: 
     if after_business_id is not None:
         targets = [row for row in targets if int(row["business_id"]) > after_business_id]
     if refresh_only:
-        existing = client.fetch_rows("clinic_services", "business_id", limit=5000)
+        existing = fetch_all_rows(client, "clinic_services", "business_id", order="service_id.asc")
         existing_ids = {int(row["business_id"]) for row in existing if row.get("business_id") is not None}
         targets = [row for row in targets if int(row["business_id"]) in existing_ids]
     if retry_failed and LATEST_AUDIT.exists():
@@ -301,7 +295,7 @@ def main() -> None:
     llm = build_client_from_env()
     if llm is None:
         raise RuntimeError("Missing LLM_API_KEY, LLM_MODEL, and LLM_API_URL or LLM_API_BASE")
-    client = load_client(dry_run=args.dry_run)
+    client = load_supabase_client(PROJECT_ROOT, role="secret" if args.dry_run else "writer")
     targets = load_targets(
         client,
         limit=args.limit,

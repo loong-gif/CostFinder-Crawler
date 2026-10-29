@@ -20,6 +20,7 @@ from utils.offer_purchase_semantics import service_supported_by_source
 
 
 _CURRENCY = re.compile(r"\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)")
+_STRUCK_PRICE = re.compile(r"~~\s*\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*~~")
 _PROMO_SIGNAL = re.compile(
     r"\b(?:special|promo|promotion|offer|sale|member|membership|vip|"
     r"new\s+(?:patient|client)|first[-\s]?time|introductory|only|just|save|off)\b|"
@@ -205,6 +206,9 @@ def _currency_contexts(text: str, value: Any, *, radius: int = 45) -> list[tuple
 def _regular_price_supported(value: Any, raw_text: str) -> bool:
     badge = _badge_price_pair(raw_text)
     if badge and _same_number(badge[0], value):
+        return True
+    # markdown 删除线标出的价格是原价
+    if any(_same_number(_number(amount), value) for amount in _STRUCK_PRICE.findall(str(raw_text or ""))):
         return True
     parsed = extract_price_evidence(raw_text).get("regular_price")
     if _same_number(parsed, value):

@@ -174,14 +174,18 @@ VARIANT_CONTROLS = """(()=>{
 })()"""
 
 
-def capture_product_variants(page, directory: Path, width: int) -> tuple[list[dict], bool]:
+def capture_product_variants(page, directory: Path, width: int) -> dict:
     """Operate only visible purchase controls; every selected price is rendered."""
     groups = page.evaluate(VARIANT_CONTROLS) or []
     if any(not group.get("values") for group in groups):
-        return [], False
+        return {"variant_captures": [], "variant_expected": 0, "variant_skipped": [],
+                "variants_complete": False}
     combinations = list(product(*(group["values"] for group in groups))) if groups else [()]
-    captures, complete = [], True
+    variant_expected = len(combinations)
+    captures, variant_skipped, complete = [], [], True
     for index, selection in enumerate(combinations):
+        labels = [value["label"] for value in selection]
+        skip_base = {"index": index, "selected_options": labels}
         choices = [{**group, "selected": value} for group, value in zip(groups, selection)]
         changed = page.evaluate("""(async()=>{
           const root=document.querySelector('main')||document.body;
@@ -205,6 +209,7 @@ def capture_product_variants(page, directory: Path, width: int) -> tuple[list[di
         })()""")
         if not changed:
             complete = False
+            variant_skipped.append({**skip_base, "reason": "unchanged"})
             continue
         details = page.evaluate(r"""(()=>{
           const visible=el=>{for(let p=el;p;p=p.parentElement){const s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden'||s.visibility==='collapse'||Number(s.opacity)===0||p.hidden)return false;}return [...el.getClientRects()].some(r=>r.width>0&&r.height>0);};
@@ -227,11 +232,25 @@ def capture_product_variants(page, directory: Path, width: int) -> tuple[list[di
             variant_id:forms.map(f=>f.querySelector('[name="id"]')?.value).find(Boolean),url:location.href};
         })()""")
         if details.get("purchasable") is False:
+            variant_skipped.append({**skip_base, "reason": "not_purchasable"})
             continue
-        if details.get("review") or details.get("discount_price") is None or re.search(r"\bfrom\b", details.get("price_text", ""), re.I):
+        if details.get("review"):
             complete = False
+            variant_skipped.append({**skip_base, "reason": details["review"]})
             continue
-        labels = [value["label"] for value in selection]
+        if details.get("discount_price") is None:
+            complete = False
+            variant_skipped.append({**skip_base, "reason": "price_missing"})
+            continue
+        price_text = details.get("price_text", "")
+        amounts = re.findall(r"\$\s*\d[\d,]*(?:\.\d+)?", price_text)
+        from_label = bool(re.search(r"\bfrom\b", price_text, re.I))
+        if from_label and len(amounts) != 1:
+            complete = False
+            variant_skipped.append({**skip_base, "reason": "from_price"})
+            continue
+        if from_label:
+            details["starting_price_label"] = True
         quote = "\n".join([details["title"], *labels, details["price_text"]])
         capture = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
                             clip={"x":0,"y":0,"width":width,"height":min(page.call("Page.getLayoutMetrics")["cssContentSize"]["height"],32000),"scale":1})
@@ -241,9 +260,14 @@ def capture_product_variants(page, directory: Path, width: int) -> tuple[list[di
                             clip={"x":0,"y":0,"width":width,"height":min(page.call("Page.getLayoutMetrics")["cssContentSize"]["height"],32000),"scale":2})
         screenshot_b = directory / f"variant_{index}_b.png"
         atomic_bytes(screenshot_b, base64.b64decode(second["data"], validate=True))
-        captures.append({**details,"selected_options":labels,"offer_raw_text":quote,
-                         "captured_at":now(),"screenshot_path":str(screenshot),"second_screenshot_path":str(screenshot_b)})
-    return captures, complete
+        captures.append({**details, "selected_options": labels, "offer_raw_text": quote,
+                         "captured_at": now(), "screenshot_path": str(screenshot),
+                         "second_screenshot_path": str(screenshot_b)})
+    accounted = len(captures) + len(variant_skipped)
+    if variant_expected and accounted != variant_expected:
+        complete = False
+    return {"variant_captures": captures, "variant_expected": variant_expected,
+            "variant_skipped": variant_skipped, "variants_complete": complete and bool(captures or not variant_expected)}
 
 def combine_breakpoint_reports(url: str, reports: list[dict]) -> dict:
     """Only a complete three-viewport union can establish absence."""
@@ -266,11 +290,39 @@ def combine_breakpoint_reports(url: str, reports: list[dict]) -> dict:
         scroll_complete=all(row.get("scroll_complete") for row in reports),
         product_links=list(dict.fromkeys(link for row in good for link in row.get("product_links", []))),
         variant_captures=[capture for row in good for capture in row.get("variant_captures", [])],
+        variant_expected=max((row.get("variant_expected", 0) for row in good), default=0),
+        variant_skipped=[skip for row in good for skip in row.get("variant_skipped", [])],
         variants_complete=all(row.get("variants_complete", True) for row in reports))
     return base
 
 
-def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_details: bool = True) -> dict:
+def _variant_capture_key(capture: dict, business_id: int | None) -> tuple:
+    path = urlsplit(capture.get("url") or "").path
+    variant_id = str(capture.get("variant_id") or "")
+    if not variant_id:
+        return (path, capture.get("offer_raw_text"))
+    return (business_id, variant_id) if business_id is not None else (path, variant_id)
+
+
+def _dedupe_variant_captures(captures: list[dict], business_id: int | None) -> list[dict]:
+    seen, out = set(), []
+    for capture in captures:
+        key = _variant_capture_key(capture, business_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(capture)
+    return out
+
+
+def _product_variant_reconciliation(detail: dict) -> dict:
+    return {"url": detail.get("url"), "variant_expected": detail.get("variant_expected", 0),
+            "variant_skipped": detail.get("variant_skipped") or [],
+            "variant_capture_count": len(detail.get("variant_captures") or [])}
+
+
+def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_details: bool = True,
+                business_id: int | None = None) -> dict:
     reports = []
     with BROWSER_SLOTS:
         for name, width, mobile in BREAKPOINTS:
@@ -284,8 +336,10 @@ def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_d
     if product_details and "/collections/" in urlsplit(url).path:
         result["product_details"] = []
         for index, link in enumerate(result["product_links"]):
-            detail = render_page(link, directory / "products" / str(index), force_ocr=force_ocr, product_details=False)
+            detail = render_page(link, directory / "products" / str(index), force_ocr=force_ocr,
+                                 product_details=False, business_id=business_id)
             result["product_details"].append(detail)
+        result["product_variant_reconciliation"] = [_product_variant_reconciliation(d) for d in result["product_details"]]
         result["variants_complete"] = bool(result["product_links"]) and all(
             detail.get("complete") and detail.get("variants_complete") and detail.get("variant_captures")
             for detail in result["product_details"])
@@ -295,6 +349,10 @@ def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_d
         for round_name in ("a", "b"):
             result["image_tiles"][round_name].extend(tile for detail in result["product_details"] for tile in detail.get("image_tiles", {}).get(round_name, []))
     variant_captures = [c for d in result.get("product_details", []) for c in d.get("variant_captures", [])] or result.get("variant_captures", [])
+    variant_captures = _dedupe_variant_captures(variant_captures, business_id)
+    result["variant_captures"] = variant_captures
+    if not result.get("product_variant_reconciliation") and result.get("variant_expected") is not None:
+        result["product_variant_reconciliation"] = [_product_variant_reconciliation(result)]
     for capture in variant_captures:
         for round_name, field in (("a", "screenshot_path"), ("b", "second_screenshot_path")):
             path = capture.get(field)
@@ -422,10 +480,9 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
                 report["complete"] = False
                 report["failures"].append("collection_pagination_unchecked")
             if collect_variants:
-                captures, variants_complete = capture_product_variants(page, directory, width)
-                report["variant_captures"] = captures
-                report["variants_complete"] = variants_complete
-                report["complete"] = report["complete"] and variants_complete
+                variant_result = capture_product_variants(page, directory, width)
+                report.update(variant_result)
+                report["complete"] = report["complete"] and variant_result["variants_complete"]
             atomic_json(directory / "browser.json",report)
             return report
     finally:

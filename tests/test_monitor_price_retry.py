@@ -13,7 +13,8 @@ from utils.monitor_price_store import atomic_json
 URL = "https://a.test/specials"
 CONFIG = {"schema_version": 1, "monitors": {"daily": {"targets": [{"urls": [URL]}]}}}
 SNAPSHOT = {"promotions": [], "offers": [], "items": [], "services": [],
-            "businesses": [{"business_id": 1, "website": "a.test"}], "confirmations": [], "audit": []}
+            "businesses": [{"business_id": 1, "website": "a.test"}], "confirmations": [], "audit": [],
+            "service_names": ["Botox", "Others"]}
 
 
 def setup_event(root, event_id="1", url=URL):
@@ -77,7 +78,7 @@ def test_existing_failure_history_and_fresh_evidence_event_cannot_bypass_scrape_
 def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_resets(tmp_path, monkeypatch):
     path = setup_event(tmp_path)
     calls = []
-    monkeypatch.setattr(runner, "render_page", lambda *a: calls.append("browser") or {"accessible": False})
+    monkeypatch.setattr(runner, "render_page", lambda *a, **k: calls.append("browser") or {"accessible": False})
     for count in range(1, 4):
         runner.process_events(tmp_path, SNAPSHOT, write_enabled=False, retryable_only=count > 1)
         assert len(calls) == count
@@ -90,7 +91,7 @@ def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_reset
     assert len(calls) == 3 and json.loads(newer.read_text())["status"] == "review"
     fresh = tmp_path / "evidence/fresh.json"
     atomic_json(fresh, {"url": URL, "captured_at": datetime.now(timezone.utc).isoformat(), "markdown": "fresh $12"})
-    monkeypatch.setattr(runner, "render_page", lambda url, *a: calls.append("browser") or {"accessible": True, "final_url": url})
+    monkeypatch.setattr(runner, "render_page", lambda url, *a, **k: calls.append("browser") or {"accessible": True, "final_url": url})
     seen = []
     monkeypatch.setattr(runner, "extract_evidence", lambda artifact, *a: seen.append(artifact["markdown"]) or {})
     monkeypatch.setattr(runner, "build_plan", lambda *a: {"status": "ready", "operations": [], "review": []})
@@ -115,7 +116,7 @@ def test_failed_weekly_capture_does_not_reopen_processing_pause(tmp_path, monkey
         def scrape(self, url): raise ScrapeFailure("firecrawl_empty_markdown", {})
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.SelfHostedMonitor", Monitor)
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.time.sleep", lambda _: None)
-    monkeypatch.setattr(runner, "render_page", lambda *a: pytest.fail("No successful weekly capture"))
+    monkeypatch.setattr(runner, "render_page", lambda *a, **k: pytest.fail("No successful weekly capture"))
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
     monkeypatch.setattr("sys.argv", ["sync", "--state-dir", str(tmp_path), "--config", str(config)])
     assert runner.main() == 2
@@ -140,10 +141,9 @@ def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_p
     atomic_json(tmp_path / "price_sync_control.json", {"write_enabled": True})
     monkeypatch.setattr(runner, "run_monitor", lambda *a, **k: pytest.fail("Capped page must not be scraped"))
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
-    monkeypatch.setattr(runner, "target_client", lambda: object())
     monkeypatch.setattr(runner, "prepare_event", lambda path, *a: {"status": "ready", "operations": [], "review": []})
     writes = []
-    monkeypatch.setattr(runner, "apply_plan", lambda *a: writes.append("ready") or {"status": "completed"})
+    monkeypatch.setattr(runner, "render_pending", lambda *a: writes.append("ready") or {"status": "pending_sql", "sql_path": "x.sql"})
     monkeypatch.setattr("sys.argv", ["sync", "--state-dir", str(tmp_path), "--config", str(config), "--retry-transient-only"])
     assert runner.main() == 0
     report = json.loads((tmp_path / "sync_report.json").read_text())
@@ -152,44 +152,54 @@ def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_p
     assert any(r.get("category") == "retry_limit_reached" for r in json.loads((tmp_path / "review_queue.json").read_text()))
 
 
-def test_three_recovery_failures_pause_original_journal_then_weekly_resumes_same_plan(tmp_path, monkeypatch):
+def pending_file_renderer(rendered):
+    def render(plan, protections, state_dir):
+        path = Path(state_dir) / "pending_sql" / f"{len(rendered)}_{plan['event_id']}.sql"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("-- plan\n")
+        rendered.append(path)
+        return {"status": "pending_sql", "sql_path": str(path)}
+    return render
+
+
+def test_pending_sql_event_waits_for_its_file_and_is_never_planned_or_rendered_twice(tmp_path, monkeypatch):
     path = setup_event(tmp_path)
-    source = {"business_id": 1, "url": URL}
-    plan = {"event_id": "1", "source": source, "prepared_at": datetime.now(timezone.utc).isoformat(),
-            "allocated_ids": {"promo_offer_master": {"-1": 100}}}
-    journal_path = tmp_path / "journals/original.json"
-    journal = {"stage": "review", "transport": "rest", "plan": plan, "pending": {"op": {"action": "insert"}}}
-    atomic_json(journal_path, journal)
-    monkeypatch.setattr(runner, "target_client", lambda: object())
-    monkeypatch.setattr(runner, "bind_source", lambda *a: source)
-    calls, applied = [], []
-    monkeypatch.setattr(runner, "recover_journal", lambda *a: calls.append("recover") or {"status": "review", "category": "readback_unavailable", "resume_required": True})
-    monkeypatch.setattr(runner, "prepare_event", lambda *a: pytest.fail("Original journal owns this source"))
-    for _ in range(4):
-        runner.process_events(tmp_path, SNAPSHOT, write_enabled=True, retryable_only=True)
-    assert len(calls) == 3 and RetryLimits(tmp_path).paused("recovery", URL)
-    assert json.loads(journal_path.read_text()) == journal
-    monkeypatch.setattr(runner, "recover_journal", lambda *a: calls.append("recover") or {"status": "retryable", "category": "verified_resume"})
-    monkeypatch.setattr(runner, "apply_plan", lambda frozen, *a: applied.append(frozen) or {"status": "completed"})
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True, recovery_probe=True)
-    assert len(calls) == 4 and applied == [plan]
-    assert not RetryLimits(tmp_path).paused("recovery", URL)
-    assert json.loads(path.read_text())["status"] == "completed"
+    rendered = []
+    monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": [], "event_id": "1"})
+    monkeypatch.setattr(runner, "render_pending", pending_file_renderer(rendered))
+    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    assert json.loads(path.read_text())["status"] == "pending_sql" and len(rendered) == 1
+    monkeypatch.setattr(runner, "prepare_event", lambda *a: pytest.fail("A pending SQL file owns this source event"))
+    monkeypatch.setattr(runner, "render_pending", lambda *a: pytest.fail("Rendered twice"))
+    for _ in range(3):
+        report = runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+        assert report["selected_events"] == 0
+    # The session executed the file and marked it applied: the event completes without another render.
+    from utils.pending_sql import mark_applied
+    mark_applied(rendered[0])
+    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    event = json.loads(path.read_text())
+    assert event["status"] == "completed" and event["receipt"]["sql_path"] == str(rendered[0])
 
 
-def test_unknown_insert_is_never_reposted_by_retry_limit_or_weekly_probe(tmp_path, monkeypatch):
-    source = {"business_id": 1, "url": URL}
-    setup_event(tmp_path)
-    atomic_json(tmp_path / "journals/unknown.json", {"stage": "review", "transport": "rest", "plan": {"source": source, "event_id": "1"}})
-    monkeypatch.setattr(runner, "target_client", lambda: object())
-    monkeypatch.setattr(runner, "bind_source", lambda *a: source)
-    monkeypatch.setattr(runner, "recover_journal", lambda *a: {"status": "review", "category": "insert_outcome_unknown", "resume_required": True})
-    monkeypatch.setattr(runner, "apply_plan", lambda *a: pytest.fail("Unknown POST cannot be repeated"))
-    for _ in range(4): runner.process_events(tmp_path, SNAPSHOT, write_enabled=True, retryable_only=True)
-    assert RetryLimits(tmp_path).paused("recovery", URL)
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True, recovery_probe=True)
-    assert RetryLimits(tmp_path).get("recovery", URL)["last_reason"] == "insert_outcome_unknown"
-    assert json.loads((tmp_path / "events/1.json").read_text())["receipt"]["category"] == "insert_outcome_unknown"
+def test_missing_pending_sql_file_reopens_the_event_for_one_new_render(tmp_path, monkeypatch):
+    path = setup_event(tmp_path)
+    rendered = []
+    monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": [], "event_id": "1"})
+    monkeypatch.setattr(runner, "render_pending", pending_file_renderer(rendered))
+    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    rendered[0].unlink()
+    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    assert len(rendered) == 2 and json.loads(path.read_text())["status"] == "pending_sql"
+
+
+def test_writes_disabled_renders_no_sql_and_leaves_the_event_pending(tmp_path, monkeypatch):
+    path = setup_event(tmp_path)
+    monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": []})
+    monkeypatch.setattr(runner, "render_pending", lambda *a: pytest.fail("Control file disables SQL generation"))
+    report = runner.process_events(tmp_path, SNAPSHOT, write_enabled=False)
+    assert report["sources"][0]["status"] == "writes_disabled"
+    assert not (tmp_path / "pending_sql").exists()
 
 
 def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_path, monkeypatch):
@@ -203,7 +213,7 @@ def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_pa
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.SelfHostedMonitor", Monitor)
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
     monkeypatch.setattr(runner, "enqueue_expired_campaign_checks", lambda *a: 0)
-    monkeypatch.setattr(runner, "render_page", lambda url, *a: {"accessible": True, "final_url": url})
+    monkeypatch.setattr(runner, "render_page", lambda url, *a, **k: {"accessible": True, "final_url": url})
     seen = []
     monkeypatch.setattr(runner, "extract_evidence", lambda artifact, *a: seen.append(artifact["markdown"]) or {})
     monkeypatch.setattr(runner, "build_plan", lambda *a: {"status": "ready", "operations": [], "review": []})
@@ -217,7 +227,7 @@ def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_pa
 def test_processing_counts_for_parallel_sources_are_all_persisted(tmp_path, monkeypatch):
     snapshot = {**SNAPSHOT, "businesses": [{"business_id": n, "website": f"{n}.test"} for n in range(3)]}
     for n in range(3): setup_event(tmp_path, str(n), f"https://{n}.test/specials")
-    monkeypatch.setattr(runner, "render_page", lambda *a: {"accessible": False})
+    monkeypatch.setattr(runner, "render_page", lambda *a, **k: {"accessible": False})
     runner.process_events(tmp_path, snapshot, write_enabled=False)
     assert len(RetryLimits(tmp_path).state["processing"]) == 3
     assert all(row["consecutive_failures"] == 1 for row in RetryLimits(tmp_path).state["processing"].values())

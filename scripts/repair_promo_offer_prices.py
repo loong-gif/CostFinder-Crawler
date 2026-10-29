@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.audit_promo_offer_prices import fetch_all  # noqa: E402
 from utils.promo_offer_price_quality import build_price_repair_plan  # noqa: E402
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import load_supabase_client  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,15 +29,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="应用带 updated_at 前置条件的修复")
     parser.add_argument("--output-dir", default=str(PROJECT_ROOT / "output" / "results"))
     return parser.parse_args()
-
-
-def _client(*, writer: bool) -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    url = os.getenv("SUPABASE_URL")
-    key = get_supabase_writer_key() if writer else (os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY"))
-    if not url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或所需凭据")
-    return SupabaseRestClient(url, key)
 
 
 def _apply_plan(client: SupabaseRestClient, plan) -> dict[str, Any]:
@@ -74,11 +64,11 @@ def _apply_plan(client: SupabaseRestClient, plan) -> dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
-    rows = fetch_all(_client(writer=False))
+    rows = fetch_all(load_supabase_client(PROJECT_ROOT, role="reader"))
     plan = build_price_repair_plan(rows)
     applied: dict[str, Any] = {}
     if args.apply:
-        applied = _apply_plan(_client(writer=True), plan)
+        applied = _apply_plan(load_supabase_client(PROJECT_ROOT, role="writer"), plan)
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"promo_offer_price_repair_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"

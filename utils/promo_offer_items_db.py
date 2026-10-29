@@ -18,9 +18,15 @@ _BLANKET_OFFER_RE = re.compile(
 )
 
 
+# The AGENTS.md batch check, verbatim; usable as a Python regex and inside SQL `~*`.
+AGENTS_BLANKET_PATTERN = r"all services|any service|all products|all treatments|gift card|skin ?care products"
+AGENTS_BLANKET_RE = re.compile(AGENTS_BLANKET_PATTERN, re.IGNORECASE)
+
+
 def is_blanket_offer_text(text: str) -> bool:
     """Identify explicit clinic-wide and non-treatment offer wording."""
-    return bool(_BLANKET_OFFER_RE.search(str(text or "")))
+    text = str(text or "")
+    return bool(_BLANKET_OFFER_RE.search(text) or AGENTS_BLANKET_RE.search(text))
 
 
 def offer_item_semantics(items: List[Dict[str, Any]]) -> list[tuple[Any, ...]]:
@@ -192,11 +198,16 @@ def backfill_unlinked_item_service_ids(
         unlinked = [item for item in items if item.get("service_id") is None]
         if not unlinked:
             continue
+        sibling_count = len(items)
+        is_package = len(items) > 1  # ponytail: backfill lacks master.is_package; multi-item uses isolated mapping
         for item in unlinked:
             name = infer_service_name_for_item(
                 offer_raw_text=hint,
                 quantity=item.get("quantity"),
-                sibling_count=len(unlinked),
+                service_name=item.get("service_name"),
+                item_name=item.get("item_name"),
+                sibling_count=sibling_count,
+                is_package=is_package,
             )
             svc = resolve_service_row_for_name(
                 client, business_id=business_id, service_name=name

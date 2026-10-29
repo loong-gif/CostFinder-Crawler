@@ -4,3 +4,6 @@ psycopg[binary]>=3.2,<4
 firecrawl-py>=4.28,<5
 websockets>=15,<18
 pandas>=2.2,<4
+markdown-it-py>=3,<5
+pglast>=7,<9
+python-dateutil>=2.9,<3

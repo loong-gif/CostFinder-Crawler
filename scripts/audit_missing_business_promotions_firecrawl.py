@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -27,11 +27,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.backfill_clinic_promotions_firecrawl_gemini import build_gemini_client
-from scripts.extract_clinic_promotions_from_scrape_raw import (
-    llm_extract_promotions,
-    merge_promotion_items,
+from utils.gemini_client import build_gemini_client
+from utils.promo_paths import (  # noqa: F401
+    PROMOTION_URL_TOKENS,
+    is_promotion_url_strict as is_promotion_page_url,
+    normalized_host as _normalized_host,
 )
+from utils.promo_extraction import llm_extract_promotions, merge_promotion_items
 from utils.firecrawl_scrape_raw_db import (
     canonical_scrape_url,
     save_scrape_response,
@@ -43,7 +45,6 @@ DEFAULT_FIRECRAWL_API_URL = "http://192.168.1.68:3002"
 DEFAULT_MAP_LIMIT = 500
 DEFAULT_WORKERS = 3
 PAGE_SIZE = 1000
-PROMOTION_URL_TOKENS = {"special", "specials", "promotion", "promotions"}
 FALLBACK_PATHS = ("/special", "/specials", "/promotion", "/promotions")
 
 _EXPLICIT_PROMOTION_PATTERNS = (
@@ -58,12 +59,6 @@ _EXPLICIT_PROMOTION_PATTERNS = (
 _NON_WORD = re.compile(r"[^a-z0-9]+")
 
 
-def _normalized_host(url: Any) -> str:
-    value = str(url or "").strip()
-    parsed = urlparse(value if "://" in value else f"https://{value}")
-    return (parsed.hostname or "").casefold().removeprefix("www.")
-
-
 def _normalized_words(value: Any) -> str:
     return " ".join(_NON_WORD.sub(" ", str(value or "").casefold()).split())
 
@@ -75,19 +70,6 @@ def _contains_phrase(haystack: str, phrase: str) -> bool:
 def _page_data(response: Mapping[str, Any]) -> dict[str, Any]:
     nested = response.get("data")
     return dict(nested) if isinstance(nested, Mapping) else dict(response)
-
-
-def is_promotion_page_url(url: str) -> bool:
-    """Accept only bounded special(s)/promotion(s) tokens in the URL path."""
-    raw = str(url or "").strip()
-    if not raw:
-        return False
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    for segment in parsed.path.split("/"):
-        tokens = set(_NON_WORD.sub(" ", unquote(segment).casefold()).split())
-        if tokens & PROMOTION_URL_TOKENS:
-            return True
-    return False
 
 
 def has_explicit_promotion_signal(text: str) -> bool:

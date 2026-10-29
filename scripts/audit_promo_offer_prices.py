@@ -5,14 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -20,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.promo_offer_price_quality import audit_offer_prices  # noqa: E402
 from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 
 SELECT = (
@@ -36,29 +34,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _reader() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-    if not url or not key:
-        raise RuntimeError("缺少 SUPABASE_URL 或只读 publishable/anon key")
-    return SupabaseRestClient(url, key)
-
-
 def fetch_all(client: SupabaseRestClient) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = client.fetch_rows("promo_offer_master", SELECT, limit=PAGE_SIZE, offset=offset, order="id.asc")
-        rows.extend(page)
-        if len(page) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
+    return fetch_all_rows(client, "promo_offer_master", SELECT, page_size=PAGE_SIZE, order="id.asc")
 
 
 def main() -> int:
     args = parse_args()
-    report = audit_offer_prices(fetch_all(_reader()))
+    report = audit_offer_prices(fetch_all(load_supabase_client(PROJECT_ROOT, role="reader")))
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

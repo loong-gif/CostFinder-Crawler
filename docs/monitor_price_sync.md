@@ -9,6 +9,12 @@
 `CostFinderFirecrawlMonitor` 及其启动文件 `run_monitor_validation.sh`。
 主任务每周日服务器当地时间 00:30 执行一次，时区为 Windows `Pacific Standard Time`
 （自动处理夏令时）。触发器为 Weekly、间隔 1 周；错过执行时间后允许补跑。
+`config/firecrawl_monitor_migration.json` 中各监控的 `cron: "0 0 * * *"` 是从 Firecrawl 云端监控迁移
+时保留的值，自托管执行器不读取它；实际节奏只取决于上述 Windows 任务。
+2026-10-15 已用 `schtasks /query` 核实：`CostFinderFirecrawlMonitor` 为 Weekly、周日 00:30，下次运行 2026-10-18；
+`Last Result` 为 2 是设计内的退出码，不是崩溃：`run_monitor_price_sync.py` 在任一监控有页面抓取错误或存在 `retryable` 来源时返回 2
+（见脚本末尾 `return 2 if ...`），报告中 `failure_scope` 为 `page_or_source_only`，由每小时的 `CostFinderFirecrawlMonitorRetry` 重试。
+2026-10-11 的运行因部分页面返回 `firecrawl_empty_markdown` 而得到 2，日志无 Traceback。
 另设每小时的 `CostFinderFirecrawlMonitorRetry`，运行 `run_monitor_retry.sh`；它只重试最新的
 transient 事件和最近一次失败晚于成功抓取的页面。两个入口共享 `.monitor.lock`，业务审查事件
 不会被每小时重新打开。
@@ -16,22 +22,21 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 `CostFinderDataQualityDaily`；脚本只在上海时间 **09** 点执行，其余小时直接退出，因此不受太平洋
 夏令时影响。它运行 `run_data_quality_audit.py --recheck`：只读审计并定向重抓到期、缺权益和
 超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
-同一来源的抓取、浏览器/提取和数据库恢复分别累计连续失败，达到 **3 轮**后暂停该阶段的
+同一来源的抓取和浏览器/提取分别累计连续失败，达到 **3 轮**后暂停该阶段的
 小时重试并加入审查清单。抓取一轮内的两个 HTTP 尝试只算一轮失败；重启程序或新事件
 不会绕过来源上限。周任务仍抓取所有配置页面，成功抓取后清除抓取计数；暂停的提取阶段
 只有在本轮周任务取得该页新正文后才重新核验，提取成功后清零。仍失败时继续保持暂停。
-数据库恢复按原 journal 每周检查一次，完成恢复后清零；未知新增依旧禁止重复 POST，
-不能通过新抓取证据替换部分写入计划。某一阶段成功不会清空其他阶段的失败计数。
+某一阶段成功不会清空其他阶段的失败计数。
 运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文；服务器已有的
 Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
 每个临时页面都会关闭。WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
 
 `state/price_sync_control.json` 的 `write_enabled` 默认且部署后始终为 `false`。
-关闭时仍会采集、核验、生成保护名单和冻结差异计划。完成服务 key 的 REST 权限和写入验证后
-才可改为 `true`。到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。历史 inactive 记录不自动恢复。
-运行使用现有 `SUPABASE_SECRET_KEY` 或 `SUPABASE_SERVICE_ROLE_KEY`，
-不需要数据库密码或 `DB_URL`。每次写入检查目标项目、完整来源旧状态和逐行 CAS。
-Codex 内的 Supabase MCP 登录可用于读取和人工核验；服务器任务不能复用该登录。
+关闭时仍会采集、核验、生成保护名单和冻结差异计划，但不生成待执行 SQL；改为 `true` 后，
+通过门禁的冻结计划渲染为 `state/pending_sql/` 下的 SQL 文件。到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。历史 inactive 记录不自动恢复。
+服务器只用 `SUPABASE_SECRET_KEY` 或 `SUPABASE_SERVICE_ROLE_KEY` 经 REST 只读，服务名称枚举
+经只读函数 `fn_clinic_service_names()` 读取；服务器不连数据库、不写数据库，也不使用 `DB_URL`。
+所有写入由会话经 Supabase MCP 执行（见下文「待执行 SQL」）。
 OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；401/403 凭据被拒绝
 时进入审查。失败不能作为改价或移除证据，不通过自动购买额度解决。
 写入门禁按来源及候选判断：部分抓取失败、其他来源待审查和小时任务返回 2，均不关闭全局
@@ -61,11 +66,12 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 | `sync/<事件ID>/browser.json`、`screenshot.png`、`ocr.json` | 浏览器可见性、截图和 OCR |
 | `sync/<事件ID>/extraction.json`、`evidence.json`、`visibility.json` | 结构化提取和逐条证据门禁 |
 | `sync/<事件ID>/plan.json`、`plan_attempt_*.json` | 冻结计划和保留的旧版计划 |
-| `manual_protections.json` | 人工确认、管理员操作和手工追加保护 |
+| `manual_protections.json` | 手工追加的保护条目和 ID 列表 |
 | `review_queue.json`、`sync_report.json` | 来源审查清单与运行报告 |
 | `retry_limits.json` | 按来源和阶段保存连续失败次数、最后原因及暂停状态；报告的 `paused_retries` 列出达到上限的项目 |
 | `runs/*_full_monitor.json`、`runs/*_failure_retry.json` | 历次完整运行和失败重试报告，小时报告不覆盖周报告 |
-| `journals/*.json` | 每步请求、返回 ID、完整来源回读、恢复位置和完成/审查回执 |
+| `pending_sql/*.sql` | 待执行的写入：每个冻结计划一个 DO 块，文件头含计划 ID、plan sha256、来源 URL、业务 ID 与各表操作数 |
+| `pending_sql/applied/` | 已经 MCP 执行并标记的文件 |
 
 先把原始证据和事件可靠落盘，才推进快照。文件写入使用临时文件、原子替换和
 文件/目录同步。整个任务和重试任务共用 `.monitor.lock`；运行重叠会退出。
@@ -110,70 +116,66 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 程序从现有业务确认和管理员记录持续补充保护，保留手动追加项。
 保护包括父活动/优惠的子记录及触发器间接修改；一项冲突会阻止整来源更新。
 
-## REST 分步写入与恢复
+## 待执行 SQL
 
-服务器通过现有 Supabase REST 客户端写入。GET/POST/PATCH 使用编码参数和返回行；
-每条 PATCH 带 ID、来源关系、active 状态、`updated_at` 和目标字段旧值条件。
-`promotion_content` 使用 JSONB 过滤值，`conditions` 使用 PostgreSQL text[] 过滤值。
-没有新表、RPC、DDL、数据库密码、删除或 upsert 路径。
+服务器把每个通过门禁（`write_enabled`、图片证据、证据不超过 24 小时）的冻结计划渲染为一个
+DO 块，写入 `state/pending_sql/<UTC 时间戳>_<事件ID>.sql`，事件状态为 `pending_sql`。
+DO 块是一条语句，执行失败整体回滚，不存在部分写入：
 
-**来源内多个请求不具备事务原子性，可能留下部分更新。** 写入前检查完整来源集合、
-所有旧值、版本、最终结构和保护关系；受保护父记录、子记录或触发器可能修改的兄弟记录
-均提前阻断。受影响的已有 Offer 先设 inactive，完成标志先设 false；新 Promotion/Offer
-先保持 inactive。内容、总额和原子 Item 分步写入，每步回读验证请求值、已知触发器结果、
-来源成员集合及未触及字段。全部结构、价格和来源门禁通过后才激活并恢复完成标志。
-移除保留原 ID，使用 inactive。
-
-Master/Item 插入省略主键，使用现有数据库默认序列。Promotion 没有默认序列，
-保存当前最大 ID + 1 候选后执行普通 INSERT；其他写入者抢占候选时进入审查，绝不 upsert
-覆盖冲突记录。已返回的新增 ID 和完整返回行在下一次网络请求前可靠落盘。
+1. 先锁定相关行（插入促销时锁表），核对来源完整集合与计划 before 的每一行全部列和
+   `updated_at`、保护项（存在性、直接操作、父子级联）；不一致即 raise。
+2. 写入：新 Promotion 使用当前最大 ID + 1，Offer/Item 使用默认序列；Offer 先以 inactive 插入，
+   子行写完后再按计划激活；每条 DML 核对影响行数恰为 1。
+3. 写后核对：请求字段与实际值一致、派生优惠与公式一致、受保护行未变化、来源成员集合与所有权
+   未变化、active Offer 的结构与价格不变量（有子项、数量大于 0、套餐无单价、单价乘数量等于折后价、
+   Blanket 不链接服务、服务不跨业务、父促销 active 且未过期），最后执行 AGENTS.md 的 Blanket 检查。
 
 价格总额遵循现有触发器：Master 折后总价按 `coalesce(delivered_units,1)` 除到 Item，
-固定数量不能再次除法。`is_package` 的 Master 变更本身不会清空 Item 单位价，随后必须
-显式更新 Item；逐请求约束在 inactive 状态也生效。套餐切回非套餐而无法在同一请求中
-触发合法价格同步时，写入前进入审查。来源从完整价格转为同值百分比/金额优惠时，
-触发器可能清除旧派生值；程序在 inactive 阶段以独立请求恢复来源支持的明确优惠。
+固定数量不能再次除法；套餐只给总价时 Item 单位价为 NULL。
 
-journal 在每步 DML 前保存请求和恢复位置，收到响应立即保存返回值，再保存完整回读。
-未知结果和恢复规则：
+会话中的执行步骤：
 
-1. PATCH 后回读与已验证旧状态完全相同：使用原冻结旧值继续；与唯一预期触发器结果相同：
-   确认该步成功，继续后续步骤，不重复已经成功的改价。
-2. POST 已返回 ID 但后续 GET 失败：按已保存的 ID/返回行核验完整状态，核验通过可继续。
-3. POST 未收到返回 ID：保留新增候选供人工审查，即使暂未读到新增行也不自动重复 POST，
-   因为先前请求仍可能迟到提交。现有 schema 没有可安全复用的请求幂等键。
-4. CAS 不命中、来源集合/字段/版本变化、触发器结果不符、请求被拒绝或新保护冲突：
-   整来源暂停审查，保留实际部分状态。禁止删除 journal 或重新提取绕过恢复边界。
+1. 把服务器 `$BASE/state/pending_sql/` 拉回本地（例如 `output/self_hosted_monitor_state/pending_sql/`）。
+2. `python scripts/promo_pipeline.py pending-sql --dir <目录>` 列出待执行文件及头部摘要。
+3. 审阅后用 Supabase MCP `execute_sql` 执行整个文件。
+4. 成功后 `pending-sql --mark-applied <文件>` 移到 `applied/`；下次 monitor 运行时事件变为 `completed`。
+   文件丢失时事件回到 `retryable` 并重新渲染。
+5. 执行后运行批次闸门（`batch-gate`）。
 
-每次启动先恢复旧 journal，再处理新事件。恢复也重新检查来源业务归属、会员来源和
-重定向边界；旧计划不能绕过新发现的来源限制。无法恢复的来源阻断该 URL 后续事件，
-其他来源继续执行。旧 journal 恢复完成后，同来源较新的事件延后到下一次新快照和证据核验，
-不使用恢复前的快照生成可写计划。超过 24 小时的冻结证据不继续 DML，进入审查。
-只有全部最终字段和 active 结构回读正确，并通过 AGENTS.md Blanket 检查的 REST 等价查询，
-才标记 completed。检查覆盖全库 active Blanket master 与非空 service_id 的 Item。
-
-本地 journal 锁仅串行化此监控程序。跨请求父子行没有数据库锁，其他写入者在最后读取与
-请求之间修改触发器涉及的子行，无法由父行 CAS 完全排除；后续回读发现差异时停止，但已经
-发生的请求不能回滚。需要人工处理的部分更新明确保留在审查回执，不能宣称恢复了 SQL 事务保证。
-旧 SQL journal 不使用 REST 重放；未完成的旧 journal 要单独审查。
-
-首次补齐先冻结整个新批次计划，再执行新来源 DML。小时入口运行
-`run_monitor_retry.sh`，等同于 `scripts/run_monitor_price_sync.py --retry-transient-only`：
+小时入口 `run_monitor_retry.sh` 运行 `promo_pipeline.py monitor --retry-transient-only`：
 只回抓最近失败的页面，并且只处理每个 URL 最新的 retryable 事件。
-`--retry-reviews` 可重新核验没有部分写入回执的审查事件；含 `resume_required` 的事件
-保留原冻结计划，必须先解决原 journal。
+`--retry-reviews` 可重新核验审查事件。
 
-过期但能证明从未发送写入请求的 REST journal 归档为 `superseded`，允许用新抓取证据重新规划。
-初次 GET 失败尚无 `current`，或新的持久化 `requests_sent=0`，才构成这种证明；零已完成步骤、
-清空 pending 或一次旧态回读都不能证明请求从未发出。任何已发送或结果未知的请求继续按原日志
-恢复/审查。重建必须取得晚于旧计划且 24 小时内的抓取证据；缺少时由小时重试单独回抓该页。
-恢复时人工保护按该来源实际会触达的父子记录判断，其他诊所新增保护不阻断本来源。
+## Variant 对账与批次闸门 F–I
+
+Shopify 商品页抓取在 `browser.json` 中写入 `variant_expected`、`variant_skipped`、
+`variant_captures` 与（集合页）`product_variant_reconciliation`。规划器在
+`variant_reconciliation_mismatch` 时阻断写入；`from` 起价仅在页面有 variant 对账记录且集合
+未抓全时阻断（`starting_price_variant_set_incomplete`），无 variant 的普通起价页仍按非阻断提示写入下限。
+
+`promo_offer_items.delivered_units` 是 `smallint`，计划中必须写整数。
+集合页汇总时按 `(business_id, variant_id)` 去重，避免同一商品在多个 collection 重复建 offer。
+
+会员价与普通价：**非会员档写入会员 offer 的 `regular_price`**，不单独建非会员 offer。
+`visible_variant_offers` 会配对同规格 Member / Non-Member 变体，只输出会员 offer 并带上
+非会员售价作为 `regular_price`。文本 offer 同理：`merge_member_tiers` 在 item 与 `price_model`
+相同、非会员价更高且唯一配对时并入会员 offer；配对按 `/products/<handle>` 比较，不受 collection
+与商品页 URL 差异影响。
+
+每次经 MCP 执行写入 SQL 后运行批次闸门 A–J（`promo_pipeline.py batch-gate`）：
+
+| 检查 | 含义 |
+| --- | --- |
+| F | 文案含 `from $` 但 `price_model` 不是 `from` |
+| G | `total` offer 的文案/conditions 写明固定数量 N（≥2 units/sessions/syringes/treatments），但没有任何 item 交付 N；门槛表述（minimum、at least、N+、or more、up to、max）不算 |
+| H | 会员 offer 在来源中声明 non-member 价，但 `regular_price` 缺失、≤ 折扣价或与声明不符 |
+| I | 无 item 的 offer（上架一律报；未上架超过 24h 的空壳报出） |
+
+只读审计 `run_data_quality_audit.py` 使用同名规则前缀（F/G/H/I）。
 
 ## 验证边界
 
-本地针对规划、证据队列、SQL 历史 writer 和 REST 分步恢复的测试不连接生产数据库。
-REST 测试按真实触发器的每次请求边界模拟状态，包括固定数量总额除法、套餐切换、
-百分比/金额优惠恢复、间接保护、CAS/集合冲突、PATCH 超时前后状态、已确认新增 ID 的回读失败、
-未知 POST 禁止重复、来源审查隔离和旧 journal 的会员来源门禁。
-模拟测试不能替代线上 service key 权限、现有默认序列和实际触发器验收。
-首次上线必须通过真实写入后的数据库回读验收。实际部署、写入结果和未解决限制见导出的运行报告。
+本地针对规划、证据队列和 SQL 渲染的测试不连接生产数据库。渲染出的每个 DO 块都经
+PostgreSQL 解析器（pglast）校验语法，测试对 SQL 文本断言前置核对、写入顺序与写后核对。
+语法校验与文本断言不能替代真实触发器下的执行验收：首次上线时先在会话中经 MCP 执行少量
+待执行 SQL，并回读核对结果。

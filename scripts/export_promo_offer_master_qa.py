@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -13,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -21,7 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.promo_offer_audit import audit_rows  # noqa: E402
 from utils.schema_contract import OFFER_MASTER_COLUMNS  # noqa: E402
-from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key  # noqa: E402
+from utils.supabase_rest import SupabaseRestClient  # noqa: E402
+from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
 
 PAGE_SIZE = 1000
@@ -88,41 +87,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_client() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = os.getenv("SUPABASE_URL")
-    writer_key = get_supabase_writer_key()
-    if not base_url or not writer_key:
-        raise RuntimeError("缺少 Supabase URL 或 writer key")
-    return SupabaseRestClient(base_url, writer_key)
-
-
 def fetch_all(client: SupabaseRestClient) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    offset = 0
-    while True:
-        batch = client.fetch_rows(
-            "promo_offer_master",
-            EXTENDED_OFFER_SELECT,
-            limit=PAGE_SIZE,
-            offset=offset,
-            order="id.asc",
-        )
-        if not batch:
-            return rows
-        rows.extend(batch)
-        if len(batch) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
+    return fetch_all_rows(client, "promo_offer_master", EXTENDED_OFFER_SELECT, page_size=PAGE_SIZE, order="id.asc")
 
 
 def fetch_lookups(client: SupabaseRestClient) -> tuple[set, set, Dict[Any, Dict[str, Any]]]:
-    master_rows = client.fetch_rows("master_business_info", "business_id", limit=5000)
-    plan_rows = client.fetch_rows("clinic_memberships", "plan_id", limit=5000)
-    service_rows = client.fetch_rows(
+    master_rows = fetch_all_rows(client, "master_business_info", "business_id", order="business_id.asc")
+    plan_rows = fetch_all_rows(client, "clinic_memberships", "plan_id", order="plan_id.asc")
+    service_rows = fetch_all_rows(
+        client,
         "clinic_services",
         "service_id,business_id,service_name,regular_price,unit_type,service_area,source_url,service_category",
-        limit=5000,
+        order="service_id.asc",
     )
     master_ids = {row["business_id"] for row in master_rows if row.get("business_id") is not None}
     plan_ids = {row["plan_id"] for row in plan_rows if row.get("plan_id") is not None}
@@ -282,7 +258,7 @@ def main() -> None:
         else output_path.with_name(output_path.stem + "_summary.json")
     )
 
-    client = load_client()
+    client = load_supabase_client(PROJECT_ROOT, role="writer")
     rows = fetch_all(client)
     master_ids, plan_ids, services = fetch_lookups(client)
     issues, _, layered_summary = audit_rows(

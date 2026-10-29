@@ -10,13 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
+from utils.supabase_rest import SupabaseRestClient
+from utils.supabase_access import load_supabase_client
 from scripts.run_domain_architecture_pipeline import (
     build_actual_trace,
     link_item_services,
@@ -227,15 +227,6 @@ def persist_promotion_and_offers_from_bundle(
     return stats
 
 
-def load_client() -> SupabaseRestClient:
-    load_dotenv(PROJECT_ROOT / ".env")
-    base_url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = get_supabase_secret_key()
-    if not base_url or not key:
-        raise RuntimeError("Missing SUPABASE_URL or service-role key")
-    return SupabaseRestClient(base_url, key)
-
-
 def load_loulou_scrape_from_disk(source_url: str) -> dict[str, Any] | None:
     """Prefer fresh Firecrawl CLI captures with --only-main-content."""
     fc = PROJECT_ROOT / ".firecrawl/louloumedspa"
@@ -318,7 +309,7 @@ def apply_bundle(bundle_path: Path, *, trace_out: Path | None = None) -> dict[st
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
     business_id = int(bundle["business_id"])
     domain = str(bundle.get("domain") or "louloumedspa.com")
-    client = load_client()
+    client = load_supabase_client(PROJECT_ROOT, role="secret")
     website = str(bundle.get("website") or domain)
 
     search_entries = iter_search_entries(bundle)

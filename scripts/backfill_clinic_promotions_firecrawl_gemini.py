@@ -18,22 +18,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.extract_clinic_promotions_from_scrape_raw import (
-    llm_extract_promotions,
-    merge_promotion_items,
-)
+from utils.promo_paths import sanitized_output_path as _output_path
+from utils.gemini_client import GEMINI_MODEL, build_gemini_client  # noqa: F401  (re-exported)
+from utils.promo_extraction import llm_extract_promotions, merge_promotion_items
 from utils.firecrawl_client import get_firecrawl_cloud_client
 from utils.firecrawl_scrape_raw_db import (
-    canonical_scrape_url,
     save_scrape_response,
     scrape_request_fingerprint,
 )
-from utils.offer_extraction_llm import GeminiNativeClient
 from utils.recent_raw_extraction import promotion_evidence_markdown
 from utils.rendered_visibility_gate import filter_visible_promotion_content
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"
 SCREENSHOT_FORMAT = ScreenshotFormat(
     type="screenshot",
     full_page=True,
@@ -73,14 +69,6 @@ def select_targets(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if isinstance(row, dict) and not list(row.get("promotion_content") or [])
     ]
     return sorted(targets, key=lambda row: int(row["promotion_id"]))
-
-
-def build_gemini_client(environ: dict[str, str] | None = None) -> GeminiNativeClient:
-    env = environ if environ is not None else os.environ
-    api_key = str(env.get("GEMINI_API_KEY") or "").strip().strip("'\"")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")
-    return GeminiNativeClient(api_key=api_key, model=GEMINI_MODEL)
 
 
 @contextmanager
@@ -334,11 +322,6 @@ def run(
         statuses[status] = statuses.get(status, 0) + 1
     audit["status_counts"] = statuses
     return audit
-
-
-def _output_path(value: str) -> Path:
-    path = Path(value).expanduser()
-    return path.with_name(path.name.replace(" ", "_"))
 
 
 def main() -> None:
