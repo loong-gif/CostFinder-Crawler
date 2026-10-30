@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
@@ -366,14 +368,13 @@ class GeminiNativeClient:
 
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
         url = f"{self.base_url}/{model_path}:generateContent"
-        response = requests.post(
+        response = self._post(
             url,
             headers={
                 "Content-Type": "application/json",
                 "x-goog-api-key": self.api_key,
             },
-            json=body,
-            timeout=self.timeout,
+            body=body,
         )
         if not response.ok:
             raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
@@ -425,11 +426,10 @@ class GeminiNativeClient:
             body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
 
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
-        response = requests.post(
+        response = self._post(
             f"{self.base_url}/{model_path}:generateContent",
             headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
-            json=body,
-            timeout=self.timeout,
+            body=body,
         )
         if not response.ok:
             raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
@@ -443,6 +443,15 @@ class GeminiNativeClient:
         if not text.strip():
             raise RuntimeError("Gemini response missing text")
         return parse_json_payload(text, {})
+
+    @retry(
+        retry=retry_if_exception_type((RequestsConnectionError, Timeout)),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    def _post(self, url: str, headers: Dict[str, str], body: Dict[str, Any]) -> requests.Response:
+        return requests.post(url, headers=headers, json=body, timeout=self.timeout)
 
     def _is_reasoning_model(self) -> bool:
         name = (self.model or "").lower()
