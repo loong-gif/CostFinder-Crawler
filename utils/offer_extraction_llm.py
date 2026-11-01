@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
@@ -347,6 +348,15 @@ class GeminiNativeClient:
     timeout: int = 90
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
+    @retry(
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout)),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    def _post(self, url: str, headers: Dict[str, str], body: Dict[str, Any]) -> requests.Response:
+        return requests.post(url, headers=headers, json=body, timeout=self.timeout)
+
     def create_json_response(
         self,
         messages: List[Dict[str, str]],
@@ -366,14 +376,13 @@ class GeminiNativeClient:
 
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
         url = f"{self.base_url}/{model_path}:generateContent"
-        response = requests.post(
+        response = self._post(
             url,
             headers={
                 "Content-Type": "application/json",
                 "x-goog-api-key": self.api_key,
             },
-            json=body,
-            timeout=self.timeout,
+            body=body,
         )
         if not response.ok:
             raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
@@ -425,11 +434,10 @@ class GeminiNativeClient:
             body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
 
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
-        response = requests.post(
+        response = self._post(
             f"{self.base_url}/{model_path}:generateContent",
             headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
-            json=body,
-            timeout=self.timeout,
+            body=body,
         )
         if not response.ok:
             raise RuntimeError(f"Gemini {response.status_code}: {response.text[:500]}")
