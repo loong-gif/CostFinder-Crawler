@@ -19,7 +19,8 @@
           "billing_period",
           "minimum_commitment_months",
           "membership_description",
-          "benefits"
+          "benefits",
+          "source_claims"
         ],
         "properties": {
           "membership_name": {
@@ -47,6 +48,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "source_claims": {
+            "type": "array",
+            "description": "Independent inventory of every verbatim entitlement or restriction for this tier from the source, including credits, included services, gifts, discounts, frequency, term, rollover, cancellation and exclusions. Do not copy from the benefits output; inventory directly from the page. Empty only when the page explicitly shows no entitlements.",
+            "items": {"type": "string", "minLength": 1}
           }
         }
       }

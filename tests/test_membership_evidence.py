@@ -43,14 +43,15 @@ def test_visible_benefits_survive_unverified_fee():
     assert decision['benefits'] == item['benefits']
 
 
-def test_rendered_benefits_and_incomplete_capture():
+def test_rendered_benefits_need_independent_inventory_and_full_capture():
     item = {'membership_name':'VIP','membership_price':199,'benefits':['One facial monthly']}
     evidence = 'VIP $199 per month\nOne facial monthly'
     missing = prepare_membership_write(item, evidence)
     assert missing['accepted'] and missing['benefits'] is None and not missing['complete']
     page = {'status':'page_accessible','claimResults':[{'recordType':'membership','claim':'One facial monthly','status':'visible_match'}]}
     verified = prepare_membership_write(item, evidence, page)
-    assert verified['benefits'] == item['benefits'] and verified['complete']
+    assert verified['benefits'] is None and not verified['complete']
+    assert verified['is_offer_extracted'] is False
 
 
 def test_empty_array_is_not_proof_of_no_benefits():

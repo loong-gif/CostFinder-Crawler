@@ -1,8 +1,11 @@
-"""PaddleOCR: download promo images and assemble markdown_ocr text."""
+"""Download relevant promotion and membership images and assemble OCR markdown."""
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Sequence
 from urllib.parse import urlparse
@@ -10,7 +13,8 @@ from urllib.parse import urlparse
 import requests
 
 SKIP_IMG_KEYWORDS = ("icon", "logo", "svg", "widget", "spin", "avatar", "favicon", "emoji")
-PROMO_IMG_KEYWORDS = ("special", "promo", "offer", "deal", "discount", "sale", "banner", "flyer", "monthly", "fill")
+PROMO_IMG_KEYWORDS = ("special", "promo", "offer", "deal", "discount", "sale", "banner", "flyer", "monthly", "fill", "membership", "benefit", "plan")
+_LAST_DOWNLOAD_SPEED = 0.0
 
 
 def _image_name(url: str) -> str:
@@ -49,73 +53,79 @@ def image_urls_from_markdown(markdown: str) -> list[str]:
 
 
 def _download_image(url: str, *, session: requests.Session | None = None) -> bytes:
+    global _LAST_DOWNLOAD_SPEED
     client = session or requests.Session()
     if session is None:
         client.trust_env = False
-    resp = client.get(url, timeout=60)
+    size = None
+    try:
+        estimate = client.head(url, timeout=15, allow_redirects=True)
+        estimate.raise_for_status()
+        size = int(estimate.headers.get("content-length", "")) or None
+    except requests.RequestException as exc:
+        print(f"OCR download estimate unavailable for {url}: {exc}")
+    eta = f"{size / _LAST_DOWNLOAD_SPEED:.1f}s" if size and _LAST_DOWNLOAD_SPEED else "unknown"
+    print(f"OCR download starting: url={url} bytes={size if size else 'unknown'} prior_speed={_LAST_DOWNLOAD_SPEED:.0f}B/s ETA={eta}")
+    started = time.monotonic()
+    resp = client.get(url, timeout=60, stream=True)
     resp.raise_for_status()
-    return resp.content
+    chunks = []
+    received = 0
+    reported = 0
+    for chunk in resp.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        chunks.append(chunk)
+        received += len(chunk)
+        elapsed = time.monotonic() - started
+        _LAST_DOWNLOAD_SPEED = received / elapsed if elapsed else 0
+        if received - reported >= 1024 * 1024:
+            remaining = max((size or received) - received, 0)
+            print(f"OCR download progress: {received}/{size if size else 'unknown'} bytes speed={_LAST_DOWNLOAD_SPEED:.0f}B/s ETA={remaining / _LAST_DOWNLOAD_SPEED:.1f}s")
+            reported = received
+    elapsed = time.monotonic() - started
+    _LAST_DOWNLOAD_SPEED = received / elapsed if elapsed else 0
+    print(f"OCR download complete: {received} bytes in {elapsed:.1f}s speed={_LAST_DOWNLOAD_SPEED:.0f}B/s")
+    return b"".join(chunks)
 
 
-def _make_engine() -> object:
-    from paddleocr import PaddleOCR
-
-    try:  # paddleocr 3.x: doc-*/mkldnn kwargs (mkldnn off = PIR bug workaround)
-        return PaddleOCR(
-            lang="en",
-            enable_mkldnn=False,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-        )
-    except TypeError:  # paddleocr 2.x: no doc-* kwargs
-        return PaddleOCR(lang="en")
-
-
-def _ocr_lines(image_bytes: bytes, *, ocr_engine: object | None = None) -> list[str]:
-    engine = ocr_engine or _make_engine()
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+def _ocr_lines(image_bytes: bytes) -> list[str]:
+    image_dir = Path(__file__).resolve().parents[1] / "state" / "pipeline_ocr"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".img", dir=image_dir, delete=False) as tmp:
         tmp.write(image_bytes)
         path = tmp.name
     try:
-        if hasattr(engine, "predict"):  # paddleocr 3.x: predict() -> rec_texts
-            result = engine.predict(path)
-            lines = []
-            for r in result or []:
-                txts = r.get("rec_texts") if isinstance(r, dict) else getattr(r, "rec_texts", None)
-                lines.extend(txts or [])
-        else:  # paddleocr 2.x: ocr() -> [[box, (text, conf)], ...]
-            result = engine.ocr(path)
-            lines = []
-            for block in result or []:
-                for item in block or []:
-                    if not item or len(item) < 2:
-                        continue
-                    text = str(item[1][0] or "").strip()
-                    if text:
-                        lines.append(text)
+        result = subprocess.run(
+            ["tesseract", path, "stdout", "--psm", "6"],
+            capture_output=True, text=True, check=True,
+        )
     finally:
         Path(path).unlink(missing_ok=True)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        text = " ".join(line.split())
+        if text and text.casefold() not in seen:
+            seen.add(text.casefold())
+            lines.append(text)
     return lines
 
 
-def build_markdown_ocr(image_urls: Sequence[str], *, ocr_engine: object | None = None) -> tuple[str, list[dict]]:
+def build_markdown_ocr(image_urls: Sequence[str]) -> tuple[str, list[dict]]:
     session = requests.Session()
     session.trust_env = False
     sections: list[str] = []
     meta: list[dict] = []
-    engine = ocr_engine
     for url in image_urls:
         name = _image_name(url)
         try:
             data = _download_image(url, session=session)
-            if engine is None:
-                engine = _make_engine()
-            lines = _ocr_lines(data, ocr_engine=engine)
-        except Exception as exc:  # noqa: BLE001
+            lines = _ocr_lines(data)
+        except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
             meta.append({"url": url, "file": name, "error": str(exc)})
             continue
-        meta.append({"url": url, "file": name, "bytes": len(data), "n_lines": len(lines)})
+        meta.append({"url": url, "file": name, "bytes": len(data), "n_lines": len(lines), "engine": "tesseract"})
         if not lines:
             continue
         sections.append(f"## Image: {name}\n\nSource: {url}\n\n" + "\n".join(lines))
@@ -123,7 +133,8 @@ def build_markdown_ocr(image_urls: Sequence[str], *, ocr_engine: object | None =
 
 
 if __name__ == "__main__":
+    assert shutil.which("tesseract")
     sample = build_markdown_ocr([])
     assert sample == ("", [])
     assert filter_promo_image_urls(["https://x.com/logo.svg"]) == []
-    print("paddle_ocr_markdown self-check ok")
+    print("image OCR self-check ok")

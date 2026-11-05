@@ -87,6 +87,7 @@ def scrape_response_to_row_fields(response: Optional[Dict[str, Any]]) -> Dict[st
     row: Dict[str, Any] = {
         "response_json": response,
         "markdown": markdown,
+        "markdown_ocr": data.get("markdown_ocr"),
         "html": data.get("html"),
         "raw_html": data.get("rawHtml") or data.get("raw_html"),
         "links": data.get("links"),
@@ -98,7 +99,12 @@ def scrape_response_to_row_fields(response: Optional[Dict[str, Any]]) -> Dict[st
     }
     images = data.get("images")
     if isinstance(images, list):
-        row["images"] = [str(item) for item in images if str(item).strip()]
+        image_urls = []
+        for image in images:
+            url = str(image.get("url") or image.get("src") or "") if isinstance(image, dict) else str(image)
+            if url.strip():
+                image_urls.append(url)
+        row["images"] = image_urls
     return {k: v for k, v in row.items() if v is not None}
 
 

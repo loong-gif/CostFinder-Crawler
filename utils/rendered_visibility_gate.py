@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from utils.render_review import corpus_text
+
 
 @dataclass(frozen=True)
 class RenderedVisibilityDecision:
@@ -32,8 +34,24 @@ def image_claim_verified(claim: Any, item: Mapping[str, Any], page: Mapping[str,
         return False
     if not proof.get("pageUrl") or proof.get("pageUrl") != page.get("url"):
         return False
-    if not proof.get("captured_at") or proof.get("captured_at") != page.get("captured_at"):
+    capture_time = page.get("checked_at") or page.get("captured_at")
+    if not proof.get("captured_at") or proof.get("captured_at") != capture_time:
         return False
+    if proof.get("kind") == "rendered_image_ocr":
+        urls = proof.get("imageUrls") or []
+        visible = set(page.get("visibleImages") or [])
+        readable = {image.get("url"): image.get("text") for image in page.get("imageOcr") or []
+                    if isinstance(image, Mapping) and image.get("text")}
+        evidence = proof.get("ocrEvidence") or []
+        if any(not isinstance(image, Mapping) for image in evidence):
+            return False
+        if (not urls or not set(urls).issubset(visible) or set(urls) != {image.get("url") for image in evidence}
+                or any(readable.get(image.get("url")) != image.get("text") or not image.get("text")
+                       for image in evidence)
+                or normalize_claim(corpus_text([image["text"] for image in evidence])) != transcript):
+            return False
+        numbers = re.findall(r"(?<!\w)\d+(?:[.,]\d+)*(?:\s*%)?", text)
+        return all(number in transcript for number in numbers)
     screenshot = proof.get("screenshotPath")
     if not isinstance(screenshot, str) or not Path(screenshot).is_file():
         return False

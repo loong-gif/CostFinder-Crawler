@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mark is_ocr_required, re-scrape with images, fill markdown_ocr via PaddleOCR."""
+"""Mark is_ocr_required, re-scrape with images, fill markdown_ocr via OCR."""
 from __future__ import annotations
 
 import argparse

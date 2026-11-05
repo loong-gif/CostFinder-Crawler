@@ -13,6 +13,7 @@ from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_f
 from utils.browser_scrape import BrowserScrapeFailed, ego_scrape, lightpanda_scrape
 from utils.raw_file_store import RawFileStore
 from utils.scrape_markdown import prepare_scrape_markdown
+from utils.paddle_ocr_markdown import build_markdown_ocr, filter_promo_image_urls, image_urls_from_markdown
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +35,7 @@ def main() -> int:
     store = RawFileStore()
 
     decisions = json.loads(args.decisions.read_text())["decisions"]
+    decisions_by_url = {record["url"]: record for record in decisions if record["decision"] == "add"}
     urls = sorted({r["url"] for r in decisions if r["decision"] == "add"})
     if args.url:
         missing = set(args.url) - set(urls)
@@ -61,7 +63,19 @@ def main() -> int:
         if not markdown:
             save_scrape_response(store, fingerprint, url, data, success=False, error_message="empty_markdown")
             return "empty"
-        save_scrape_response(store, fingerprint, url, {**data, "markdown": markdown}, success=True)
+        payload = {**data, "markdown": markdown}
+        raw_images = data.get("images") or image_urls_from_markdown(markdown)
+        image_urls = filter_promo_image_urls([
+            str(image.get("url") or image.get("src") or "") if isinstance(image, dict) else str(image)
+            for image in raw_images
+        ])
+        membership_image = any(any(term in image.lower() for term in ("membership", "benefit", "plan"))
+                               for image in image_urls)
+        if decisions_by_url[url].get("kind") == "membership" or membership_image:
+            markdown_ocr, ocr_meta = build_markdown_ocr(image_urls) if image_urls else ("", [])
+            payload.update({"images": image_urls, "markdown_ocr": markdown_ocr or None, "ocr_meta": ocr_meta})
+            print(f"membership OCR {url}: images={len(image_urls)} readable={sum(bool(item.get('n_lines')) for item in ocr_meta)}")
+        save_scrape_response(store, fingerprint, url, payload, success=True)
         return "ok"
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:

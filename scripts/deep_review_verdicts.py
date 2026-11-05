@@ -1,6 +1,5 @@
 import argparse
 import glob
-import hashlib
 import json
 import subprocess
 import sys
@@ -12,17 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.render_review import deep_verdict  # noqa: E402
-
-
-def ocr(url: str, image_dir: Path) -> str:
-    target = image_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".img")
-    if not target.exists():
-        response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        target.write_bytes(response.content)
-    done = subprocess.run(["tesseract", str(target), "stdout", "--psm", "11"], capture_output=True, text=True, check=True)
-    return done.stdout
+from utils.render_review import deep_verdict, ocr_image  # noqa: E402
 
 
 def main() -> int:
@@ -58,8 +47,9 @@ def main() -> int:
             for image in result["images"]:
                 # 单张图片无法下载或识别时，该图片不提供可见性证据
                 try:
-                    image_texts.append(ocr(image["url"], image_dir))
-                except (requests.RequestException, subprocess.CalledProcessError):
+                    image_texts.append(ocr_image(image["url"], image_dir))
+                except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
+                    print(f"image OCR failed: {image['url']}: {exc}")
                     continue
             verdict = deep_verdict(claims, texts, image_texts)
             verdict["images_read"] = len(image_texts)

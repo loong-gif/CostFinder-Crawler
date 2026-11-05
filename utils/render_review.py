@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+
+import requests
 
 AMOUNT_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?")
 PERCENT_RE = re.compile(r"\d{1,3}(?:\.\d+)?\s?%")
@@ -163,6 +167,17 @@ def deep_verdict(claims: List[Mapping[str, Any]], visible_texts: Iterable[str], 
         source = "image_text" if in_image and not in_text else "expanded_page_text" if in_text else "page_text"
         return {"verdict": "verified", "reason": f"{matched}_of_{len(judged)}_claims_visible", "source": source}
     return {"verdict": "not_visible", "reason": f"only_{matched}_of_{len(judged)}_claims_visible_after_expanding"}
+
+
+def ocr_image(url: str, image_dir: Path) -> str:
+    target = image_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".img")
+    if not target.exists():
+        response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        target.write_bytes(response.content)
+    done = subprocess.run(["tesseract", str(target), "stdout", "--psm", "11"],
+                          capture_output=True, text=True, check=True)
+    return done.stdout
 
 
 def build_deep_items(decisions: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
