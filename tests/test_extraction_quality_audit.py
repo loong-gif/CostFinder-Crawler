@@ -51,6 +51,8 @@ def test_run_full_audit_flags_promotion_markdown_residue() -> None:
     )
     assert any(issue.issue_type == "MARKDOWN_OR_SHOPIFY_RESIDUE" for issue in report.issues)
 
+
+def test_run_full_audit_flags_non_promo_in_master() -> None:
     report = run_full_audit(
         services=[],
         memberships=[],
