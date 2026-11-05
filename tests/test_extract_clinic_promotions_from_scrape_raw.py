@@ -22,6 +22,35 @@ from scripts.extract_clinic_promotions_from_scrape_raw import (
 )
 
 
+MINIMAL_PROMOTION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "explanation": {"type": "string"},
+        "promotions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "promotion_title": {"type": "string"},
+                    "promotion_content": {"type": "array", "items": {"type": "string"}},
+                    "campaign_start_date": {"type": ["string", "null"]},
+                    "campaign_end_date": {"type": ["string", "null"]},
+                },
+                "required": [
+                    "promotion_title",
+                    "promotion_content",
+                    "campaign_start_date",
+                    "campaign_end_date",
+                ],
+            },
+        },
+    },
+    "required": ["explanation", "promotions"],
+}
+
+
 class FakeDb:
     def __init__(self, *, fetch_batches=None, existing=None):
         self.fetch_batches = list(fetch_batches or [])
@@ -272,10 +301,10 @@ Save 20% on filler.
     merged = merge_promotion_items(items, evidence)
 
     assert merged["promotion_title"] == "Botox Bonus / Filler Friday"
-    assert "Botox Bonus" in merged["promotion_content"]
-    assert "Botox $10/unit for members." in merged["promotion_content"]
-    assert "Filler Friday" in merged["promotion_content"]
-    assert "Save 20% on filler." in merged["promotion_content"]
+    assert any("Botox Bonus" in segment for segment in merged["promotion_content"])
+    assert any("Botox $10/unit for members." in segment for segment in merged["promotion_content"])
+    assert any("Filler Friday" in segment for segment in merged["promotion_content"])
+    assert any("Save 20% on filler." in segment for segment in merged["promotion_content"])
     assert merged["campaign_start_date"] is None
     assert merged["campaign_end_date"] is None
 
@@ -296,7 +325,7 @@ def test_merge_promotion_items_does_not_reintroduce_unsupported_model_text() -> 
 
     merged = merge_promotion_items(items, evidence)
 
-    assert merged["promotion_content"] == ["Summer Special", "Save $20 on Botox."]
+    assert merged["promotion_content"] == ["Summer Special | Save $20 on Botox."]
 
 
 def test_merge_promotion_items_uses_webpage_title_for_the_row_title() -> None:
@@ -320,10 +349,11 @@ def test_merge_promotion_items_uses_webpage_title_for_the_row_title() -> None:
     )
 
     assert merged["promotion_title"] == "Clinic | July Specials"
-    assert "Botox Bonus" in merged["promotion_content"]
-    assert "Botox $10/unit for members." in merged["promotion_content"]
-    assert "Filler Friday" in merged["promotion_content"]
-    assert "Save 20% on filler." in merged["promotion_content"]
+    assert len(merged["promotion_content"]) == 2
+    assert any("Botox Bonus" in segment for segment in merged["promotion_content"])
+    assert any("Botox $10/unit for members." in segment for segment in merged["promotion_content"])
+    assert any("Filler Friday" in segment for segment in merged["promotion_content"])
+    assert any("Save 20% on filler." in segment for segment in merged["promotion_content"])
 
 
 def test_merge_promotion_items_uses_an_unambiguous_url_month_for_missing_dates() -> None:
@@ -591,6 +621,7 @@ def test_run_isolates_one_model_failure_and_reconciles_the_batch() -> None:
         batch_date="2026-07-30",
         timezone_name="UTC",
         apply=False,
+        schema=MINIMAL_PROMOTION_SCHEMA,
     )
 
     assert audit["reconciliation"]["scrapes_loaded"] == 2
@@ -642,6 +673,7 @@ def test_run_records_unvalidated_model_output_as_a_rejection() -> None:
         llm=UnsupportedPromotionLlm(),
         batch_date="2026-07-30",
         timezone_name="UTC",
+        schema=MINIMAL_PROMOTION_SCHEMA,
     )
 
     assert audit["reconciliation"]["errors"] == 0
