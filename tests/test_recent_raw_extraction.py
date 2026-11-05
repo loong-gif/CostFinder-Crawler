@@ -216,10 +216,15 @@ def test_validate_service_rejects_blog_source_url() -> None:
 
 
 def test_validate_membership_requires_name_and_price() -> None:
-    item = {"membership_name": "Club", "membership_price": 99, "billing_period": None}
+    item = {
+        "membership_name": "Club",
+        "membership_price": 99,
+        "billing_period": None,
+        "benefits": ["Priority booking"],
+    }
     assert validate_membership(item, "").accepted
-    assert not validate_membership({"membership_name": "Club"}, "").accepted
-    assert not validate_membership({"membership_price": 99}, "").accepted
+    assert not validate_membership({"membership_name": "Club", "benefits": ["x"]}, "").accepted
+    assert not validate_membership({"membership_price": 99, "benefits": ["x"]}, "").accepted
 
 
 def test_validate_membership_accepts_without_evidence() -> None:
@@ -227,7 +232,7 @@ def test_validate_membership_accepts_without_evidence() -> None:
         "membership_name": "Club",
         "membership_price": 99,
         "billing_period": "monthly",
-        "benefits": [],
+        "benefits": ["Monthly credit $99", "15% off eligible services"],
     }
     assert validate_membership(
         item,
