@@ -27,7 +27,8 @@ def build_membership_extraction_messages(row: Dict[str, Any], page_content: str)
                 "You extract aesthetic clinic membership plans from page text. "
                 "Return strict JSON with a single top-level key membership_plans (array). "
                 "Each plan must include tier_name, plan_name, monthly_fee, annual_fee, billing_period, "
-                "benefits (non-priced perks), and priced_offers (services with member pricing). "
+                "benefits (non-priced perks), source_claims (an independent verbatim inventory of credits, included services, gifts, discounts, frequency, term, rollover, cancellation, exclusions and eligibility), "
+                "and priced_offers (services with member pricing). Keep each entitlement tied to its plan and preserve quantities and conditions. "
                 "Do not invent values not supported by the text."
             ),
         },
@@ -40,12 +41,14 @@ def build_membership_extraction_messages(row: Dict[str, Any], page_content: str)
                 '{"membership_plans":[{"tier_name":"TRU SIGNATURE","plan_name":"TRU SIGNATURE $199 MONTH",'
                 '"monthly_fee":199.0,"annual_fee":null,"billing_period":"monthly",'
                 '"benefits":[{"type":"free_treatment","desc":"1 free treatment/month"}],'
+                '"source_claims":["1 free treatment/month"],'
                 '"priced_offers":[{"service_name":"botox","price":11.5,"unit_type":"unit",'
                 '"regular_price":13.5,"members_only":true}]}]}\n\n'
                 "Rules:\n"
                 "- tier_name must be a human-readable tier (Platinum, VIP, Essentials).\n"
                 "- If no tier name exists, use Standard or plan_name.\n"
                 "- benefits: perks without standalone service SKU pricing.\n"
+                "- source_claims: independently enumerate every benefit and membership restriction verbatim; do not derive this list from benefits.\n"
                 "- priced_offers: concrete service + price rows for promo_offer_master.\n"
                 "- billing_period: monthly | annual | weekly.\n\n"
                 f"Text:\n{page_content}"
@@ -78,6 +81,9 @@ def normalize_membership_plan(record: Dict[str, Any]) -> Dict[str, Any]:
     benefits = record.get("benefits")
     if benefits is not None and not isinstance(benefits, list):
         benefits = [benefits] if benefits else None
+    source_claims = record.get("source_claims") or []
+    if not isinstance(source_claims, list) or any(not isinstance(value, str) for value in source_claims):
+        raise ValueError(f"membership source_claims must be a string array: {plan_name}")
 
     priced_offers = record.get("priced_offers") or []
     if not isinstance(priced_offers, list):
@@ -90,6 +96,7 @@ def normalize_membership_plan(record: Dict[str, Any]) -> Dict[str, Any]:
         "annual_fee": _parse_fee(record.get("annual_fee")),
         "billing_period": billing_period,
         "benefits": benefits,
+        "source_claims": [value.strip() for value in source_claims if value.strip()],
         "priced_offers": [item for item in priced_offers if isinstance(item, dict)],
     }
 
@@ -135,7 +142,8 @@ def _benefits_list(benefits: Any) -> Optional[list]:
             benefits = [benefits]
     if not isinstance(benefits, list):
         benefits = [benefits]
-    return [str(item).strip() for item in benefits if str(item).strip()]
+    values = [str(item.get("desc") or "") if isinstance(item, dict) else str(item) for item in benefits]
+    return [value.strip() for value in values if value.strip()]
 
 
 def build_membership_plan_insert_row(plan: Dict[str, Any], staging_row: Dict[str, Any]) -> Dict[str, Any]:
@@ -149,6 +157,7 @@ def build_membership_plan_insert_row(plan: Dict[str, Any], staging_row: Dict[str
         "membership_price": price,
         "billing_period": plan["billing_period"],
         "benefits": _benefits_list(plan.get("benefits")),
+        "source_claims": plan.get("source_claims") or [],
     }
     if staging_row.get("business_id") is not None:
         row["business_id"] = staging_row["business_id"]

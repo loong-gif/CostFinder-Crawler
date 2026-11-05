@@ -52,7 +52,9 @@ def _visible_named_fee(name: str, amount: str, evidence: str, quote: str,
 
 
 def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visibility: Mapping[str, Any] | None = None,
-                             *, source_claims: list[str] | None = None) -> dict[str, Any]:
+                             *, source_claims: list[str] | None = None, ocr_complete: bool = True) -> dict[str, Any]:
+    if source_claims is None:
+        source_claims = item.get('source_claims')
     name = str(item.get('membership_name') or item.get('plan_name') or '').strip()
     price = item.get('membership_price')
     quote = str(item.get('membership_description') or item.get('evidence_quote') or '').strip()
@@ -73,12 +75,16 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
                      and _visible_named_fee(name, amount, evidence, quote, rendered_visibility))
     # 来源清单独立于抽取结果，避免只验证模型已经输出的权益。
     normalized_benefits = [normalize_claim(value) for value in verified or []]
+    normalized_source_claims = [normalize_claim(claim) for claim in source_claims or []]
     missing_claims = [claim for claim in source_claims or []
                       if not normalize_claim(claim)
                       or normalize_claim(claim) not in normalize_claim(evidence)
-                      or not any(normalize_claim(claim) in value for value in normalized_benefits)]
+                      or normalize_claim(claim) not in normalized_benefits]
+    missing_claims.extend(value for value in verified or []
+                          if normalize_claim(value) not in normalized_source_claims)
     complete = (bool(verified) and len(verified) == len(benefits or [])
                 and bool(source_claims) and not missing_claims
+                and ocr_complete
                 and isinstance(rendered_visibility, Mapping)
                 and rendered_visibility.get('complete') is True)
     return {'accepted': fee_supported,

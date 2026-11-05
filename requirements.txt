@@ -9,11 +9,7 @@ python-dateutil>=2.9,<3
 pandas==2.2.0
 requests>=2.31.0,<3
 
-# OCR引擎(选择其一或安装多个)
-paddleocr==2.7.3
-paddlepaddle==2.6.2
-# easyocr==1.7.1
-# pytesseract==0.3.10
+# OCR 图片识别需要系统安装 Tesseract CLI
 
 # 图像处理
 Pillow>=10.4,<12

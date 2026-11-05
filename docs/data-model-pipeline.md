@@ -74,6 +74,8 @@ The following controls keep discovery output from becoming catalogue or offer da
 
 The raw Firecrawl tables are the evidence layer, not an alternate catalogue. A normalized record must retain its source URL and be traceable back to the captured search or scrape material when that evidence was used. `promo_offer_quality_reviews` stores audit outcomes; it does not replace the offer itself.
 
+The `extract-pages` planner independently classifies each captured page before routing it to promotions or memberships. Promotion content must retain complete source offer cards and their linked terms. Membership benefits are compared with a separate source entitlement inventory. Tesseract CLI must be installed on scraping and render-review hosts. Relevant page images are OCRed during scraping, and images visible in the browser render are OCRed again for the visibility manifest. Missing, unreadable, or unverified image text keeps membership benefits in review; extraction plans retain the scrape ID, fingerprint, timestamp, and OCR evidence metadata used for each decision.
+
 ### Consumer workflow
 
 | Table | Purpose | Important fields |

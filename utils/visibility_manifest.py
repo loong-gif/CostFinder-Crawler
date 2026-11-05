@@ -4,9 +4,15 @@
 """
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Any, Mapping
 
-from utils.render_review import claim_anchors, claim_matches, corpus_text, item_id
+import requests
+
+from utils.paddle_ocr_markdown import filter_promo_image_urls
+from utils.render_review import claim_anchors, claim_matches, corpus_text, item_id, ocr_image
+from utils.rendered_visibility_gate import image_claim_verified
 
 
 def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str]]]:
@@ -17,6 +23,7 @@ def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str]]]:
             lines = [("promotion", line) for line in entry["content"]]
         elif entry["kind"] == "membership":
             lines = [("membership", entry["membership_name"])] + \
+                    [("membership", line) for line in entry.get("source_claims") or []] + \
                     [("membership", line) for line in entry.get("benefits") or []]
         else:
             continue
@@ -29,7 +36,7 @@ def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str]]]:
 def build_shard(plan: Mapping[str, Any], name: str) -> dict[str, Any]:
     items = []
     for url, lines in sorted(_page_claims(plan).items()):
-        claims = [{"id": i, "record_type": kind, "line": line[:240], "anchors": claim_anchors(line)}
+        claims = [{"id": i, "record_type": kind, "line": line, "anchors": claim_anchors(line)}
                   for i, (kind, line) in enumerate(lines)]
         items.append({"id": item_id(url), "url": url, "claims": claims})
     return {"name": name, "items": items}
@@ -45,11 +52,44 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
                                      "reason": (record or {}).get("error", "not_rendered"), "claimResults": []}
             continue
         corpus = corpus_text(record["result"]["texts"])
-        manifest[item["url"]] = {
+        image_dir = Path(__file__).resolve().parents[1] / "state" / "visibility_ocr_images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        images = filter_promo_image_urls([str(image.get("url") or "") for image in
+                                          record["result"].get("images") or [] if isinstance(image, Mapping)])
+        image_evidence = []
+        for url in images:
+            try:
+                image_evidence.append({"url": url, "text": ocr_image(url, image_dir)})
+            except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
+                image_evidence.append({"url": url, "error": str(exc)})
+        claim_results = []
+        for claim in item["claims"]:
+            status = "visible_match" if claim_matches(claim, corpus) else "not_visible"
+            visible_evidence = None
+            matching_images = [image for image in image_evidence
+                               if image.get("text") and claim_matches(claim, corpus_text([image["text"]]))]
+            if status == "not_visible" and matching_images:
+                status = "image_only"
+                visible_evidence = {"kind": "rendered_image_ocr", "pageUrl": item["url"],
+                                    "captured_at": record.get("checked_at"),
+                                    "transcript": corpus_text([image["text"] for image in matching_images]),
+                                    "imageUrls": [image["url"] for image in matching_images],
+                                    "ocrEvidence": matching_images}
+            result = {"recordType": claim["record_type"], "claim": claim["line"], "status": status}
+            if visible_evidence is not None:
+                result["visibleEvidence"] = visible_evidence
+            claim_results.append(result)
+        page_manifest = {
             "status": "page_accessible",
             "checked_at": record.get("checked_at"),
-            "claimResults": [{"recordType": claim["record_type"], "claim": claim["line"],
-                              "status": "visible_match" if claim_matches(claim, corpus) else "not_visible"}
-                             for claim in item["claims"]],
+            "visibleImages": images,
+            "imageOcr": image_evidence,
+            "complete": False,
+            "claimResults": claim_results,
         }
+        page_manifest["complete"] = bool(claim_results) and all(
+            claim["status"] == "visible_match" or
+            (claim["status"] == "image_only" and image_claim_verified(claim["claim"], claim, page_manifest))
+            for claim in claim_results)
+        manifest[item["url"]] = page_manifest
     return manifest
