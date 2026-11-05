@@ -1,4 +1,3 @@
-"""Membership claims share the rendered, capture-bound evidence boundary."""
 from __future__ import annotations
 import math
 import re
@@ -52,7 +51,8 @@ def _visible_named_fee(name: str, amount: str, evidence: str, quote: str,
     return False
 
 
-def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visibility: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visibility: Mapping[str, Any] | None = None,
+                             *, source_claims: list[str] | None = None) -> dict[str, Any]:
     name = str(item.get('membership_name') or item.get('plan_name') or '').strip()
     price = item.get('membership_price')
     quote = str(item.get('membership_description') or item.get('evidence_quote') or '').strip()
@@ -71,8 +71,18 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     amount = re.escape(f'{fee:g}')
     fee_supported = (bool(name) and not isinstance(price, bool) and math.isfinite(fee) and fee > 0
                      and _visible_named_fee(name, amount, evidence, quote, rendered_visibility))
-    # An empty extraction is unknown; it is never evidence of no entitlements.
-    complete = bool(verified) and len(verified) == len(benefits or [])
+    # 来源清单独立于抽取结果，避免只验证模型已经输出的权益。
+    normalized_benefits = [normalize_claim(value) for value in verified or []]
+    missing_claims = [claim for claim in source_claims or []
+                      if not normalize_claim(claim)
+                      or normalize_claim(claim) not in normalize_claim(evidence)
+                      or not any(normalize_claim(claim) in value for value in normalized_benefits)]
+    complete = (bool(verified) and len(verified) == len(benefits or [])
+                and bool(source_claims) and not missing_claims
+                and isinstance(rendered_visibility, Mapping)
+                and rendered_visibility.get('complete') is True)
     return {'accepted': fee_supported,
             'reason': ('validated' if complete else 'membership_benefits_unverified') if fee_supported else 'membership_fee_not_supported_by_named_evidence',
-            'benefits': verified, 'is_offer_extracted': complete, 'complete': complete, 'membership_price': fee}
+            'benefits': verified if complete or not fee_supported else None,
+            'verified_benefits': verified, 'missing_claims': missing_claims,
+            'is_offer_extracted': False, 'complete': complete, 'membership_price': fee}

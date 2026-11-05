@@ -9,6 +9,7 @@
     },
     "memberships": {
       "type": "array",
+      "description": "Extract every purchasable membership tier on the source page separately, including tiers whose benefits require image reading. Never borrow a fee or entitlement from another tier.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -42,7 +43,7 @@
           },
           "benefits": {
             "type": ["array", "null"],
-            "description": "Unknown or unverified benefits must be null. An empty array requires explicit source evidence of no benefits.",
+            "description": "Quote every source-supported entitlement and restriction for this plan as a complete statement: monthly credits, included services and selection limits, gifts and frequency, discounts, minimum term, rollover, cancellation, exclusions and eligibility. Preserve quantities, prices and conditions together. Include shared terms only where the source explicitly applies them to this plan. Do not limit extraction to discount bullets. Unknown or unreadable image benefits must be null; never invent missing text or use an empty array for an unreadable plan.",
             "items": {
               "type": "string"
             }
