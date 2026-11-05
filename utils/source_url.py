@@ -48,6 +48,13 @@ def hub_path(path: str) -> str | None:
     return None
 
 
+def is_hub_url(url: Any) -> bool:
+    """URL 本身就是最浅的促销 hub（最后一段是 hub 段，前面没有 hub 段）。"""
+    path = split_url(url).path
+    segments = [s for s in path.split("/") if s]
+    return bool(segments) and hub_path(path) is None and bool(_HUB_SEGMENT_RE.search(segments[-1]))
+
+
 def hub_url(url: Any) -> str | None:
     """子页面应合并到的 hub URL（保留原协议与 host，丢弃 query 与 fragment）。"""
     parts = split_url(url)

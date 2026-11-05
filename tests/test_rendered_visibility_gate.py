@@ -72,6 +72,25 @@ def test_membership_benefits_have_membership_specific_empty_reason():
     assert result.reason == "no_rendered_visible_membership_content"
 
 
+def test_image_ocr_proof_must_name_its_visible_images(tmp_path):
+    screenshot = tmp_path / "page.png"
+    screenshot.write_bytes(b"png")
+    claim = "One facial per month $99"
+    proof = {"pageUrl": "https://a.example/m", "captured_at": "t", "transcript": claim,
+             "screenshotPath": str(screenshot)}
+    page = {"status": "page_accessible", "url": "https://a.example/m", "checked_at": "t",
+            "visibleImages": [], "imageOcr": []}
+
+    def gate(kind):
+        return filter_visible_membership_benefits([claim], {**page, "claimResults": [
+            {"recordType": "membership", "claim": claim, "status": "image_only",
+             "visibleEvidence": {**proof, "kind": kind}}]})
+
+    # 图片 OCR 证据没有列出可见图片时不能退回到截图校验
+    assert gate("rendered_image_ocr").accepted is False
+    assert gate("rendered_screenshot_ocr").accepted is True
+
+
 def test_membership_image_only_label_alone_cannot_pass_visibility_gate():
     result = filter_visible_membership_benefits(
         ["One facial per month"],

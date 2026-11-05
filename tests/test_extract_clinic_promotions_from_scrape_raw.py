@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 import requests
 
 from scripts.extract_clinic_promotions_from_scrape_raw import (
@@ -299,15 +300,14 @@ Save 20% on filler.
     merged = merge_promotion_items(items, evidence)
 
     assert merged["promotion_title"] == "Botox Bonus / Filler Friday"
-    assert "Botox Bonus" in merged["promotion_content"]
-    assert "Botox $10/unit for members." in merged["promotion_content"]
-    assert "Filler Friday" in merged["promotion_content"]
-    assert "Save 20% on filler." in merged["promotion_content"]
+    # 每个优惠是一个条目，标题与它的价格、条件在同一条目内
+    assert merged["promotion_content"] == ["Botox Bonus\nBotox $10/unit for members.",
+                                           "Filler Friday\nSave 20% on filler."]
     assert merged["campaign_start_date"] is None
     assert merged["campaign_end_date"] is None
 
 
-def test_merge_promotion_items_does_not_reintroduce_unsupported_model_text() -> None:
+def test_merge_promotion_items_rejects_an_offer_with_unsupported_model_text() -> None:
     evidence = "# Summer Special\nSave $20 on Botox.\n"
     items = [
         {
@@ -321,9 +321,8 @@ def test_merge_promotion_items_does_not_reintroduce_unsupported_model_text() -> 
         }
     ]
 
-    merged = merge_promotion_items(items, evidence)
-
-    assert merged["promotion_content"] == ["Summer Special", "Save $20 on Botox."]
+    with pytest.raises(ValueError, match="no validated promotions"):
+        merge_promotion_items(items, evidence)
 
 
 def test_merge_promotion_items_uses_webpage_title_for_the_row_title() -> None:
@@ -347,10 +346,8 @@ def test_merge_promotion_items_uses_webpage_title_for_the_row_title() -> None:
     )
 
     assert merged["promotion_title"] == "Clinic | July Specials"
-    assert "Botox Bonus" in merged["promotion_content"]
-    assert "Botox $10/unit for members." in merged["promotion_content"]
-    assert "Filler Friday" in merged["promotion_content"]
-    assert "Save 20% on filler." in merged["promotion_content"]
+    assert merged["promotion_content"] == ["Botox Bonus\nBotox $10/unit for members.",
+                                           "Filler Friday\nSave 20% on filler."]
 
 
 def test_merge_promotion_items_uses_an_unambiguous_url_month_for_missing_dates() -> None:

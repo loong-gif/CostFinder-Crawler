@@ -98,12 +98,7 @@ def test_process_target_links_raw_before_writing_validated_content(monkeypatch) 
             "claimResults": [
                 {
                     "recordType": "promotion",
-                    "claim": "Summer Special",
-                    "status": "visible_match",
-                },
-                {
-                    "recordType": "promotion",
-                    "claim": "Save $20 on Botox.",
+                    "claim": "Summer Special\nSave $20 on Botox.",
                     "status": "visible_match",
                 },
             ],
@@ -114,7 +109,7 @@ def test_process_target_links_raw_before_writing_validated_content(monkeypatch) 
     assert result["scrape_id"] == 88
     assert db.update_calls[0]["payload"]["scrape_id"] == 88
     assert "promotion_content" not in db.update_calls[0]["payload"]
-    assert db.update_calls[1]["payload"]["promotion_content"] == ["Summer Special", "Save $20 on Botox."]
+    assert db.update_calls[1]["payload"]["promotion_content"] == ["Summer Special\nSave $20 on Botox."]
 
 
 def test_process_target_keeps_content_empty_when_no_validated_promotion(monkeypatch) -> None:

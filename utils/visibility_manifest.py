@@ -12,13 +12,15 @@ import requests
 
 from utils.paddle_ocr_markdown import filter_promo_image_urls
 from utils.render_review import claim_anchors, claim_matches, corpus_text, item_id, ocr_image
-from utils.rendered_visibility_gate import image_claim_verified
+from utils.rendered_visibility_gate import IMAGE_OCR_PROOF, image_claim_verified
 
 
 def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str]]]:
-    """每个源页面的 (recordType, 内容行)；促销取 content，会员取名称与权益。"""
+    """每个源页面的 (recordType, 内容行)；促销取 content，会员取名称与权益。被拒绝的条目不写入，不核验。"""
     pages: dict[str, list[tuple[str, str]]] = {}
     for entry in plan["entries"]:
+        if entry["action"] == "rejected":
+            continue
         if entry["kind"] == "promotion" and entry.get("content"):
             lines = [("promotion", line) for line in entry["content"]]
         elif entry["kind"] == "membership":
@@ -70,7 +72,7 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
                                if image.get("text") and claim_matches(claim, corpus_text([image["text"]]))]
             if status == "not_visible" and matching_images:
                 status = "image_only"
-                visible_evidence = {"kind": "rendered_image_ocr", "pageUrl": item["url"],
+                visible_evidence = {"kind": IMAGE_OCR_PROOF, "pageUrl": item["url"],
                                     "captured_at": record.get("checked_at"),
                                     "transcript": corpus_text([image["text"] for image in matching_images]),
                                     "imageUrls": [image["url"] for image in matching_images],
@@ -81,6 +83,7 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
             claim_results.append(result)
         page_manifest = {
             "status": "page_accessible",
+            "url": item["url"],
             "checked_at": record.get("checked_at"),
             "visibleImages": images,
             "imageOcr": image_evidence,

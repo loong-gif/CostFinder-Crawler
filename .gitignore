@@ -100,3 +100,6 @@ architecture-review-*.html
 # Local runtime state and raw Firecrawl cache (production DB has no raw tables)
 /state/
 /_box_xfer/
+
+# Archify 架构图产物
+/.archify/

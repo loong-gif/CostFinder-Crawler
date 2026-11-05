@@ -247,7 +247,6 @@ def persist_membership_item(
         "billing_period": item.get("billing_period"),
         "minimum_commitment_months": item.get("minimum_commitment_months"),
         "benefits": decision["benefits"],
-        "is_offer_extracted": decision["is_offer_extracted"],
         "source_url": str(source_url or "").strip().rstrip("/"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -257,10 +256,14 @@ def persist_membership_item(
     matches = [old for old in matches if str(old.get("membership_name") or "").strip().casefold() == row["membership_name"].casefold()]
     if len(matches) > 1:
         return {"accepted": False, "reason": "ambiguous_membership_identity", "action": "quarantined"}
+    # is_offer_extracted 只在新行或权益变化时置为 false（与 page_extraction.MEMBERSHIP_UPSERT 同一规则），
+    # 之后由 extract-offers / link-services 在权益转成 offer 且服务映射完整后置为 true。
     if matches:
         old = matches[0]
         if decision["benefits"] is None:
             row.pop("benefits")
+        elif decision["benefits"] != old.get("benefits"):
+            row["is_offer_extracted"] = False
         if all(old.get(key) == value for key, value in row.items() if key != "updated_at"):
             return {"accepted": True, "action": "unchanged", "plan_id": int(old["plan_id"])}
         filters = {"plan_id": f"eq.{old['plan_id']}"}
@@ -271,6 +274,7 @@ def persist_membership_item(
             return {"accepted": False, "reason": "membership_write_conflict", "action": "quarantined"}
         action = "updated"
     else:
+        row["is_offer_extracted"] = False
         inserted = client.insert_rows(TABLE_CLINIC_MEMBERSHIPS, [row])
         action = "inserted"
     plan_id = int(inserted[0]["plan_id"]) if action == "inserted" else int(matches[0]["plan_id"])

@@ -32,3 +32,12 @@ Hard rules enforced in code and in the database (`supabase/migrations/2026110304
 - Writes are upserts by identity key; never clear and rewrite a table. Snapshots are verified table by table against `count(*)`, and every `apply.sql` checks that the planned rows have not changed before writing.
 
 Database changes may add triggers, functions, CHECK constraints and indexes to enforce rules; never add tables or columns.
+
+## Rules and what enforces them
+
+| Rule | Enforced by |
+|---|---|
+| Run the test suite before handing off | `.venv/bin/python3 -m pytest tests` |
+| `promotion_content` is verbatim source text; a struck original price stays `~~$135~~` | strikethrough cases in `tests/test_page_extraction.py` |
+| Image OCR runs only through `utils.paddle_ocr_markdown.ocr_lines` | `tests/test_image_ocr.py::test_image_ocr_has_a_single_entry_point` |
+| An LLM answer that fails validation rejects its page, never the whole plan, and stays cached as returned | `tests/test_page_extraction.py::test_paraphrased_source_review_rejects_only_its_page_and_is_not_requested_again` |

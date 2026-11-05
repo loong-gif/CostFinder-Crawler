@@ -61,7 +61,8 @@ def _download_image(url: str, *, session: requests.Session | None = None) -> byt
     try:
         estimate = client.head(url, timeout=15, allow_redirects=True)
         estimate.raise_for_status()
-        size = int(estimate.headers.get("content-length", "")) or None
+        length = estimate.headers.get("content-length", "")
+        size = int(length) if length.isdecimal() and int(length) > 0 else None
     except requests.RequestException as exc:
         print(f"OCR download estimate unavailable for {url}: {exc}")
     eta = f"{size / _LAST_DOWNLOAD_SPEED:.1f}s" if size and _LAST_DOWNLOAD_SPEED else "unknown"
@@ -89,7 +90,11 @@ def _download_image(url: str, *, session: requests.Session | None = None) -> byt
     return b"".join(chunks)
 
 
-def _ocr_lines(image_bytes: bytes) -> list[str]:
+def ocr_lines(image_bytes: bytes) -> list[str]:
+    """图片 OCR 的唯一入口：抽取流水线的 markdown_ocr 与可见性清单的图片转写都用它。
+
+    --psm 6 把图片当作一个文本块，同一行的服务名与价格保持在同一行，图片中逐字出现的声明能作为连续原文匹配。
+    """
     image_dir = Path(__file__).resolve().parents[1] / "state" / "pipeline_ocr"
     image_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(suffix=".img", dir=image_dir, delete=False) as tmp:
@@ -103,11 +108,9 @@ def _ocr_lines(image_bytes: bytes) -> list[str]:
     finally:
         Path(path).unlink(missing_ok=True)
     lines: list[str] = []
-    seen: set[str] = set()
     for line in result.stdout.splitlines():
         text = " ".join(line.split())
-        if text and text.casefold() not in seen:
-            seen.add(text.casefold())
+        if text:
             lines.append(text)
     return lines
 
@@ -121,7 +124,7 @@ def build_markdown_ocr(image_urls: Sequence[str]) -> tuple[str, list[dict]]:
         name = _image_name(url)
         try:
             data = _download_image(url, session=session)
-            lines = _ocr_lines(data)
+            lines = ocr_lines(data)
         except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
             meta.append({"url": url, "file": name, "error": str(exc)})
             continue

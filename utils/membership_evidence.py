@@ -91,4 +91,4 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
             'reason': ('validated' if complete else 'membership_benefits_unverified') if fee_supported else 'membership_fee_not_supported_by_named_evidence',
             'benefits': verified if complete or not fee_supported else None,
             'verified_benefits': verified, 'missing_claims': missing_claims,
-            'is_offer_extracted': False, 'complete': complete, 'membership_price': fee}
+            'complete': complete, 'membership_price': fee}
