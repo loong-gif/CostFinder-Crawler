@@ -1,4 +1,4 @@
--- M024: Agent database defense patterns (zero ALTER TABLE ADD COLUMN).
+-- M026: Agent database defense patterns (zero ALTER TABLE ADD COLUMN).
 -- Patterns: role timeouts, idempotency on monitor_event_id, query monitoring,
 -- semantic agent-facing views with audit fields from change_events.
 
@@ -13,7 +13,7 @@ ALTER ROLE authenticated SET application_name = 'cf-api';
 DO $$
 BEGIN
     IF to_regclass('public.promo_offer_change_events') IS NULL THEN
-        RAISE EXCEPTION 'M024 requires public.promo_offer_change_events';
+        RAISE EXCEPTION 'M026 requires public.promo_offer_change_events';
     END IF;
 END $$;
 

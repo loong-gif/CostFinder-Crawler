@@ -160,7 +160,9 @@ def audit_promotion_content_semantics(
     title: str,
     segments: Sequence[str],
     source_url: str = "",
+    check_binding: bool = True,
 ) -> list[SemanticIssue]:
+    """check_binding=False 用于单张卡片：卡片各行本身已经绑定，不按行检查价格是否与服务名称同段。"""
     del source_url
     issues: list[SemanticIssue] = []
     cleaned = [str(s).strip() for s in segments if str(s or "").strip()]
@@ -170,7 +172,7 @@ def audit_promotion_content_semantics(
         issues.append(
             SemanticIssue("high", "MARKDOWN_OR_SHOPIFY_RESIDUE", "promotion_content 含 Markdown/URL/Shopify 残留")
         )
-    if detect_fragmented_unbound_prices(cleaned):
+    if check_binding and detect_fragmented_unbound_prices(cleaned):
         issues.append(
             SemanticIssue("high", "FRAGMENTED_UNBOUND_PRICES", "价格行未与服务/套餐名称绑定")
         )
@@ -281,6 +283,8 @@ def audit_membership_benefits_semantics(
 def gate_promotion_semantics(
     item: Mapping[str, object],
     evidence: str = "",
+    *,
+    check_binding: bool = True,
 ) -> GateDecision:
     title = str(item.get("promotion_title") or "").strip()
     segments = [
@@ -293,6 +297,7 @@ def gate_promotion_semantics(
         title=title,
         segments=segments,
         source_url=source_url,
+        check_binding=check_binding,
     ):
         if issue.severity == "high":
             return GateDecision(False, None, issue.issue_type.lower())

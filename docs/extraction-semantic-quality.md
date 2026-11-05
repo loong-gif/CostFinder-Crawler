@@ -31,6 +31,8 @@ One `clinic_memberships` row per priced tier on the source page. `benefits` hold
 
 ## Where it runs
 
+- **`extract-pages` (standard pipeline)**: each LLM promotion item is one complete offer card. `merge_promotion_items` checks it with `validate_promotion_card`, which runs the high-severity promotion gates above except `FRAGMENTED_UNBOUND_PRICES`; card binding there comes from pairing each card with the independent source review by title and by its amounts and percentages (`utils/page_extraction.py`). Page type comes from that source review. Membership benefits are complete only when they match the source inventory, are visible in the rendered page, are deduplicated and carry no Markdown, URL or shop UI residue (`utils/membership_evidence.prepare_membership_write`); a priced plan with unverified benefits is written with `benefits` NULL for review.
+- **Page-level extraction paths** (`validate_promotion`, `utils/promotion_source_page.py`, `utils/promotion_content_cards.py`): segments may come from several offers, so price lines must also be bound to a service or package name.
 - **Extract-time**: `validate_promotion`, `validate_membership` → `GateDecision.reason` (lowercase issue id).
 - **Read-only audit**: `utils/extraction_quality_audit.py` → uppercase `issue_type` aligned with sheet QA reports.
 - **Prompts**: `schema/promotion_extraction_schema.json`, `schema/membership_extraction_schema.json` field descriptions.

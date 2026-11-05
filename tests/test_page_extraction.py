@@ -198,13 +198,33 @@ def test_card_missing_from_the_source_review_is_not_written(tmp_path):
 
 def test_review_title_with_the_price_pairs_with_the_extracted_card(tmp_path):
     url = "https://glow.example/specials"
+    markdown = "Lip Filler – $650 per syringe\n$550 this month!\n(limit 2 syringes)"
+    items = [promo_item("Lip Filler", "$550 this month!", "(limit 2 syringes)", "Lip Filler – $650 per syringe")]
+    review = promo_review(("Lip Filler – $650 per syringe", ["$550 this month!", "(limit 2 syringes)"]))
+    plan = plan_for([page(url)], [scrape(url, markdown, "Specials | Glow Clinic")], promo_llm({url: (items, review)}),
+                    tmp_path)
+    assert entry_for(plan, kind="promotion")["action"] == "insert"
+
+
+def test_shop_listing_without_a_discount_is_not_a_promotion(tmp_path):
+    url = "https://glow.example/collections/bundles"
+    markdown = "Epicutis Luxury Skincare Set\nRegular price : $395.00\nSale price : $395.00"
+    items = [promo_item("Epicutis Luxury Skincare Set", "Regular price : $395.00", "Sale price : $395.00")]
+    review = promo_review(("Epicutis Luxury Skincare Set", ["Regular price : $395.00", "Sale price : $395.00"]))
+    plan = plan_for([page(url)], [scrape(url, markdown, "Kits | Glow Clinic")], promo_llm({url: (items, review)}),
+                    tmp_path)
+    assert entry_for(plan, kind="promotion")["reason"] == "no_validated_promotions"
+
+
+def test_membership_dues_card_is_not_a_promotion(tmp_path):
+    url = "https://glow.example/specials"
     markdown = "Beauty Bank Basic Membership – $300/month\n$200/month!\n(for 6 months for 3 treatments)"
     items = [promo_item("Beauty Bank Basic Membership", "$200/month!", "(for 6 months for 3 treatments)",
                         "Beauty Bank Basic Membership – $300/month")]
     review = promo_review(("Beauty Bank Basic Membership – $300/month", ["$200/month!", "(for 6 months for 3 treatments)"]))
     plan = plan_for([page(url)], [scrape(url, markdown, "Specials | Glow Clinic")], promo_llm({url: (items, review)}),
                     tmp_path)
-    assert entry_for(plan, kind="promotion")["action"] == "insert"
+    assert entry_for(plan, kind="promotion")["reason"] == "no_validated_promotions"
 
 
 def test_paraphrased_source_review_rejects_only_its_page_and_is_not_requested_again(tmp_path):

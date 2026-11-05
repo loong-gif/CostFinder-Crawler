@@ -2,6 +2,7 @@ from __future__ import annotations
 import math
 import re
 from typing import Any, Mapping
+from utils.extraction_semantic_quality import has_markdown_or_shopify_residue
 from utils.rendered_visibility_gate import filter_visible_membership_benefits, normalize_claim
 
 
@@ -59,10 +60,15 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     price = item.get('membership_price')
     quote = str(item.get('membership_description') or item.get('evidence_quote') or '').strip()
     benefits = item.get('benefits')
+    # 同一条权益重复出现只算一条（DUPLICATE_BENEFIT_BULLET）
+    stated: dict[str, str] = {}
+    for value in benefits if isinstance(benefits, list) else []:
+        text = (str(value.get('desc') or '') if isinstance(value, dict) else str(value)).strip()
+        if text:
+            stated.setdefault(normalize_claim(text), text)
     verified = None
-    if isinstance(benefits, list) and benefits:
-        values = [str(value.get('desc') or '') if isinstance(value, dict) else str(value) for value in benefits]
-        values = [value.strip() for value in values if value.strip() and normalize_claim(value) in normalize_claim(evidence)]
+    if stated:
+        values = [value for key, value in stated.items() if key in normalize_claim(evidence)]
         gate = filter_visible_membership_benefits(values, rendered_visibility)
         if gate.accepted:
             verified = list(gate.content)
@@ -82,7 +88,9 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
                       or normalize_claim(claim) not in normalized_benefits]
     missing_claims.extend(value for value in verified or []
                           if normalize_claim(value) not in normalized_source_claims)
-    complete = (bool(verified) and len(verified) == len(benefits or [])
+    # 权益含 Markdown、链接或网店界面文字时不是可直接写入的原文权益（MARKDOWN_OR_SHOPIFY_RESIDUE）
+    complete = (bool(verified) and len(verified) == len(stated)
+                and not has_markdown_or_shopify_residue("\n".join(verified))
                 and bool(source_claims) and not missing_claims
                 and ocr_complete
                 and isinstance(rendered_visibility, Mapping)

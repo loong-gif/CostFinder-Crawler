@@ -765,16 +765,13 @@ def route_and_persist_extraction(
             stats["skipped"] += 1
 
     for item in pick_best_service_items(service_candidates, evidence, source_url=source_url):
-        try:
-            write = persist_service_item(
-                client,
-                business_id=business_id,
-                item=item,
-                source_url=source_url,
-                evidence=evidence,
-            )
-        except Exception as exc:
-            write = {"accepted": False, "reason": f"persist_error:{exc}", "action": "skipped"}
+        write = persist_service_item(
+            client,
+            business_id=business_id,
+            item=item,
+            source_url=source_url,
+            evidence=evidence,
+        )
         stats["service_writes"].append(write)
         if write.get("accepted") and write.get("service_id"):
             stats["services"] += 1

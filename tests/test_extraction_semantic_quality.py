@@ -7,6 +7,7 @@ from utils.extraction_semantic_quality import (
     gate_membership_semantics,
     gate_promotion_semantics,
 )
+from utils.membership_evidence import prepare_membership_write
 from utils.recent_raw_extraction import validate_membership, validate_promotion
 
 
@@ -80,7 +81,15 @@ def test_duplicate_benefit_bullet_flagged() -> None:
     }
     issues = audit_membership_benefits_semantics(item)
     assert any(i.issue_type == "DUPLICATE_BENEFIT_BULLET" for i in issues)
-    assert validate_membership(item, "").accepted
+    # 重复条目只是警告：费用有命名证据时会员照常写入，重复的权益只算一条
+    evidence = ("Massage Membership $89/month\nIn Massachusetts, massage is offered at the Back Bay location only.\n"
+                "One 60-minute massage per month.")
+    assert validate_membership(item, evidence).accepted
+    claims = ["In Massachusetts, massage is offered at the Back Bay location only.", "One 60-minute massage per month."]
+    page = {"status": "page_accessible", "complete": True,
+            "claimResults": [{"recordType": "membership", "claim": c, "status": "visible_match"} for c in claims]}
+    decision = prepare_membership_write(item, evidence, page, source_claims=claims)
+    assert decision["complete"] and decision["benefits"] == claims
 
 
 def test_null_benefits_with_price_fails() -> None:

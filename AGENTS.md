@@ -39,5 +39,6 @@ Database changes may add triggers, functions, CHECK constraints and indexes to e
 |---|---|
 | Run the test suite before handing off | `.venv/bin/python3 -m pytest tests` |
 | `promotion_content` is verbatim source text; a struck original price stays `~~$135~~` | strikethrough cases in `tests/test_page_extraction.py` |
+| A promotion card with Markdown or shop UI residue, only a soft call to action, or membership dues is not written | `test_shop_listing_without_a_discount_is_not_a_promotion`, `test_membership_dues_card_is_not_a_promotion` in `tests/test_page_extraction.py` |
 | Image OCR runs only through `utils.paddle_ocr_markdown.ocr_lines` | `tests/test_image_ocr.py::test_image_ocr_has_a_single_entry_point` |
 | An LLM answer that fails validation rejects its page, never the whole plan, and stays cached as returned | `tests/test_page_extraction.py::test_paraphrased_source_review_rejects_only_its_page_and_is_not_requested_again` |

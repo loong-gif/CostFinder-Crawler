@@ -484,26 +484,41 @@ def expand_promotion_content(item: dict, evidence: str) -> list[str]:
     return filter_promotion_segments(merged, evidence) or merged
 
 
-def validate_promotion(item: dict, evidence: str) -> GateDecision:
-    from utils.extraction_semantic_quality import gate_promotion_semantics
-    from utils.promotion_content_cards import validate_promotion_content_binding
-
+def _promotion_parts(item: dict) -> tuple[str, list[str]]:
     title = str(item.get("promotion_title") or "").strip()
-    if not title:
-        return GateDecision(False, None, "missing_promotion_title")
     segments = [
         str(value).strip() for value in item.get("promotion_content") or [] if str(value).strip()
     ]
+    return title, segments
+
+
+def validate_promotion(item: dict, evidence: str) -> GateDecision:
+    """页面级条目：segments 可能来自多个优惠，价格行必须与服务名称绑定在同一段。"""
+    from utils.promotion_content_cards import validate_promotion_content_binding
+
+    title, segments = _promotion_parts(item)
+    if title and segments:
+        binding = validate_promotion_content_binding(segments)
+        if not binding.accepted:
+            return binding
+    return validate_promotion_card(item, evidence, check_binding=True)
+
+
+def validate_promotion_card(item: dict, evidence: str, *, check_binding: bool = False) -> GateDecision:
+    """一个完整优惠卡片：segments 是同一张卡片的各行，彼此已经绑定，只做内容与语义检查。"""
+    from utils.extraction_semantic_quality import gate_promotion_semantics
+
+    title, segments = _promotion_parts(item)
+    if not title:
+        return GateDecision(False, None, "missing_promotion_title")
     if not segments:
         return GateDecision(False, None, "missing_promotion_content")
-    binding = validate_promotion_content_binding(segments)
-    if not binding.accepted:
-        return binding
     if _mostly_low_quality(segments):
         return GateDecision(False, None, "low_quality_promotion_content")
     if not any(SIGNAL_LINE.search(segment) for segment in segments):
         return GateDecision(False, None, "promotion_content_missing_price_signal")
-    semantic = gate_promotion_semantics({**item, "promotion_title": title, "promotion_content": segments}, evidence)
+    semantic = gate_promotion_semantics({**item, "promotion_title": title, "promotion_content": segments}, evidence,
+                                        check_binding=check_binding)
     if not semantic.accepted:
         return semantic
     return GateDecision(True, None, "validated")

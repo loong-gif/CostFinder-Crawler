@@ -10,7 +10,7 @@ from typing import Any, Iterable, Optional, Sequence
 from urllib.parse import unquote, urlparse
 from bs4 import BeautifulSoup
 from markdown_it import MarkdownIt
-from utils.recent_raw_extraction import validate_promotion
+from utils.recent_raw_extraction import validate_promotion_card
 import calendar
 import copy
 import re
@@ -260,7 +260,8 @@ def merge_promotion_items(
             sanitized["promotion_content"],
             evidence)
         candidate = {**sanitized, "promotion_content": verbatim}
-        if not verbatim or not validate_promotion(candidate, evidence).accepted:
+        # 每个抽取条目是一张完整优惠卡片（见 SYSTEM_PROMPT），按卡片做内容与语义检查
+        if not verbatim or not validate_promotion_card(candidate, evidence).accepted:
             continue
         accepted.append(candidate)
 
