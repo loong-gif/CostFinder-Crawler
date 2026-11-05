@@ -51,11 +51,21 @@ def _unique_text(values: Iterable[Any]) -> list[str]:
 _MARKDOWN = MarkdownIt().enable("strikethrough")
 
 
-def _plain_line(line: Any) -> str:
+def plain_line(line: Any) -> str:
+    """单行 markdown 渲染为纯文本；删除线原样保留为 ~~原价~~，它是源页面上的折扣标记。"""
     soup = BeautifulSoup(_MARKDOWN.render(str(line or "")), "html.parser")
-    for original_price in soup.find_all("s"):
-        original_price.replace_with("Regular price " + original_price.get_text(" ", strip=True))
+    for struck in soup.find_all("s"):
+        struck.replace_with(f"~~{struck.get_text(' ', strip=True)}~~")
     return " ".join(soup.get_text(" ", strip=True).split())
+
+
+def comparison_key(text: Any) -> str:
+    """原文比对键：逐行渲染 markdown 后合并空白、忽略大小写与删除线记号。
+
+    页面证据、LLM 引文与内容行都按同一规则逐行处理，跨行的 markdown 结构在两侧得到相同结果。
+    """
+    lines = (plain_line(line) for line in str(text or "").splitlines())
+    return " ".join(" ".join(lines).split()).replace("~~", "").casefold()
 
 
 def merge_content_blocks(blocks: Iterable[Iterable[Any]]) -> list[str]:
@@ -63,7 +73,7 @@ def merge_content_blocks(blocks: Iterable[Iterable[Any]]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
     for block in blocks:
-        lines = _unique_text(_plain_line(line) for line in block)
+        lines = _unique_text(plain_line(line) for line in block)
         content = "\n".join(lines)
         key = content.casefold()
         if not lines or key in seen:
@@ -85,7 +95,10 @@ def _text_is_verbatim_evidence(value: Any, evidence: str) -> bool:
     return bool(needle and needle in _normalized_evidence_text(evidence))
 
 def _restore_strikethrough(title: str, segments: list[str], evidence: str) -> list[str]:
-    """按原文顺序对齐一个优惠的片段：从标题位置起依次查找每个片段，所在原文行恰为 ~~片段~~（原价）时补回删除线。"""
+    """按原文顺序对齐一个优惠的片段：从标题位置起依次查找每个片段，所在原文行恰为 ~~原价~~ 时整行取原文。
+
+    LLM 可能去掉删除线记号，也可能只留下一部分（~$135~），两种情况都还原为源页面上的 ~~$135~~。
+    """
     cursor = max(evidence.find(title), 0)
     restored = []
     for segment in segments:
@@ -96,7 +109,8 @@ def _restore_strikethrough(title: str, segments: list[str], evidence: str) -> li
         start = evidence.rfind("\n", 0, index) + 1
         end = evidence.find("\n", index)
         line = evidence[start:end if end >= 0 else len(evidence)].strip()
-        restored.append(line if line == f"~~{segment}~~" else segment)
+        struck = len(line) > 4 and line.startswith("~~") and line.endswith("~~")
+        restored.append(line if struck and segment.strip("~ ") == line[2:-2].strip() else segment)
         cursor = index + len(segment)
     return restored
 

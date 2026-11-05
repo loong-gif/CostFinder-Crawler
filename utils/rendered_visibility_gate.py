@@ -23,10 +23,18 @@ def normalize_claim(value: Any) -> str:
 
 
 
+IMAGE_OCR_PROOF = "rendered_image_ocr"
+SCREENSHOT_PROOFS = frozenset({"rendered_screenshot_ocr", "ego_verified_capture"})
+
+
 def image_claim_verified(claim: Any, item: Mapping[str, Any], page: Mapping[str, Any]) -> bool:
-    """An image label is not evidence: bind the readable quotation to its capture."""
+    """An image label is not evidence: bind the readable quotation to its capture.
+
+    ``rendered_image_ocr`` must name the visible images whose recorded OCR text forms the transcript;
+    ``rendered_screenshot_ocr`` / ``ego_verified_capture`` bind the transcript to an existing screenshot.
+    """
     proof = item.get("visibleEvidence")
-    if not isinstance(proof, Mapping) or proof.get("kind") not in {"rendered_image_ocr", "ego_verified_capture"}:
+    if not isinstance(proof, Mapping) or proof.get("kind") not in {IMAGE_OCR_PROOF, *SCREENSHOT_PROOFS}:
         return False
     text = normalize_claim(claim)
     transcript = normalize_claim(proof.get("transcript"))
@@ -37,7 +45,7 @@ def image_claim_verified(claim: Any, item: Mapping[str, Any], page: Mapping[str,
     capture_time = page.get("checked_at") or page.get("captured_at")
     if not proof.get("captured_at") or proof.get("captured_at") != capture_time:
         return False
-    if proof.get("kind") == "rendered_image_ocr":
+    if proof["kind"] == IMAGE_OCR_PROOF:
         urls = proof.get("imageUrls") or []
         visible = set(page.get("visibleImages") or [])
         readable = {image.get("url"): image.get("text") for image in page.get("imageOcr") or []
@@ -75,7 +83,7 @@ def current_page_manifest(browser: Mapping[str, Any], record_type: str, claims: 
         if report["status"] == "page_accessible" and value and value in visible:
             item["status"] = "visible_match"
         elif report["status"] == "page_accessible" and image_complete:
-            item["visibleEvidence"] = {"kind":"rendered_image_ocr","pageUrl":browser.get("url"),
+            item["visibleEvidence"] = {"kind":"rendered_screenshot_ocr","pageUrl":browser.get("url"),
                 "captured_at":browser.get("captured_at"),"screenshotPath":browser.get("screenshot_path"),
                 "transcript":image_transcript}
             if image_claim_verified(claim, item, report):

@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import requests
+
+from utils.paddle_ocr_markdown import ocr_lines
 
 AMOUNT_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?")
 PERCENT_RE = re.compile(r"\d{1,3}(?:\.\d+)?\s?%")
@@ -175,9 +176,7 @@ def ocr_image(url: str, image_dir: Path) -> str:
         response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         target.write_bytes(response.content)
-    done = subprocess.run(["tesseract", str(target), "stdout", "--psm", "11"],
-                          capture_output=True, text=True, check=True)
-    return done.stdout
+    return "\n".join(ocr_lines(target.read_bytes()))
 
 
 def build_deep_items(decisions: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
