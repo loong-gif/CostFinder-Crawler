@@ -9,6 +9,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from urllib.parse import urlparse
 
 from utils.clinic_service_extraction import is_promo_offer
+from utils.extraction_semantic_quality import (
+    audit_membership_benefits_semantics,
+    audit_promotion_content_semantics,
+)
 from utils.promotion_source_page import (
     PAGE_TYPE_BLOG,
     PAGE_TYPE_GENERIC,
@@ -267,6 +271,20 @@ def audit_memberships(
                 business_name=biz_name,
                 label=str(row.get("membership_name") or ""),
             )
+        for sem in audit_membership_benefits_semantics(
+            row,
+            is_ocr_required=bool(row.get("is_ocr_required")),
+        ):
+            _add(
+                issues,
+                table="clinic_memberships",
+                row_id=pid,
+                severity=sem.severity,
+                issue_type=sem.issue_type,
+                detail=sem.detail,
+                business_name=biz_name,
+                label=str(row.get("membership_name") or ""),
+            )
         inferred = _infer_commitment_months(benefits)
         current = row.get("minimum_commitment_months")
         if inferred and not current:
@@ -308,6 +326,23 @@ def audit_promotions(
         title = str(row.get("promotion_title") or "").strip()
         source_url = str(row.get("source_url") or "").strip()
         content = row.get("promotion_content") or []
+        if isinstance(content, str):
+            content = [content]
+        for sem in audit_promotion_content_semantics(
+            title=title,
+            segments=content if isinstance(content, list) else [],
+            source_url=source_url,
+        ):
+            _add(
+                issues,
+                table="clinic_promotions",
+                row_id=pid,
+                severity=sem.severity,
+                issue_type=sem.issue_type,
+                detail=sem.detail,
+                business_name=biz_name,
+                label=title,
+            )
         if not content:
             _add(
                 issues,

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explanation", "memberships"],
+  "properties": {
+    "explanation": {
+      "type": "string",
+      "description": "Evidence summary: list every membership tier found on the page, note OCR/image gaps, and explain empty arrays."
+    },
+    "memberships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership_name",
+          "membership_price",
+          "billing_period",
+          "minimum_commitment_months",
+          "membership_description",
+          "benefits"
+        ],
+        "properties": {
+          "membership_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact plan/tier name from the page (one row per priced tier)."
+          },
+          "membership_price": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "billing_period": {
+            "type": ["string", "null"],
+            "enum": ["monthly", "quarterly", "annual", "one_time", null]
+          },
+          "minimum_commitment_months": {
+            "type": ["integer", "null"],
+            "minimum": 0
+          },
+          "membership_description": {
+            "type": ["string", "null"]
+          },
+          "benefits": {
+            "type": "array",
+            "description": "Non-priced perks as separate complete sentences (consult access, included treatments, credits, retail discounts, commitment/cancel rules). Include every bullet the page lists for this tier—not only a single \"10% off\" line. No duplicate bullets, markdown links, or URLs. Use [] only when the page truly lists no perks; image-only plans require OCR text first.",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

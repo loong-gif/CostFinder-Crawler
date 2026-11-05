@@ -41,7 +41,7 @@ def build_membership_extraction_messages(row: Dict[str, Any], page_content: str)
                 "Rules:\n"
                 "- tier_name must be a human-readable tier (Platinum, VIP, Essentials).\n"
                 "- If no tier name exists, use Standard or plan_name.\n"
-                "- benefits: perks without standalone service SKU pricing.\n"
+                "- benefits: perks without standalone service SKU pricing; one string per bullet, no duplicates; include all tier perks from the page, not discount-only stubs.\n"
                 "- priced_offers: concrete service + price rows for promo_offer_master.\n"
                 "- billing_period: monthly | annual | weekly.\n\n"
                 f"Text:\n{page_content}"

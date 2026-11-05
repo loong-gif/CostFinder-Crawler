@@ -184,11 +184,24 @@ def validate_service(
     return GateDecision(True, None, "validated")
 
 
-def validate_membership(item: dict, evidence: str) -> GateDecision:
-    del evidence
+def validate_membership(
+    item: dict,
+    evidence: str,
+    *,
+    is_ocr_required: bool = False,
+) -> GateDecision:
     name = str(item.get("membership_name") or "").strip()
     if not name or item.get("membership_price") is None:
         return GateDecision(False, None, "missing_membership_or_price")
+    from utils.extraction_semantic_quality import gate_membership_semantics
+
+    semantic = gate_membership_semantics(
+        item,
+        evidence=evidence,
+        is_ocr_required=is_ocr_required,
+    )
+    if not semantic.accepted:
+        return semantic
     return GateDecision(True, None, "validated")
 
 
@@ -487,6 +500,7 @@ def expand_promotion_content(item: dict, evidence: str) -> list[str]:
 
 
 def validate_promotion(item: dict, evidence: str) -> GateDecision:
+    from utils.extraction_semantic_quality import gate_promotion_semantics
     from utils.promotion_content_cards import validate_promotion_content_binding
 
     title = str(item.get("promotion_title") or "").strip()
@@ -504,6 +518,9 @@ def validate_promotion(item: dict, evidence: str) -> GateDecision:
         return GateDecision(False, None, "low_quality_promotion_content")
     if not any(SIGNAL_LINE.search(segment) for segment in segments):
         return GateDecision(False, None, "promotion_content_missing_price_signal")
+    semantic = gate_promotion_semantics({**item, "promotion_title": title, "promotion_content": segments}, evidence)
+    if not semantic.accepted:
+        return semantic
     return GateDecision(True, None, "validated")
 
 

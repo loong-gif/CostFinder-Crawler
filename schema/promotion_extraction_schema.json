@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Promotion Extraction Schema",
+  "type": "object",
+  "properties": {
+    "explanation": {
+      "type": "string",
+      "description": "Brief evidence-based summary: what was found, ambiguities, and why nulls were used. Write before filling promotions."
+    },
+    "promotions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+
+        "properties": {
+          "promotion_title": {
+            "type": "string",
+            "description":"促销网页标题"
+          },
+          "promotion_content": {
+            "type": "array",
+            "description": "Each element is one bound offer card: service/package name, promo price or discount, and conditions in a single verbatim segment (use \" | \" between lines from the same card). Do not put membership monthly dues or member-tier perks here. Do not split prices onto separate bullets from the service name. No markdown links, image syntax, or Shopify Regular/Sale price UI. Extract every distinct limited-time promo on the page; omit catalog list prices and membership plans.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "campaign_start_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          },
+          "campaign_end_date": {
+            "type": ["string", "null"],
+            "format": "date"
+          }
+        },
+        "required": [
+          "promotion_title",
+          "promotion_content",
+          "campaign_start_date",
+          "campaign_end_date"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["explanation", "promotions"],
+  "additionalProperties": false
+}
