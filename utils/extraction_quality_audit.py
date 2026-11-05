@@ -9,6 +9,13 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from urllib.parse import urlparse
 
 from utils.clinic_service_extraction import is_promo_offer
+from utils.promotion_source_page import (
+    PAGE_TYPE_BLOG,
+    PAGE_TYPE_GENERIC,
+    PAGE_TYPE_MEMBERSHIP,
+    PAGE_TYPE_PRICING,
+    classify_promotion_source_page,
+)
 from utils.service_price_guard import is_catalog_ineligible_url, infer_unit_count
 from utils.promo_offer_audit import (
     AuditIssue as OfferAuditIssue,
@@ -323,7 +330,28 @@ def audit_promotions(
                 business_name=biz_name,
                 label=title,
             )
-        if "/membership" in source_url.lower() or source_url.lower().endswith("/memberships"):
+        classification = classify_promotion_source_page(
+            url=source_url,
+            title=title,
+            markdown="\n".join(str(value) for value in content),
+        )
+        if classification.page_type in {
+            PAGE_TYPE_MEMBERSHIP,
+            PAGE_TYPE_BLOG,
+            PAGE_TYPE_GENERIC,
+            PAGE_TYPE_PRICING,
+        }:
+            _add(
+                issues,
+                table="clinic_promotions",
+                row_id=pid,
+                severity="high" if classification.page_type == PAGE_TYPE_MEMBERSHIP else "medium",
+                issue_type="ineligible_promotion_source_page",
+                detail=f"{classification.page_type}: {classification.reason}",
+                business_name=biz_name,
+                label=title,
+            )
+        elif "/membership" in source_url.lower() or source_url.lower().endswith("/memberships"):
             _add(
                 issues,
                 table="clinic_promotions",

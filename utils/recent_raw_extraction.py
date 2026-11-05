@@ -220,6 +220,48 @@ def _markdown_section_bounds(lines: list[str], title_idx: int) -> tuple[int, int
     return section_start, section_end
 
 
+def evidence_section_for_promotion_title(evidence: str, title: str) -> str:
+    """Return markdown lines under a promotion heading/title (ponytail: sibling offers stay isolated)."""
+    title_text = str(title or "").strip()
+    if not title_text:
+        return str(evidence or "")
+    lines = str(evidence or "").splitlines()
+    title_norm = _normalize_compare_text(title_text).casefold()
+    title_idx = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if title_norm in _normalize_compare_text(line).casefold()
+        ),
+        None,
+    )
+    if title_idx is None:
+        return str(evidence or "")
+    title_line = lines[title_idx].strip()
+    if re.match(r"^#{1,3}\s", title_line):
+        section_start, section_end = _markdown_section_bounds(lines, title_idx)
+        return "\n".join(lines[section_start:section_end]).strip() or str(evidence or "")
+
+    section_start = title_idx
+    section_end = len(lines)
+    for index in range(title_idx + 1, len(lines)):
+        candidate = lines[index].strip()
+        if not candidate or candidate.startswith("!["):
+            continue
+        if re.match(r"^#{1,3}\s", candidate):
+            section_end = index
+            break
+        if (
+            index > title_idx
+            and len(candidate) <= 60
+            and not SIGNAL_LINE.search(candidate)
+            and _normalize_compare_text(candidate).casefold() != title_norm
+        ):
+            section_end = index
+            break
+    return "\n".join(lines[section_start:section_end]).strip() or str(evidence or "")
+
+
 def _line_to_promotion_segment(line: str) -> str:
     stripped = line.strip()
     if not stripped:
@@ -358,6 +400,8 @@ def promotion_evidence_markdown(scrape: dict) -> str:
 
 def build_promotion_content(item: dict, evidence: str) -> list[str]:
     """Merge LLM segments with markdown extraction; drop OCR garbage on image-heavy pages."""
+    from utils.promotion_content_cards import bind_promotion_content_segments
+
     from_markdown = extract_promotion_content_from_markdown(evidence)
     llm_raw = [
         str(value).strip() for value in item.get("promotion_content") or [] if str(value).strip()
@@ -380,7 +424,8 @@ def build_promotion_content(item: dict, evidence: str) -> list[str]:
             for segment in merged
             if _normalize_compare_text(segment).casefold() != title.casefold()
         ]
-    return merged or from_markdown or llm_filtered
+    merged = merged or from_markdown or llm_filtered
+    return bind_promotion_content_segments(merged, evidence)
 
 
 def expand_promotion_content(item: dict, evidence: str) -> list[str]:
@@ -442,6 +487,8 @@ def expand_promotion_content(item: dict, evidence: str) -> list[str]:
 
 
 def validate_promotion(item: dict, evidence: str) -> GateDecision:
+    from utils.promotion_content_cards import validate_promotion_content_binding
+
     title = str(item.get("promotion_title") or "").strip()
     if not title:
         return GateDecision(False, None, "missing_promotion_title")
@@ -450,6 +497,9 @@ def validate_promotion(item: dict, evidence: str) -> GateDecision:
     ]
     if not segments:
         return GateDecision(False, None, "missing_promotion_content")
+    binding = validate_promotion_content_binding(segments)
+    if not binding.accepted:
+        return binding
     if _mostly_low_quality(segments):
         return GateDecision(False, None, "low_quality_promotion_content")
     if not any(SIGNAL_LINE.search(segment) for segment in segments):

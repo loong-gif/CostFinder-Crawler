@@ -238,6 +238,20 @@ python scripts/audit_promo_offer_master.py      # legacy：仅 promo_offer_maste
 python scripts/audit_promo_website_staging.py
 ```
 
+促销页写入前会经 `utils/promotion_source_page.py` 做页面类型分流（blog / membership / pricing / generic 不会写入 `clinic_promotions`）；`promotion_content` 绑定校验见 `utils/promotion_content_cards.py`。
+
+```bash
+# 单元测试（含 QA brief 中的 FAIL 样例回归）
+python3 -m pytest tests/test_promotion_extraction_gates.py -q
+
+# 本地工具自检
+PYTHONPATH=. python3 utils/promotion_source_page.py
+PYTHONPATH=. python3 utils/promotion_content_cards.py
+
+# 促销提取 dry-run（不写库；需 schema/ 与 LOCAL_LLM）
+python3 scripts/extract_clinic_promotions_from_scrape_raw.py --batch_date 2026-07-30
+```
+
 ### 5) promo_offer_master 质量运维
 
 生产链路已在写入时使用 `offer_fingerprint` 去重。

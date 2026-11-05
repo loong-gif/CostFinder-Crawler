@@ -29,8 +29,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url
 from utils.offer_extraction_llm import OpenAICompatibleClient, parse_json_payload
+from utils.promotion_content_cards import bind_promotion_content_segments
+from utils.promotion_source_page import gate_promotion_source_page
 from utils.recent_raw_extraction import (
     build_promotion_content,
+    evidence_section_for_promotion_title,
     promotion_evidence_markdown,
     resolve_business,
     validate_promotion,
@@ -361,6 +364,10 @@ def merge_promotion_items(
         _validate_promotion_schema_item(original)
         if not _text_is_verbatim_evidence(original["promotion_title"], evidence):
             continue
+        section_evidence = evidence_section_for_promotion_title(
+            evidence,
+            str(original.get("promotion_title") or ""),
+        )
         sanitized = {
             **original,
             "campaign_start_date": (
@@ -374,9 +381,9 @@ def merge_promotion_items(
                 else None
             ),
         }
-        built_content = build_promotion_content(sanitized, evidence)
+        built_content = build_promotion_content(sanitized, section_evidence)
         candidate = {**sanitized, "promotion_content": list(built_content)}
-        if not validate_promotion(candidate, evidence).accepted:
+        if not validate_promotion(candidate, section_evidence).accepted:
             continue
         # Keep exact model-copied source segments as well as the deterministic
         # builder output. Validation is performed against the cleaned content.
@@ -389,11 +396,19 @@ def merge_promotion_items(
     titles = _unique_text(item.get("promotion_title") for item in accepted)
     content: list[str] = []
     for item in accepted:
-        content.extend(
-            _unique_text(
-                [item.get("promotion_title"), *(item.get("promotion_content") or [])]
-            )
+        bound = bind_promotion_content_segments(
+            list(item.get("promotion_content") or []),
+            "",
         )
+        title = str(item.get("promotion_title") or "").strip()
+        if not bound and title:
+            content.append(title)
+            continue
+        for card in bound:
+            if title and title.casefold() not in card.casefold():
+                content.append(f"{title} | {card}")
+            else:
+                content.append(card)
     campaign_start_date = _consensus_date(accepted, "campaign_start_date")
     campaign_end_date = _consensus_date(accepted, "campaign_end_date")
     if (
@@ -773,6 +788,23 @@ def run(
                     "source_url": source_url,
                     "status": "business_gate_rejected",
                     "reason": gate.reason,
+                }
+            )
+            continue
+        page_gate = gate_promotion_source_page(
+            url=source_url,
+            title=str(source.get("title") or ""),
+            markdown=evidence,
+        )
+        if not page_gate.accepted:
+            gate_rejected_count += 1
+            results.append(
+                {
+                    "raw_id": raw_id,
+                    "business_id": gate.business_id,
+                    "source_url": source_url,
+                    "status": "page_type_gate_rejected",
+                    "reason": page_gate.reason,
                 }
             )
             continue
