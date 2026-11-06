@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.run_monitor_price_sync import snapshot_business_graph
-from utils import monitor_price_writer as writer
+from utils import monitor_price_writer_plan as writer
+from utils.monitor_price_writer import render_apply
 from utils.monitor_price_plan import build_plan
 from utils.promo_offer_items_db import is_blanket_offer_text
 
@@ -80,7 +81,7 @@ def terms_plan(*, existing=True, change_conditions=False, new_offer=False):
 
 
 def sql_of(plan, protections=None):
-    return writer.render_apply(plan, protections or {})
+    return render_apply(plan, protections or {})
 
 
 def index(sql, fragment):

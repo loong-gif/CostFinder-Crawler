@@ -32,6 +32,15 @@ def test_percent_and_amount_off_with_service_is_valid_promotion() -> None:
     assert any("20% off" in e for e in result.evidence)
 
 
+def test_banner_repeated_with_footnote_spacing_counts_as_one_evidence_line() -> None:
+    md = ("75% OFF LASER HAIR REMOVAL ǂ\n\n75% OFF LASER HAIR REMOVALǂ\n\n"
+          "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*\n\n### Your First Botox Treatment Is $10 Per Unit‡‡")
+    result = assess_offer_page(md, None)
+    assert list(result.evidence) == ["75% OFF LASER HAIR REMOVAL ǂ",
+                                     "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*",
+                                     "### Your First Botox Treatment Is $10 Per Unit‡‡"]
+
+
 def test_monthly_price_is_membership() -> None:
     md = "VIP Membership $99/month includes one facial"
     result = assess_offer_page(md, _html("<p>VIP Membership $99/month includes one facial</p>"), kind_hint="membership")
@@ -236,11 +245,6 @@ def test_search_and_crawl_sources_add_candidates_without_a_second_scrape() -> No
         def search(self, query, limit=10):
             return [{"url": "https://spa.com/products/botox-promo?srsltid=x", "title": "Botox $9 per unit promo"}]
 
-        def crawl(self, url, include_paths, limit=15, depth=2, timeout=150):
-            return [{"markdown": "Botox $12 per unit this month",
-                     "rawHtml": _html("<p>Botox $12 per unit this month</p>"),
-                     "metadata": {"sourceURL": "https://spa.com/summer-specials"}}]
-
     pages = {"https://spa.com/products/botox-promo": {
         "markdown": "Botox $9 per unit", "rawHtml": _html("<p>Botox $9 per unit</p>")}}
     fc = Fc(pages)
@@ -252,17 +256,21 @@ def test_search_and_crawl_sources_add_candidates_without_a_second_scrape() -> No
     assert found["https://spa.com/products/botox-promo"]["title"].startswith("Botox")
     assert fc.scraped == ["https://spa.com/products/botox-promo"]
 
-    # crawl only runs when map and search found nothing
-    class Empty(Fc):
-        def search(self, query, limit=10):
-            return []
 
-    fc2 = Empty({})
-    args.sources = "map,search,crawl"
-    result = discover_business(fc2, {"business_id": 3, "name": "Spa", "city": "X", "website": "https://spa.com"}, set(), args)
-    crawled = {p["url"]: p for p in result["pages"]}["https://spa.com/summer-specials"]
-    assert crawled["sources"] == ["crawl"] and crawled["status"] in ("valid", "needs_review")
-    assert fc2.scraped == []  # crawl results are assessed directly
+def test_map_reads_v2_map_link_objects(monkeypatch) -> None:
+    from scripts.discover_new_promo_pages import Firecrawl
+
+    posted = []
+
+    def post(self, path, body):
+        posted.append((path, body))
+        return {"success": True, "links": [{"url": "https://spa.com/specials", "title": "Specials"},
+                                           {"url": "https://spa.com/memberships"}]}
+
+    monkeypatch.setattr(Firecrawl, "_post", post)
+    links = Firecrawl("http://127.0.0.1:3002").map("https://spa.com", 50)
+    assert links == ["https://spa.com/specials", "https://spa.com/memberships"]
+    assert posted == [("/v2/map", {"url": "https://spa.com", "limit": 50})]
 
 
 def test_empty_search_is_retried_and_a_dead_backend_is_not_hammered() -> None:
@@ -372,3 +380,29 @@ def test_out_of_credits_stops_spending_and_marks_businesses_skipped() -> None:
                                set(), args)
     assert result["search_status"] == "skipped_budget"
     assert args.search_client.budget == args.search_client.spent == 0
+
+
+def test_branches_sharing_a_website_are_discovered_once() -> None:
+    from scripts.discover_new_promo_pages import discover_per_site
+
+    rows = [{"business_id": 4385, "name": "LaserAway Morningside Heights", "city": "New York",
+             "website": "https://www.laseraway.com/locations/ny/manhattan-morningside-heights/?utm_source=google"},
+            {"business_id": 7, "name": "Glow Spa", "city": "Austin", "website": "https://glowspa.com"},
+            {"business_id": 4386, "name": "LaserAway Huntington Beach", "city": "Huntington Beach",
+             "website": "https://www.laseraway.com/locations/ca/huntington-beach/"}]
+    discovered: list[int] = []
+
+    def discover(business):
+        discovered.append(business["business_id"])
+        return {"business_id": business["business_id"], "name": business["name"], "city": business["city"],
+                "website": business["website"], "mapped": 1, "candidates": 1, "error": None,
+                "pages": [{"url": f"https://{business['website'].split('/')[2]}/promotions", "status": "needs_review"}]}
+
+    results = discover_per_site(rows, discover)
+
+    assert discovered == [4385, 7]
+    assert [r["business_id"] for r in results] == [4385, 7, 4386]
+    assert results[2]["pages"] == results[0]["pages"] == [{"url": "https://www.laseraway.com/promotions",
+                                                           "status": "needs_review"}]
+    assert results[2]["city"] == "Huntington Beach" and results[2]["shared_site_with"] == 4385
+    assert "shared_site_with" not in results[0]

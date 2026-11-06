@@ -11,8 +11,8 @@ from typing import Any, Mapping
 import requests
 
 from utils.paddle_ocr_markdown import filter_promo_image_urls
-from utils.browser_scrape import is_block_page
-from utils.render_review import claim_anchors, claim_matches, corpus_text, item_id, ocr_image
+from utils.page_title import is_block_page
+from utils.render_review import claim_anchors, claim_matches, claim_matches_sources, corpus_text, item_id, ocr_image
 from utils.rendered_visibility_gate import IMAGE_OCR_PROOF, image_claim_verified
 
 MIN_RENDERED_CHARS = 300
@@ -47,19 +47,44 @@ def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str, bool
     return pages
 
 
+def _linked_pages(plan: Mapping[str, Any]) -> dict[str, list[str]]:
+    """每个源页面链接到的条款页；条款段落是卡片内容的来源之一，与源页面一并渲染核验。"""
+    linked: dict[str, set[str]] = {}
+    for entry in plan["entries"]:
+        if entry["action"] == "rejected":
+            continue
+        for page in entry.get("source_pages") or [entry["source_url"]]:
+            linked.setdefault(page, set()).update(entry.get("linked_terms_pages") or [])
+    return {page: sorted(urls) for page, urls in linked.items() if urls}
+
+
 def build_shard(plan: Mapping[str, Any], name: str) -> dict[str, Any]:
     items = []
+    linked = _linked_pages(plan)
     for url, lines in sorted(_page_claims(plan).items()):
         claims = [{"id": i, "record_type": kind, "line": line, "anchors": claim_anchors(line), "is_name": is_name}
                   for i, (kind, line, is_name) in enumerate(lines)]
-        items.append({"id": item_id(url), "url": url, "claims": claims})
+        items.append({"id": item_id(url), "url": url, "claims": claims, "linked_pages": linked.get(url, [])})
+    for url in sorted({page for pages in linked.values() for page in pages} - {item["url"] for item in items}):
+        items.append({"id": item_id(url), "url": url, "claims": [], "linked_pages": []})
     return {"name": name, "items": items}
 
 
 def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> dict[str, Any]:
     records = {r["url"]: r for r in render_out["results"]}
+
+    def rendered_texts(url: str) -> list[str]:
+        record = records.get(url)
+        if record is None or record.get("error"):
+            return []
+        texts = record["result"]["texts"]
+        return [] if sum(len(t) for t in texts) < MIN_RENDERED_CHARS or is_block_page("\n".join(texts)) else texts
+
     manifest: dict[str, Any] = {}
     for item in shard["items"]:
+        if not item["claims"]:
+            # 只作为条款来源渲染的页面，本身没有待核验的内容
+            continue
         record = records.get(item["url"])
         if record is None or record.get("error"):
             manifest[item["url"]] = {"status": "page_not_accessible",
@@ -81,9 +106,17 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
                 image_evidence.append({"url": url, "text": ocr_image(url, image_dir)})
             except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
                 image_evidence.append({"url": url, "error": str(exc)})
+        # 卡片链接到的条款页（渲染成功的）与源页面同为该卡片内容的可见来源
+        linked = {url: t for url in item.get("linked_pages") or [] if (t := rendered_texts(url))}
         claim_results = []
         for claim in item["claims"]:
-            status = "visible_match" if claim_matches(claim, texts) else "not_visible"
+            with_terms = False
+            if claim_matches(claim, texts):
+                status = "visible_match"
+            elif linked and claim_matches_sources(claim, [texts, *linked.values()]):
+                status, with_terms = "visible_match", True
+            else:
+                status = "not_visible"
             visible_evidence = None
             matching_images = [image for image in image_evidence
                                if image.get("text") and claim_matches(claim, [image["text"]])]
@@ -95,6 +128,9 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
                                     "imageUrls": [image["url"] for image in matching_images],
                                     "ocrEvidence": matching_images}
             result = {"recordType": claim["record_type"], "claim": claim["line"], "status": status}
+            if with_terms:
+                # 部分分句只在条款页上可见
+                result["visibleOn"] = [item["url"], *sorted(linked)]
             if visible_evidence is not None:
                 result["visibleEvidence"] = visible_evidence
             claim_results.append(result)

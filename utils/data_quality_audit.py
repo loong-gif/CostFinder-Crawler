@@ -8,7 +8,7 @@ import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from utils.monitor_price_writer import normalize_source_url, WriterError
+from utils.monitor_price_writer_plan import normalize_source_url, WriterError
 from utils.offer_purchase_semantics import (canonical_offer_semantics, usable_unit_price,
                                            service_supported_by_source, is_generic_offer_scope)
 from utils.offer_evidence_validator import _quantity_supported

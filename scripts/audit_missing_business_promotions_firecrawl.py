@@ -8,18 +8,14 @@ the page evidence that produced it.
 from __future__ import annotations
 
 import argparse
-import copy
-import csv
 import json
 import os
-import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
-from urllib.parse import urlparse, urlunparse
+from typing import Any, Mapping, Sequence
 
 import requests
 
@@ -28,273 +24,38 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.gemini_client import build_gemini_client
-from utils.promo_paths import (  # noqa: F401
-    PROMOTION_URL_TOKENS,
-    is_promotion_url_strict as is_promotion_page_url,
-    normalized_host as _normalized_host,
-)
+from utils.promo_paths import normalized_host as _normalized_host
 from utils.promo_extraction import llm_extract_promotions, merge_promotion_items
-from utils.firecrawl_scrape_raw_db import (
-    canonical_scrape_url,
-    save_scrape_response,
-    scrape_request_fingerprint,
+from utils.firecrawl_scrape_raw_db import canonical_scrape_url
+from utils.missing_business_audit_attribution import (
+    activity_from_dates,
+    assign_businesses,
+    has_explicit_promotion_signal,
+)
+from utils.missing_business_audit_firecrawl import (
+    RawSpoolDb,
+    SelfHostedFirecrawl,
+    _persist_raw,
+    _same_host_promotion_urls,
+    _site_root,
+)
+from utils.missing_business_audit_reports import (
+    build_audit,
+    select_missing_businesses,
+    write_raw_spool,
+    write_reports,
 )
 from utils.supabase_rest import SupabaseRestClient, get_supabase_writer_key
 
 DEFAULT_FIRECRAWL_API_URL = "http://192.168.1.68:3002"
 DEFAULT_MAP_LIMIT = 500
 DEFAULT_WORKERS = 3
-PAGE_SIZE = 1000
 FALLBACK_PATHS = ("/special", "/specials", "/promotion", "/promotions")
-
-_EXPLICIT_PROMOTION_PATTERNS = (
-    re.compile(r"[$€£]\s*\d+(?:[,.]\d+)*"),
-    re.compile(r"\b\d+(?:\.\d+)?\s*%\s*(?:off|discount)\b", re.IGNORECASE),
-    re.compile(r"\b(?:off|discount(?:ed)?(?:\s+by)?)\s*\d+(?:\.\d+)?\s*%\b", re.IGNORECASE),
-    re.compile(r"\bsave\s+[$€£]?\s*\d+(?:[,.]\d+)*", re.IGNORECASE),
-    re.compile(r"[$€£]\s*\d+(?:[,.]\d+)*\s*off\b", re.IGNORECASE),
-    re.compile(r"\bbuy\b.{0,80}\bget\b.{0,40}\bfree\b", re.IGNORECASE | re.DOTALL),
-    re.compile(r"\bfree\b.{0,80}\b(?:with|when|purchase|buy)\b", re.IGNORECASE | re.DOTALL),
-)
-_NON_WORD = re.compile(r"[^a-z0-9]+")
-
-
-def _normalized_words(value: Any) -> str:
-    return " ".join(_NON_WORD.sub(" ", str(value or "").casefold()).split())
-
-
-def _contains_phrase(haystack: str, phrase: str) -> bool:
-    return bool(phrase and re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", haystack))
 
 
 def _page_data(response: Mapping[str, Any]) -> dict[str, Any]:
     nested = response.get("data")
     return dict(nested) if isinstance(nested, Mapping) else dict(response)
-
-
-def has_explicit_promotion_signal(text: str) -> bool:
-    """Require a concrete price, discount, or purchase-bound free offer."""
-    evidence = str(text or "")
-    return any(pattern.search(evidence) for pattern in _EXPLICIT_PROMOTION_PATTERNS)
-
-
-def activity_from_dates(
-    start_date: str | None,
-    end_date: str | None,
-    evidence: str,
-    *,
-    today: date | None = None,
-) -> dict[str, bool | None]:
-    """Resolve audit-only activity state without inventing incomplete dates."""
-    current_day = today or date.today()
-    if bool(start_date) != bool(end_date):
-        return {"is_active": None, "date_review_required": True}
-    if start_date and end_date:
-        try:
-            start = date.fromisoformat(start_date)
-            end = date.fromisoformat(end_date)
-        except ValueError:
-            return {"is_active": None, "date_review_required": True}
-        if start > end:
-            return {"is_active": None, "date_review_required": True}
-        return {
-            "is_active": start <= current_day <= end,
-            "date_review_required": False,
-        }
-    return {"is_active": True, "date_review_required": False}
-
-
-def _website_path(url: Any) -> str:
-    raw = str(url or "").strip()
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    return "/" + parsed.path.strip("/").casefold() if parsed.path.strip("/") else ""
-
-
-def assign_businesses(
-    page_url: str,
-    evidence: str,
-    businesses: Sequence[dict[str, Any]],
-) -> tuple[list[int], str]:
-    """Strictly attribute a page when a host has multiple business records."""
-    members = [dict(row) for row in businesses]
-    if len(members) == 1:
-        return [int(members[0]["business_id"])], "single_host_business"
-    if not members:
-        return [], "unmatched_host"
-
-    page_path = _website_path(page_url)
-    path_matches = [
-        int(row["business_id"])
-        for row in members
-        if (path := _website_path(row.get("website"))) and (
-            page_path == path or page_path.startswith(f"{path}/")
-        )
-    ]
-    if path_matches:
-        return sorted(set(path_matches)), "location_path"
-
-    blob = _normalized_words(f"{page_url} {evidence}")
-    address_matches = [
-        int(row["business_id"])
-        for row in members
-        if _contains_phrase(blob, _normalized_words(row.get("address")))
-    ]
-    if address_matches:
-        return sorted(set(address_matches)), "address"
-
-    normalized_names = [_normalized_words(row.get("name")) for row in members]
-    name_matches = [
-        int(row["business_id"])
-        for row, name in zip(members, normalized_names)
-        if name and normalized_names.count(name) == 1 and _contains_phrase(blob, name)
-    ]
-    if name_matches:
-        return sorted(set(name_matches)), "business_name"
-
-    normalized_cities = [_normalized_words(row.get("city")) for row in members]
-    city_matches = [
-        int(row["business_id"])
-        for row, city in zip(members, normalized_cities)
-        if city and normalized_cities.count(city) == 1 and _contains_phrase(blob, city)
-    ]
-    if city_matches:
-        return sorted(set(city_matches)), "city"
-    return [], "shared_host_unresolved"
-
-
-def _site_root(website: str) -> str:
-    raw = str(website or "").strip()
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
-    return urlunparse((scheme, parsed.netloc, "/", "", "", ""))
-
-
-def _same_host_promotion_urls(website: str, urls: Iterable[Any]) -> list[str]:
-    host = _normalized_host(website)
-    output: list[str] = []
-    seen: set[str] = set()
-    for value in urls:
-        if isinstance(value, Mapping):
-            value = value.get("url")
-        elif not isinstance(value, str):
-            value = getattr(value, "url", "")
-        canonical = canonical_scrape_url(str(value or ""))
-        if (
-            not canonical
-            or _normalized_host(canonical) != host
-            or not is_promotion_page_url(canonical)
-            or canonical in seen
-        ):
-            continue
-        seen.add(canonical)
-        output.append(canonical)
-    return output
-
-
-class SelfHostedFirecrawl:
-    def __init__(self, api_url: str, api_key: str = "", timeout: float = 150) -> None:
-        self.api_url = api_url.rstrip("/")
-        self.timeout = timeout
-        self.api_key = api_key
-
-    def _session(self) -> requests.Session:
-        """Return an isolated session so worker threads never share mutable state."""
-        session = requests.Session()
-        session.trust_env = False
-        session.headers.update({"Content-Type": "application/json"})
-        if self.api_key:
-            session.headers["Authorization"] = f"Bearer {self.api_key}"
-        return session
-
-    def healthcheck(self) -> None:
-        response = self._session().get(
-            f"{self.api_url}/health", timeout=min(self.timeout, 10)
-        )
-        if response.status_code >= 500:
-            raise RuntimeError(f"Firecrawl health check returned HTTP {response.status_code}")
-
-    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        response = self._session().post(
-            f"{self.api_url}{path}", json=payload, timeout=self.timeout
-        )
-        response.raise_for_status()
-        body = response.json()
-        if not body.get("success", True):
-            raise RuntimeError(str(body.get("error") or body.get("details") or f"{path} failed"))
-        return body
-
-    def map(self, website: str, *, limit: int) -> list[Any]:
-        body = self._post("/v1/map", {"url": canonical_scrape_url(website), "limit": limit})
-        return list(body.get("links") or [])
-
-    def scrape(self, url: str) -> dict[str, Any]:
-        return self._post(
-            "/v1/scrape",
-            {
-                "url": canonical_scrape_url(url),
-                "formats": ["markdown", "links"],
-                "onlyMainContent": True,
-                "blockAds": True,
-            },
-        )
-
-
-class RawSpoolDb:
-    """Minimal raw-table sink used when Supabase access is supplied through MCP."""
-
-    def __init__(self) -> None:
-        self._records: dict[int, dict[str, Any]] = {}
-        self._next_id = 1
-
-    @property
-    def records(self) -> list[dict[str, Any]]:
-        return [copy.deepcopy(self._records[key]) for key in sorted(self._records)]
-
-    def fetch_rows(
-        self,
-        table: str,
-        _select: str,
-        *,
-        filters: Mapping[str, str] | None = None,
-        **_kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        if table != "firecrawl_scrape_raw":
-            raise RuntimeError(f"MCP spool cannot read table {table}")
-        fingerprint_filter = str((filters or {}).get("request_fingerprint") or "")
-        fingerprint = fingerprint_filter.removeprefix("eq.")
-        return [
-            {"id": row["id"]}
-            for row in self._records.values()
-            if row.get("request_fingerprint") == fingerprint
-        ][:1]
-
-    def insert_rows(self, table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if table != "firecrawl_scrape_raw":
-            raise RuntimeError(f"MCP spool cannot insert table {table}")
-        inserted: list[dict[str, Any]] = []
-        for payload in rows:
-            row_id = self._next_id
-            self._next_id += 1
-            stored = {"id": row_id, **copy.deepcopy(payload)}
-            self._records[row_id] = stored
-            inserted.append(copy.deepcopy(stored))
-        return inserted
-
-    def update_row(
-        self,
-        table: str,
-        filters: Mapping[str, str],
-        payload: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        if table != "firecrawl_scrape_raw":
-            raise RuntimeError(f"MCP spool cannot update table {table}")
-        raw_id = int(str(filters.get("id") or "").removeprefix("eq."))
-        current = self._records.get(raw_id)
-        if current is None:
-            return []
-        updated = {**current, **copy.deepcopy(payload)}
-        self._records[raw_id] = updated
-        return [copy.deepcopy(updated)]
 
 
 def _empty_result(business: Mapping[str, Any], status: str, **extra: Any) -> dict[str, Any]:
@@ -310,29 +71,6 @@ def _empty_result(business: Mapping[str, Any], status: str, **extra: Any) -> dic
         "errors": [],
         **extra,
     }
-
-
-def _persist_raw(
-    db: Any,
-    lock: threading.Lock,
-    source_url: str,
-    response: dict[str, Any] | None,
-    *,
-    success: bool,
-    error_message: str | None,
-) -> int:
-    with lock:
-        rows = save_scrape_response(
-            db,
-            scrape_request_fingerprint(source_url),
-            source_url,
-            response,
-            success=success,
-            error_message=error_message,
-        )
-    if len(rows) != 1 or rows[0].get("id") is None:
-        raise RuntimeError("firecrawl_scrape_raw write did not return one raw id")
-    return int(rows[0]["id"])
 
 
 def _audit_host(
@@ -560,137 +298,6 @@ def audit_businesses(
         for future in as_completed(jobs):
             results.extend(future.result())
     return sorted(results, key=lambda row: int(row["business_id"]))
-
-
-def _fetch_all(db: Any, table: str, select: str, *, order: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        page = db.fetch_rows(
-            table,
-            select,
-            limit=PAGE_SIZE,
-            offset=offset,
-            order=order,
-        )
-        rows.extend(dict(row) for row in page)
-        if len(page) < PAGE_SIZE:
-            return rows
-        offset += PAGE_SIZE
-
-
-def select_missing_businesses(
-    db: Any,
-    *,
-    business_ids: Sequence[int] | None = None,
-    limit: int | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    all_businesses = _fetch_all(
-        db,
-        "master_business_info",
-        "business_id,name,website,address,city",
-        order="business_id.asc",
-    )
-    promotions = _fetch_all(
-        db,
-        "clinic_promotions",
-        "business_id",
-        order="business_id.asc",
-    )
-    promoted_ids = {int(row["business_id"]) for row in promotions if row.get("business_id") is not None}
-    wanted = {int(value) for value in business_ids or []}
-    targets = [
-        row
-        for row in all_businesses
-        if int(row["business_id"]) not in promoted_ids
-        and (not wanted or int(row["business_id"]) in wanted)
-    ]
-    if limit is not None:
-        targets = targets[:limit]
-    return targets, all_businesses
-
-
-def build_audit(results: Sequence[dict[str, Any]], *, write_raw: bool) -> dict[str, Any]:
-    status_counts: dict[str, int] = {}
-    for row in results:
-        status = str(row.get("status") or "unknown")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    return {
-        "run_date": date.today().isoformat(),
-        "write_raw": write_raw,
-        "businesses": len(results),
-        "status_counts": status_counts,
-        "balanced": sum(status_counts.values()) == len(results),
-        "results": list(results),
-    }
-
-
-def write_reports(audit: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = str(audit["run_date"]).replace("-", "_")
-    json_path = output_dir / f"missing_business_promotion_audit_{stamp}.json"
-    csv_path = output_dir / f"missing_business_promotion_audit_{stamp}.csv"
-    json_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
-    columns = (
-        "business_id",
-        "name",
-        "website",
-        "host",
-        "status",
-        "candidate_urls",
-        "raw_ids",
-        "promotions",
-        "errors",
-    )
-    with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        for result in audit["results"]:
-            writer.writerow(
-                {
-                    key: (
-                        json.dumps(result.get(key), ensure_ascii=False)
-                        if isinstance(result.get(key), (list, dict))
-                        else result.get(key)
-                    )
-                    for key in columns
-                }
-            )
-    return json_path, csv_path
-
-
-def write_raw_spool(db: RawSpoolDb, output_dir: Path, run_date: str) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = str(run_date).replace("-", "_")
-    path = output_dir / f"missing_business_promotion_raw_{stamp}.json"
-    path.write_text(
-        json.dumps({"records": db.records}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return path
-
-
-def reconcile_audit_raw_ids(
-    audit: dict[str, Any], mapping: Mapping[int, int]
-) -> dict[str, Any]:
-    """Replace MCP spool IDs with the actual firecrawl_scrape_raw IDs."""
-    resolved = copy.deepcopy(audit)
-
-    def replace(promotion: dict[str, Any]) -> None:
-        raw_id = promotion.get("raw_id")
-        if raw_id is not None and int(raw_id) in mapping:
-            promotion["raw_id"] = int(mapping[int(raw_id)])
-
-    for result in resolved.get("results") or []:
-        result["raw_ids"] = [
-            int(mapping.get(int(raw_id), int(raw_id)))
-            for raw_id in result.get("raw_ids") or []
-        ]
-        for promotion in result.get("promotions") or []:
-            replace(promotion)
-        for promotion in result.get("unresolved_promotions") or []:
-            replace(promotion)
-    return resolved
 
 
 def main() -> None:

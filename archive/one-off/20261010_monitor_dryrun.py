@@ -13,7 +13,7 @@ sys.path.insert(0,str(ROOT))
 from scripts.run_monitor_price_sync import bind_source
 from utils.monitor_price_plan import _validated_offer, _resolve_items, _protected, _blanket
 from utils.monitor_price_store import manual_protections
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 from utils.offer_evidence_validator import validate_offer_evidence
 
 OUT=ROOT/'output/monitor_price_sync/dryrun_20261010'

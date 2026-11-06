@@ -5,7 +5,7 @@ import os
 
 from utils.offer_extraction_llm import GeminiNativeClient
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 def build_gemini_client(environ: dict[str, str] | None = None) -> GeminiNativeClient:

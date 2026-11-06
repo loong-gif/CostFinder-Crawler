@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from utils.monitor_price_store import read_json
+from utils.monitor_rendered_browser import BREAKPOINT_NAMES
 from utils.monitor_image_evidence import compare_reads, critical_fields, source_tokens
 
 
@@ -44,7 +45,7 @@ def image_write_block(plan, journal_dir):
                             or op["table"] == "promo_offer_master" and op["values"].get("is_active") is False
                             for op in plan.get("operations", []))
     coverage = browser.get("breakpoint_coverage")
-    if evidence_path and requires_complete and (not coverage or set(coverage) != {"desktop", "tablet", "mobile"}
+    if evidence_path and requires_complete and (not coverage or set(coverage) != BREAKPOINT_NAMES
             or not all(row.get("complete") is True for row in coverage.values())):
         return "breakpoint_coverage_incomplete"
     for offer in evidence.get("offers", []):

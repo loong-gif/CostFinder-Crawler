@@ -7,3 +7,7 @@ pandas>=2.2,<4
 markdown-it-py>=3,<5
 pglast>=7,<9
 python-dateutil>=2.9,<3
+snowballstemmer>=2.2,<4
+beautifulsoup4>=4.12,<5
+playwright>=1.49,<2
+markdownify>=1.2,<2

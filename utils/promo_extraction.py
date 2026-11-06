@@ -80,12 +80,33 @@ def comparison_key(text: Any) -> str:
     return " ".join(" ".join(lines).split()).replace("~~", "").casefold()
 
 
+# 行末的脚注符号只是指向条款的标记，条款原文由 linked_terms 追加到卡片；LLM 时保留时去掉，统一删除
+FOOTNOTE_MARK_RE = re.compile(r"\s*[‡†¶§◊✢✴✳︎⁎ⱽǂ^#*]+$")
+# 整行只是按钮或引导语的行不是优惠内容
+CALL_TO_ACTION_RE = re.compile(
+    r"^(?:book(?: here| now| online| an appointment| a consultation)?|claim(?: this)? offer|learn more|read more|"
+    r"shop now|buy now|call(?: now| today)?|schedule(?: now| today)?|get started|see details|view details|"
+    r"(?:(?:subject to|see) )?(?:the )?(?:offer )?terms(?: (?:and|&) conditions)?)[.!:]?$", re.IGNORECASE)
+# 行末指向条款链接的引导语（「Select packages. Subject to Offer Terms」）；条款原文已由 linked_terms 追加，
+# LLM 有时把链接文字拆成单独一行、有时合在一行，统一去掉
+TRAILING_TERMS_RE = re.compile(r"\s*\bsubject to(?: the)?(?: offer)?(?: terms(?: (?:and|&) conditions)?)?\.?$",
+                               re.IGNORECASE)
+
+
+def content_line(line: Any) -> str:
+    """内容行的规范形式：纯文本，去掉行末脚注符号与条款引导语；按钮与引导语整行返回空串。"""
+    text = FOOTNOTE_MARK_RE.sub("", plain_line(line)).strip()
+    if CALL_TO_ACTION_RE.match(text):
+        return ""
+    return FOOTNOTE_MARK_RE.sub("", TRAILING_TERMS_RE.sub("", text)).strip()
+
+
 def merge_content_blocks(blocks: Iterable[Iterable[Any]]) -> list[str]:
     """每个完整优惠保存为一个条目，仅删除内容相同的完整优惠。"""
     merged: list[str] = []
     seen: set[str] = set()
     for block in blocks:
-        lines = _unique_text(plain_line(line) for line in block)
+        lines = _unique_text(content_line(line) for line in block)
         content = "\n".join(lines)
         key = content.casefold()
         if not lines or key in seen:
@@ -349,8 +370,11 @@ def llm_extract_promotions(
     evidence: str,
     schema: dict[str, Any],
     max_attempts: int = 3,
+    extra_instruction: str = "",
 ) -> dict[str, Any]:
-    """Perform bounded extraction, splitting evidence to fit the local context."""
+    """Perform bounded extraction, splitting evidence to fit the local context.
+
+    extra_instruction 追加在用户消息中（例如促销中心页要求列出全站横幅优惠）。"""
     promotions: list[dict[str, Any]] = []
     explanations: list[str] = []
     llm_evidence = strip_embedded_images_for_llm(evidence)
@@ -361,7 +385,8 @@ def llm_extract_promotions(
                 "role": "user",
                 "content": (
                     "Extract all promotions from the delimited untrusted evidence.\n"
-                    f"Source URL: {source_url}\n"
+                    + (f"{extra_instruction}\n" if extra_instruction else "")
+                    + f"Source URL: {source_url}\n"
                     "<UNTRUSTED_WEBPAGE_EVIDENCE>\n"
                     f"{evidence_chunk}\n"
                     "</UNTRUSTED_WEBPAGE_EVIDENCE>"

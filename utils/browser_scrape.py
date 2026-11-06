@@ -1,62 +1,21 @@
 """经浏览器渲染页面并转为 markdown，返回与 Firecrawl scrape 相同结构的结果，供 crawl 写入 raw 存储。
 
-lightpanda：远程 Lightpanda（CDP）；ego：本机 ego-browser（真实浏览器，带用户会话，可通过站点的反爬拦截）。
+lightpanda：远程 Lightpanda（CDP）；scrapling：HTTP 抓取与隐身浏览器；ego-lite 渲染见 utils.ego_browser。
 """
 from __future__ import annotations
 
-import json
-import subprocess
 from typing import Any
 
-from bs4 import BeautifulSoup
-from markdown_it import MarkdownIt
-from markdownify import markdownify
+from curl_cffi.requests.exceptions import RequestException
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
+from scrapling.fetchers import Fetcher, StealthyFetcher
 
-from utils.page_title import EGO_TASK_SPACE, LIGHTPANDA_CDP_URL, PAGE_TIMEOUT_MS, is_generic_title
+from utils.ego_browser import BrowserScrapeFailed, ego_scrape, firecrawl_shaped_result as _result, html_to_markdown
+from utils.page_title import LIGHTPANDA_CDP_URL, PAGE_TIMEOUT_MS
 
-NON_CONTENT_TAGS = ["script", "style", "noscript", "svg", "iframe", "template"]
-EGO_PROCESS_TIMEOUT_S = 240
-EGO_SCRIPT = """
-const task = await taskSpace({space});
-const page = task.page("p1");
-await page.goto({url}, {{ timeout: {timeout} }});
-await page.waitForTimeout(6000);
-const info = await page.evaluate(() => ({{
-  url: location.href,
-  title: document.title,
-  html: document.documentElement.outerHTML,
-}}));
-console.log("EGO_SCRAPE " + JSON.stringify(info));
-"""
-
-
-class BrowserScrapeFailed(Exception):
-    pass
-
-
-def html_to_markdown(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(NON_CONTENT_TAGS):
-        tag.decompose()
-    body = soup.body or soup
-    return markdownify(str(body), heading_style="ATX").strip()
-
-
-def is_block_page(markdown: str) -> bool:
-    """前三个标题中出现 HTTP 错误码或拦截页标题（站点以 200 返回的拦截页）。"""
-    tokens = MarkdownIt().parse(markdown)
-    headings = [tokens[i + 1].content for i, t in enumerate(tokens) if t.type == "heading_open"][:3]
-    return any(is_generic_title(h) for h in headings)
-
-
-def _result(url: str, final_url: str, title: str, html: str, status: int | None, engine: str) -> dict[str, Any]:
-    markdown = html_to_markdown(html)
-    if is_block_page(markdown):
-        raise BrowserScrapeFailed("blocked_page")
-    return {"markdown": markdown, "html": html,
-            "metadata": {"title": title, "sourceURL": url, "url": final_url, "statusCode": status, "engine": engine}}
+__all__ = ["BrowserScrapeFailed", "ego_scrape", "html_to_markdown", "lightpanda_scrape", "scrapling_browser_scrape",
+           "scrapling_scrape"]
 
 
 def lightpanda_scrape(url: str) -> dict[str, Any]:
@@ -80,18 +39,23 @@ def lightpanda_scrape(url: str) -> dict[str, Any]:
     return _result(url, final_url, title, html, status, "lightpanda")
 
 
-def ego_scrape(url: str) -> dict[str, Any]:
-    script = EGO_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS)
+def scrapling_scrape(url: str) -> dict[str, Any]:
+    """Scrapling 的 HTTP 抓取（Chrome TLS 指纹）；HTTP 状态码不是 200 是该页面的抓取结果。"""
+    # 本机经 127.0.0.1 代理出网，默认的 safe 重定向会把代理地址当成内网地址拒绝，所以显式允许重定向
     try:
-        done = subprocess.run(["ego-browser", "nodejs", "-e", script], capture_output=True, text=True, check=True,
-                              timeout=EGO_PROCESS_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        # 页面卡住（例如停在验证页）是该页面的抓取结果
-        raise BrowserScrapeFailed("ego_timeout") from None
-    except subprocess.CalledProcessError as exc:
-        # 脚本在该页面上出错（导航失败、页面崩溃）是该页面的抓取结果，与 lightpanda 的导航失败同样处理
-        raise BrowserScrapeFailed(f"ego_script_failed: {(exc.stderr or '').strip()[-300:]}") from None
-    # ego-browser 的 console 输出写到 stderr
-    line = next(l for l in (done.stdout + done.stderr).splitlines() if l.startswith("EGO_SCRAPE "))
-    info = json.loads(line[len("EGO_SCRAPE "):])
-    return _result(url, info["url"], info["title"], info["html"], None, "ego")
+        page = Fetcher.get(url, impersonate="chrome", timeout=30, retries=1, follow_redirects=True)
+    except RequestException as exc:
+        # 连接被站点断开、超时、证书错误是该页面的抓取结果
+        raise BrowserScrapeFailed(f"scrapling_request_failed: {str(exc)[:200]}") from None
+    if page.status != 200:
+        raise BrowserScrapeFailed(f"scrapling_status_{page.status}")
+    return _result(url, str(page.url), page.css("title::text").get() or "", page.html_content, page.status, "scrapling")
+
+
+def scrapling_browser_scrape(url: str) -> dict[str, Any]:
+    """Scrapling 的隐身浏览器渲染，等待网络空闲后取渲染后的 HTML。"""
+    page = StealthyFetcher.fetch(url, headless=True, network_idle=True, block_ads=True, timeout=60000)
+    if page.status != 200:
+        raise BrowserScrapeFailed(f"scrapling_status_{page.status}")
+    return _result(url, str(page.url), page.css("title::text").get() or "", page.html_content, page.status,
+                   "scrapling-browser")

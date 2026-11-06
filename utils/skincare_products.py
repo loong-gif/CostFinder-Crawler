@@ -6,7 +6,6 @@ from functools import lru_cache
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from utils.membership_plan_lookup import normalize_plan_name
 from utils.retail_paths import is_retail_catalog_url
 
 _PRICE_RE = re.compile(r"\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)")
@@ -144,24 +143,3 @@ def build_skincare_product_insert_row(
     elif regular is not None and "regular_price" in row:
         row["discount_price"] = regular
     return row
-
-
-def find_existing_product_id(client: Any, source_url: str, product_name: str) -> Optional[int]:
-    norm_url = str(source_url or "").strip().rstrip("/")
-    name_norm = normalize_plan_name(product_name)
-    if not norm_url or not name_norm:
-        return None
-    for url in (norm_url, f"{norm_url}/"):
-        try:
-            rows = client.fetch_rows(
-                "promo_products_master",
-                "product_id,product_name,source_url",
-                filters={"source_url": f"eq.{url}"},
-                limit=200,
-            )
-        except Exception:
-            continue
-        for row in rows:
-            if normalize_plan_name(row.get("product_name")) == name_norm:
-                return int(row["product_id"])
-    return None

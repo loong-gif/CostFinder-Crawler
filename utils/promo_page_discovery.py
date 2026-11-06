@@ -149,6 +149,8 @@ def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str 
     lines = [re.sub(r"\s+", " ", ln).strip() for ln in str(markdown or "").splitlines()]
     lines = [ln for ln in lines if ln]
     evidence: List[str] = []
+    # 同一句话在导航、横幅与正文中重复出现时只差空格、脚注符号或 markdown 转义，按字母数字与 %、$ 去重
+    seen_keys: set = set()
     discount = monthly = unit = False
     for line in lines:
         amounts = [a for a in _amounts(line) if MIN_PLAUSIBLE_AMOUNT <= a <= MAX_PLAUSIBLE_AMOUNT]
@@ -167,7 +169,9 @@ def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str 
         discount |= has_percent or has_off
         monthly |= has_monthly
         unit |= has_unit
-        if line not in evidence:
+        key = re.sub(r"[^0-9a-z%$]+", "", line.casefold())
+        if key not in seen_keys:
+            seen_keys.add(key)
             evidence.append(line[:240])
     if not evidence:
         reasons.append("no_discount_or_price_evidence")

@@ -27,16 +27,16 @@ from utils.crawl_scheduler_logic import (  # noqa: E402
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
-MONITOR_CONFIG = PROJECT_ROOT / "config" / "firecrawl_monitor_migration.json"
 DEFAULT_CAP = 150
 
 
 def monitor_urls() -> set[str]:
-    config = json.loads(MONITOR_CONFIG.read_text(encoding="utf-8"))
+    """The monitor queue: source URLs of clinic_promotions and clinic_memberships."""
+    client = load_supabase_client(PROJECT_ROOT, role="service")
     found: set[str] = set()
-    for monitor in config.get("monitors", {}).values():
-        for target in monitor.get("targets", []):
-            found.update(canonical_scrape_url(url) for url in target.get("urls", []))
+    for table, pk in (("clinic_promotions", "promotion_id"), ("clinic_memberships", "plan_id")):
+        for row in fetch_all_rows(client, table, f"{pk},source_url", order=f"{pk}.asc"):
+            found.add(canonical_scrape_url(str(row.get("source_url") or "")))
     found.discard("")
     return found
 

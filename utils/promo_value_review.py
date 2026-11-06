@@ -124,8 +124,11 @@ def review_page(page: Mapping[str, Any], business: BusinessContext, today: Optio
 
 def decide(pages: List[Dict[str, Any]], businesses: Mapping[int, BusinessContext],
            today: Optional[dt.date] = None) -> List[Dict[str, Any]]:
-    """Review every page, drop duplicates by URL and cap how many pages one business adds."""
-    out: Dict[str, Dict[str, Any]] = {}
+    """Review every page, drop duplicates by (URL, business) and cap how many pages one business adds.
+
+    连锁品牌的多家分店共用同一个页面时，每家分店各保留一条决策。
+    """
+    out: Dict[tuple, Dict[str, Any]] = {}
     for page in pages:
         biz = businesses.get(int(page["business_id"]))
         if biz is None:
@@ -137,9 +140,10 @@ def decide(pages: List[Dict[str, Any]], businesses: Mapping[int, BusinessContext
             "sources": page.get("sources") or [], "title": page.get("title") or "",
             "end_dates": page.get("end_dates") or [], "evidence": (page.get("evidence") or [])[:3], **verdict,
         }
-        previous = out.get(page["url"])
+        key = (page["url"], biz.business_id)
+        previous = out.get(key)
         if previous is None or record["score"] > previous["score"]:
-            out[page["url"]] = record
+            out[key] = record
     records = sorted(out.values(), key=lambda r: (-r["score"], r["url"]))
     per_business: Dict[int, int] = {}
     seen_evidence: Dict[int, set] = {}

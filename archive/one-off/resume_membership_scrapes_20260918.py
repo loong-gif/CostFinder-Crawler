@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.repair_clinic_memberships_full_table import FirecrawlHTTP, scrape_one  # noqa: E402
+from utils.membership_repair_scrape import FirecrawlHTTP, scrape_one  # noqa: E402
 
 
 def read_json(path: Path):

@@ -170,15 +170,14 @@ def sql_for(frozen):
 def test_apply_sql_creates_service_links_item_and_marks_promotion():
     text = sql_for(plan([item(1)]))
     assert text.count("do $pipeline$") == 1 and text.rstrip().endswith("$pipeline$;")
-    assert "v_service_0 bigint" in text
-    assert "returning service_id into v_service_0" in text
-    assert "cardinality(v_ids) > 1" in text and "stale_plan: business 7 now has several Botox rows" in text
-    assert "values (7, 'Botox'::clinic_service_name_enum, NULL, NULL, 'https://clinic.test/specials', now())" in text
+    assert "cardinality(v_ids) > 1" in text and "stale_plan: business % now has several % rows" in text
+    assert "returning service_id into v_service" in text and "v_map := v_map || jsonb_build_object(r.key, v_service)" in text
+    assert '"Botox"' in text and "https://clinic.test/specials" in text
     link = next(line for line in text.splitlines() if "update public.promo_offer_items" in line)
-    assert "set service_id = v_service_0" in link and "i.service_id is null" in link
+    assert "set service_id = v_ref" in link and "i.service_id is null" in link
     assert "get diagnostics v_count = row_count;" in text
-    assert "if v_count <> 1 then raise exception 'stale_plan: item 1 cannot be linked" in text
-    assert text.index("returning service_id into v_service_0") < text.index("update public.promo_offer_items")
+    assert "if v_count <> 1 then raise exception 'stale_plan: item % cannot be linked" in text
+    assert text.index("returning service_id into v_service") < text.index("update public.promo_offer_items")
     assert "update public.clinic_promotions set is_offer_extracted = true" in text
     assert "where promotion_id = 10;" in text
     assert "m.promotion_id = 10 and i.service_id is null" in text
@@ -187,15 +186,17 @@ def test_apply_sql_creates_service_links_item_and_marks_promotion():
 
 def test_apply_sql_links_existing_service_without_creating():
     text = sql_for(plan([item(1)], services=[service(100, "Botox")]))
-    assert "insert into public.clinic_services" not in text and "v_service_0" not in text
-    assert "set service_id = 100" in text and "s.service_id = 100" in text
+    assert "insert into public.clinic_services" not in text and "jsonb_build_object" not in text
+    assert '[[1, "100"]]' in text and "set service_id = v_ref" in text
 
 
-def test_apply_sql_reuses_one_variable_per_create_key():
+def test_apply_sql_reuses_one_service_per_create_key():
     offers = [offer(1, "Botox special"), offer(2, "More Botox")]
-    text = sql_for(plan([item(1, 1, "Botox"), item(2, 2, "Botox")], offers=offers))
-    assert text.count("insert into public.clinic_services") == 1
-    assert text.count("set service_id = v_service_0") == 2
+    frozen = plan([item(1, 1, "Botox"), item(2, 2, "Botox")], offers=offers)
+    key = frozen["services_to_create"][0]["key"]
+    text = sql_for(frozen)
+    assert len(frozen["services_to_create"]) == 1 and text.count("insert into public.clinic_services") == 1
+    assert text.count(f'"{key}"') == 3  # 一次出现在 service 规格，两次出现在 item 关联
 
 
 def test_apply_sql_runs_blanket_check_on_batch_items_only():

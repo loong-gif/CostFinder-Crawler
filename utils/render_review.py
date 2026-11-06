@@ -128,16 +128,6 @@ def corpus_text(texts: Iterable[str]) -> str:
     return re.sub(r"(\d)\.00(?!\d)", r"\1", joined)
 
 
-def anchor_in(corpus: str, anchor: str) -> bool:
-    start = corpus.find(anchor)
-    while start != -1:
-        nxt = corpus[start + len(anchor): start + len(anchor) + 1]
-        if not nxt or not nxt.isdigit():
-            return True
-        start = corpus.find(anchor, start + 1)
-    return False
-
-
 def is_substantive(claim: Mapping[str, Any]) -> bool:
     if claim.get("anchors"):
         return True
@@ -189,6 +179,18 @@ def claim_matches(claim: Mapping[str, Any], texts: Iterable[str]) -> bool:
         return bool(keys - anchors) and _name_matches(keys - anchors, anchors, page)
     clauses = [c for c in CLAUSE_SPLIT.split(str(claim.get("line", ""))) if _key_words(c)[1]]
     return bool(clauses) and all(_clause_matches(clause, page) for clause in clauses)
+
+
+def claim_matches_sources(claim: Mapping[str, Any], sources: Iterable[Iterable[str]]) -> bool:
+    """声明的内容来自多个页面（促销页与卡片链接到的条款页）时，每一行的每个分句在任一来源页面上能追溯即可；
+    单个分句仍须在同一页面的相邻窗口内追溯，不跨页面拼接。"""
+    pages = [[t for text in texts for t in _tokens(text)] for texts in sources]
+    if claim.get("is_name"):
+        anchors, keys = _key_words(str(claim["line"]))
+        return bool(keys - anchors) and any(_name_matches(keys - anchors, anchors, page) for page in pages)
+    clauses = [c for line in str(claim.get("line", "")).splitlines() for c in CLAUSE_SPLIT.split(line)
+               if _key_words(c)[1]]
+    return bool(clauses) and all(any(_clause_matches(clause, page) for page in pages) for clause in clauses)
 
 
 def _name_matches(words: set, anchors: set, page: List[str]) -> bool:
@@ -250,12 +252,12 @@ def ocr_image(url: str, image_dir: Path) -> str:
 
 
 def build_deep_items(decisions: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    """Pages whose render verdict is not ``verified``: collapsed panels, image promotions, blocked loads."""
+    """needs_review 页面中尚未核验通过的：未做过渲染核验的新页面，以及折叠面板、图片促销、加载被拦截的页面。"""
     items: List[Dict[str, Any]] = []
     seen = set()
     for record in decisions:
         review = record.get("render_review") or {}
-        if record.get("status") != "needs_review" or review.get("verdict") in (None, "verified") or record["url"] in seen:
+        if record.get("status") != "needs_review" or review.get("verdict") == "verified" or record["url"] in seen:
             continue
         seen.add(record["url"])
         claims = [{"id": i, "line": line[:240], "anchors": claim_anchors(line)}

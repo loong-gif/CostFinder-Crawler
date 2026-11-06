@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from utils.batch_gate_checks import CHECKS, linked_query, run_batch_gate
-from utils.extraction_persist import persist_promo_offer
+from utils.extraction_persist_offer import persist_promo_offer
 from utils.offer_evidence_validator import validate_offer_evidence
 from utils.offer_purchase_semantics import normalize_purchase_offers
 from utils.promo_offer_items_db import fetch_items_for_offer, upsert_offer_items
@@ -242,7 +242,8 @@ def apply_plan(client, plan: dict) -> dict:
             if len(reactivated) != 1:
                 results.append({**record, "apply_status": "conflict", "apply_reason": "reactivate_failed"})
                 continue
-            from utils.extraction_persist import build_master_from_offer, attach_service_ids_to_items
+            from utils.clinic_service_extraction import attach_service_ids_to_items
+            from utils.extraction_persist_pricing import build_master_from_offer
             from utils.promo_offer_items_db import is_blanket_offer_text
 
             if master.get("promotion_id") is None and master.get("membership_plan_id") is None:

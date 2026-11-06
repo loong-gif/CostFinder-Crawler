@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from utils.monitor_price_store import atomic_json, now, read_json
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 MAX_CONSECUTIVE_FAILURES = 3
 

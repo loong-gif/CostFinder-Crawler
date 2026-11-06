@@ -1,5 +1,5 @@
 """Tests for centralized extraction persistence routing."""
-from utils.extraction_persist import build_master_from_offer, route_offer
+from utils.extraction_persist_pricing import build_master_from_offer, route_offer
 
 
 def test_route_offer_list_price_to_service() -> None:

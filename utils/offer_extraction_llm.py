@@ -7,11 +7,13 @@ import base64
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
@@ -327,12 +329,24 @@ def _messages_to_gemini(messages: List[Dict[str, str]]) -> tuple[Optional[Dict[s
     return system_instruction, contents
 
 
+def _retrying_session() -> requests.Session:
+    """连接中断、SSL 断开、429 与 5xx 属于瞬时故障，由 urllib3 按指数退避重试；重试用尽后照常抛出。"""
+    session = requests.Session()
+    retry = Retry(total=5, connect=5, read=3, status=5, backoff_factor=2, allowed_methods=None,
+                  status_forcelist=(429, 500, 502, 503, 504), respect_retry_after_header=True,
+                  raise_on_status=False)
+    for prefix in ("https://", "http://"):
+        session.mount(prefix, HTTPAdapter(max_retries=retry))
+    return session
+
+
 @dataclass
 class GeminiNativeClient:
     api_key: str
     model: str
     timeout: int = 90
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    session: requests.Session = field(default_factory=_retrying_session, repr=False)
 
     def create_json_response(
         self,
@@ -353,7 +367,7 @@ class GeminiNativeClient:
 
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
         url = f"{self.base_url}/{model_path}:generateContent"
-        response = requests.post(
+        response = self.session.post(
             url,
             headers={
                 "Content-Type": "application/json",
@@ -402,7 +416,7 @@ class GeminiNativeClient:
         if system_instruction.strip():
             body["systemInstruction"] = {"parts": [{"text": system_instruction.strip()}]}
         model_path = self.model if self.model.startswith("models/") else f"models/{self.model}"
-        response = requests.post(f"{self.base_url}/{model_path}:generateContent",
+        response = self.session.post(f"{self.base_url}/{model_path}:generateContent",
                     headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
                     json=body, timeout=min(self.timeout, timeout) if timeout is not None else self.timeout)
         response.raise_for_status()

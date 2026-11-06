@@ -1,4 +1,4 @@
-from scripts.repair_clinic_memberships_full_table import parse_rate_limit_delay
+from utils.membership_repair_scrape import parse_rate_limit_delay
 
 
 def test_parse_rate_limit_delay_prefers_retry_after_header():

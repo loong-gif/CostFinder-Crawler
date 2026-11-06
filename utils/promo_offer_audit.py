@@ -15,7 +15,6 @@ from utils.schema_contract import (
     offer_is_active,
     offer_item_name,
     offer_source_url,
-    offer_unit_type,
 )
 
 # Live columns (aligned to current Supabase DDL)
@@ -34,23 +33,6 @@ EXACT_DUPLICATE_FIELDS: Tuple[str, ...] = (
     "is_membership_required",
     "offer_raw_text",
     "offer_fingerprint",
-)
-
-BY_UNIT_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
-    (
-        "unit",
-        re.compile(
-            r"(?:\$?\s*\d+(?:\.\d+)?\s*(?:/|per)\s*unit\b|\bper unit\b|\b\d+\s+units?\b)",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "syringe",
-        re.compile(
-            r"(?:\$?\s*\d+(?:\.\d+)?\s*(?:/|per)\s*(?:syringe|half syringe)\b|\bhalf syringe\b|\bsyringe\b)",
-            re.IGNORECASE,
-        ),
-    ),
 )
 
 VALID_STATUSES = frozenset({"active", "ended"})  # legacy audit display only
@@ -130,31 +112,12 @@ def parse_float(value: Any) -> Optional[float]:
         return None
 
 
-def parse_bool(value: Any) -> Optional[bool]:
-    raw = normalize_text(value)
-    if raw in {"true", "t", "1", "yes"}:
-        return True
-    if raw in {"false", "f", "0", "no"}:
-        return False
-    return None
-
-
 def is_valid_url(value: Any) -> bool:
     try:
         parsed = urlparse(str(value or ""))
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
     except Exception:
         return False
-
-
-def detect_likely_basis(row: Mapping[str, Any]) -> List[str]:
-    row_dict = dict(row)
-    text = " ".join(
-        str(row_dict.get(field) or "")
-        for field in ("offer_raw_text",)
-    )
-    text = f"{offer_item_name(row_dict)} {offer_unit_type(row_dict)} {text}"
-    return [label for label, pattern in BY_UNIT_PATTERNS if pattern.search(text)]
 
 
 def build_exact_duplicate_groups(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+
 import pytest
 
-from utils.browser_scrape import BrowserScrapeFailed, ego_scrape, html_to_markdown, is_block_page
+from utils.browser_scrape import scrapling_scrape
+from utils.ego_browser import BrowserScrapeFailed, ego_command, ego_scrape, html_to_markdown
+from utils.page_title import is_block_page
 
 
 def test_ego_script_error_on_a_page_is_that_page_failure(tmp_path, monkeypatch):
@@ -15,6 +20,62 @@ def test_ego_script_error_on_a_page_is_that_page_failure(tmp_path, monkeypatch):
         ego_scrape("https://glow.example/specials")
 
 
+def test_ego_command_uses_the_windows_executable_under_wsl(tmp_path, monkeypatch):
+    # WSL 中 PATH 上只有 Windows 端的 ego-browser.exe（首次设置写入的用户 PATH）
+    exe = tmp_path / "ego-browser.exe"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert ego_command() == str(exe)
+
+
+def test_missing_ego_browser_stops_the_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(RuntimeError, match="ego_browser_unavailable"):
+        ego_scrape("https://glow.example/specials")
+
+
+@pytest.fixture
+def local_site():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/specials":
+                body = b"<html><head><title>Specials</title></head><body><h2>Botox $10/unit</h2></body></html>"
+                self.send_response(200)
+            else:
+                body = b"gone"
+                self.send_response(404)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def test_scrapling_scrape_returns_firecrawl_shaped_result(local_site, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    result = scrapling_scrape(f"{local_site}/specials")
+    assert result["markdown"] == "## Botox $10/unit"
+    assert result["metadata"]["title"] == "Specials" and result["metadata"]["engine"] == "scrapling"
+
+
+def test_scrapling_non_200_is_that_page_failure(local_site, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    with pytest.raises(BrowserScrapeFailed, match="scrapling_status_404"):
+        scrapling_scrape(f"{local_site}/missing")
+
+
+def test_scrapling_connection_failure_is_that_page_failure():
+    with pytest.raises(BrowserScrapeFailed, match="scrapling_request_failed"):
+        scrapling_scrape("https://127.0.0.1:1/specials")
+
+
 def test_block_page_served_with_200_is_detected():
     assert is_block_page("# 402\n\n### Access Denied !\n\nYou are not authorized person to access this site.")
     assert is_block_page("## Just a moment...\n\nChecking your browser")
@@ -22,6 +83,11 @@ def test_block_page_served_with_200_is_detected():
 
 def test_promotion_page_is_not_block_page():
     assert not is_block_page("# Monthly Specials\n\n## Botox $10/unit\n\nValid through November.")
+
+
+def test_empty_heading_in_page_chrome_does_not_make_a_promotion_page_a_block_page():
+    assert not is_block_page("## Just added to your cart\n\n##\n\n## Specials\n\nBotox $10/unit")
+    assert is_block_page("##\n\n## Just a moment...\n\nChecking your browser")
 
 
 def test_html_to_markdown_drops_scripts_and_keeps_text():

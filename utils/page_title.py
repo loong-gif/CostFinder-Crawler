@@ -18,7 +18,8 @@ from playwright.sync_api import sync_playwright
 # 不能代表页面的标题：首页、空白页、错误页与拦截页；"Specials | 商家名" 是页面真实标题，不在此列
 GENERIC_TITLE_RE = re.compile(
     r"^(home|home page|homepage|index|untitled|page not found|[45]\d\d|not found|access denied !?|forbidden|"
-    r"just a moment\.*|attention required!?( \| cloudflare)?)$",
+    r"just a moment\.*|attention required!?( \| cloudflare)?|sorry, you have been blocked|you have been blocked|"
+    r"verify you are human|checking your browser.*)$",
     re.IGNORECASE,
 )
 _SEPARATOR_RE = re.compile(r"\s*[|\-–—:•·]\s*")
@@ -46,6 +47,14 @@ def choose_title(candidates: list[str], business_name: str = "") -> str:
         if text and not is_generic_title(text, business_name):
             return text
     raise TitleUnavailable("no_usable_title")
+
+
+def is_block_page(markdown: str) -> bool:
+    """前三个标题中出现 HTTP 错误码或拦截页标题（站点以 200 返回的拦截页）。"""
+    tokens = MarkdownIt().parse(markdown)
+    headings = [tokens[i + 1].content for i, t in enumerate(tokens) if t.type == "heading_open"]
+    # 没有文字的空标题是页面的装饰结构，不算拦截页标题
+    return any(is_generic_title(h) for h in [h for h in headings if h.strip()][:3])
 
 
 def title_candidates_from_scrape(data: Mapping[str, Any]) -> list[str]:

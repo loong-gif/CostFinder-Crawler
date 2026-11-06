@@ -17,8 +17,8 @@ if str(ROOT) not in sys.path:
 from utils.offer_extraction_llm import build_client_from_env
 from utils.offer_extraction_llm import canonicalize_service_name
 from utils.supabase_access import fetch_all_rows, load_supabase_client
-from scripts.run_domain_architecture_pipeline import llm_extract, load_schema
-from scripts.repair_clinic_memberships_full_table import offer_payload
+from utils.domain_pipeline_search import llm_extract, load_schema
+from utils.membership_repair_apply import offer_payload
 from utils.promo_offer_items_db import upsert_offer_items
 
 MANIFEST = ROOT / ".firecrawl" / "live_repair_manifest_20260913.json"

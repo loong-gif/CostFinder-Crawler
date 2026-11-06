@@ -24,7 +24,7 @@ from utils.supabase_rest import PRODUCTION_PROJECT_REF, SupabaseRestClient, get_
 
 def load_captures(root):
     """Only rendered, bound evidence supplies current business-field proof."""
-    from utils.monitor_price_plan import _campaign
+    from utils.monitor_price_plan_campaign import _campaign
     result = {}
     paths = list((root / "sync").glob("*/browser.json")) + list((root / "data_quality" / "captures").glob("*/browser.json"))
     for path in paths:

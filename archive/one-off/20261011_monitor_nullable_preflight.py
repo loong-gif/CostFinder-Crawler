@@ -16,7 +16,7 @@ from utils.monitor_price_plan import build_plan
 from utils.monitor_price_rest_writer import source_graph, _blanket_check
 from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 from utils.monitor_price_store import read_json, manual_protections, atomic_json, now
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 state = base / 'state'
 snapshot = database_snapshot()

@@ -4,9 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
-from utils.clinic_services_botox import BotoxServiceFields
 from utils.offer_field_normalize import normalize_service_area
 from utils.offer_fingerprint import normalize_unit_type
 from utils.schema_contract import offer_is_active, offer_item_name, offer_source_url, offer_unit_type
@@ -127,14 +126,6 @@ def offer_to_clinic_fields(offer: Dict[str, Any]) -> ClinicServiceFromOfferField
         regular_price=regular_price,
         unit_type=unit_type,
         service_area=service_area,
-    )
-
-
-def to_botox_service_fields(fields: ClinicServiceFromOfferFields) -> BotoxServiceFields:
-    return BotoxServiceFields(
-        regular_price=fields.regular_price,
-        unit_type=fields.unit_type,
-        service_area=fields.service_area,
     )
 
 

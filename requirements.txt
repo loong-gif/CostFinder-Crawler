@@ -25,6 +25,9 @@ openpyxl==3.1.2
 # Firecrawl monitoring
 firecrawl-py>=4.28.0
 
+# Scrapling 抓取引擎（crawl --engine scrapling / scrapling-browser）
+scrapling[fetchers]>=0.5.1
+
 # 工具库
 python-dotenv==1.0.1
 tqdm>=4.66.5

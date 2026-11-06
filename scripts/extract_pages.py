@@ -17,12 +17,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from utils.offer_extraction_llm import build_client_from_env
-from utils.page_extraction import (
-    build_plan,
+from utils.page_extraction import build_plan, render_apply
+from utils.page_extraction_snapshot import (
     database_state,
     latest_scrapes,
     load_decision_pages,
-    render_apply,
     snapshot_tables_for_pages,
 )
 from utils.page_title import fetch_page_title

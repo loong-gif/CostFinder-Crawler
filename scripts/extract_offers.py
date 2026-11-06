@@ -2,7 +2,7 @@
 
   read-sql [--promotion-id N] [--plan-id N] [--limit N]  生成只读快照查询 read.sql，经 MCP 执行后把 snapshot 列的值存为 snapshot.json
   plan --snapshot F                                      根据快照调用 LLM 生成 plan.json
-  apply-sql --plan F                                     把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行
+  apply-sql --plan F [--batch-size N]                    把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行；--batch-size 拆成多个独立 DO 块
 """
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 
 from utils.offer_extraction_llm import build_client_from_env
 from utils.offer_schema import offer_schema, service_name_enum
-from utils.offer_stage import build_plan, dump_plan, render_apply, snapshot_tables
+from utils.offer_stage import build_plan, dump_plan, snapshot_tables
+from utils.offer_stage_sql import render_apply
 from utils.pipeline_db import load_snapshot, snapshot_query, write_text
 from utils.pipeline_run import PROJECT_ROOT
 
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--snapshot", type=Path, required=True)
     apply_parser = sub.add_parser("apply-sql")
     apply_parser.add_argument("--plan", type=Path, required=True)
+    apply_parser.add_argument("--batch-size", type=int, help="按每批 N 个来源拆成 apply_01.sql、apply_02.sql ...，每批是独立的 DO 块")
     args = parser.parse_args(argv)
 
     if args.step == "read-sql":
@@ -53,7 +55,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{out}\nsources={len(plan['sources'])} ready={ready} blocked={len(plan['sources']) - ready}")
         return 0
     plan = json.loads(args.plan.read_text())
-    print(write_text(args.plan.parent / "apply.sql", render_apply(plan)))
+    if args.batch_size is None:
+        print(write_text(args.plan.parent / "apply.sql", render_apply(plan)))
+        return 0
+    writable = [s for s in plan["sources"] if s["status"] == "ready" and s["offers"]]
+    for start in range(0, len(writable), args.batch_size):
+        batch = {**plan, "sources": writable[start:start + args.batch_size]}
+        name = f"apply_{start // args.batch_size + 1:02d}.sql"
+        print(write_text(args.plan.parent / name, render_apply(batch)))
     return 0
 
 

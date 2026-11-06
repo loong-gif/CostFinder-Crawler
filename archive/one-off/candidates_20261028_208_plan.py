@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "one-off"))
 
 from candidates_20261028_208_parallel import load_rows
 from utils.clinic_service_taxonomy import live_clinic_service_payload
-from utils.extraction_persist import infer_price_model
+from utils.extraction_persist_pricing import infer_price_model
 from utils.membership_paths import is_membership_page_url
 from utils.membership_evidence import prepare_membership_write
 from utils.monitor_price_store import atomic_json, now

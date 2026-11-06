@@ -1,7 +1,8 @@
 """Offline regression cases for source titles and blanket persistence."""
 from scripts.apply_pipeline_bundle import insert_offer_items_live
-from scripts.run_domain_architecture_pipeline import link_item_services
-from utils.extraction_persist import build_master_from_offer, persist_promo_offer, route_offer
+from utils.domain_pipeline_persist import link_item_services
+from utils.extraction_persist_offer import persist_promo_offer
+from utils.extraction_persist_pricing import build_master_from_offer, route_offer
 from utils.promo_offer_items_db import upsert_offer_items
 
 
@@ -104,7 +105,7 @@ def test_inactive_blanket_duplicate_is_not_reactivated():
 
 def test_domain_service_relinker_skips_existing_blanket(monkeypatch):
     client = MemoryClient([{"id": 42, "offer_raw_text": RAW, "promo_offer_items": [{"offer_item_id": 7, "service_id": None}]}])
-    monkeypatch.setattr("scripts.run_domain_architecture_pipeline.fetch_service_row_by_enum", lambda *args: (_ for _ in ()).throw(AssertionError("blanket must not resolve a service")))
+    monkeypatch.setattr("utils.domain_pipeline_persist.fetch_service_row_by_enum", lambda *args: (_ for _ in ()).throw(AssertionError("blanket must not resolve a service")))
     assert link_item_services(client, business_id=1) == 0
     assert client.writes == []
 
@@ -182,7 +183,7 @@ def test_same_source_package_retains_all_items_and_second_run_is_unchanged(monke
     raw = "Sculptra and PRF package special $999"
     common = {"offer_raw_text": raw, "discount_price": 999, "conditions": []}
     offers = [{**common, "items": [{"service_name": name, "item_name": name}]} for name in ("Sculptra", "PRF")]
-    monkeypatch.setattr("utils.extraction_persist.attach_service_ids_to_items", lambda client, **kw: [dict(item, service_id=index + 7) for index, item in enumerate(kw["items"])])
+    monkeypatch.setattr("utils.extraction_persist_offer.attach_service_ids_to_items", lambda client, **kw: [dict(item, service_id=index + 7) for index, item in enumerate(kw["items"])])
     client = MemoryClient()
     original_fetch = client.fetch_rows
     client.fetch_rows = lambda table, select, **kw: [{"service_id": 7, "business_id": 1, "service_name": "Sculptra"},
@@ -201,9 +202,9 @@ def test_same_source_package_retains_all_items_and_second_run_is_unchanged(monke
 
 
 def test_domain_promotion_offer_pipeline_twice_has_no_second_write(monkeypatch):
-    from scripts.run_domain_architecture_pipeline import persist_promotions_and_offers
+    from utils.domain_pipeline_persist import persist_promotions_and_offers
     client = MemoryClient()
-    monkeypatch.setattr("scripts.run_domain_architecture_pipeline.llm_extract", lambda llm, schema, **kw: {"promotions": [{"promotion_title": "October Specials", "promotion_content": [RAW]}]} if schema["kind"] == "promotion" else {"offers": [blanket_offer()]})
+    monkeypatch.setattr("utils.domain_pipeline_persist.llm_extract", lambda llm, schema, **kw: {"promotions": [{"promotion_title": "October Specials", "promotion_content": [RAW]}]} if schema["kind"] == "promotion" else {"offers": [blanket_offer()]})
     url = "https://example.com/specials"
     args = dict(business_id=1, scrapes=[{"source_url": url, "markdown": "# October Specials\n" + RAW}], llm=object(), promo_schema={"kind": "promotion"}, offer_schema={"kind": "offers"}, membership_plan_ids=[], rendered_visibility={url: {"status": "page_accessible", "claimResults": [{"recordType": "promotion", "claim": RAW, "status": "visible_match"}]}})
     first = persist_promotions_and_offers(client, **args)

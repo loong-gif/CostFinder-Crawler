@@ -1,7 +1,7 @@
 """Route list-price offers to clinic_services; promos need any discount field."""
 import pytest
 
-from scripts.run_domain_architecture_pipeline import schema_offer_to_master
+from utils.domain_pipeline_persist import schema_offer_to_master
 from utils.clinic_service_extraction import (
     is_promo_offer,
     offer_to_clinic_service_item,

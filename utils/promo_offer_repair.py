@@ -7,9 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 from utils.membership_plans import (
-    build_membership_plan_insert_row_from_offer,
     can_migrate_offer_to_plan,
-    find_existing_plan_id,
     offer_row_to_membership_plan,
 )
 from utils.offer_fingerprint import normalize_unit_type
@@ -347,10 +345,3 @@ def build_all_repair_plans(
         "category": plan_category_repairs(rows, sibling_index=sibling_index),
         "unit": plan_unit_repairs(rows),
     }
-
-
-def membership_plan_row_for_offer(
-    offer: Mapping[str, Any],
-    staging_row: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    return build_membership_plan_insert_row_from_offer(dict(offer), staging_row)

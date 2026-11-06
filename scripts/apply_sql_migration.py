@@ -70,33 +70,6 @@ def _check_drop_gate_rest() -> str | None:
     return None
 
 
-def _check_drop_gate(db_url: str) -> str | None:
-    """Block DROP until active offers no longer depend on legacy membership_name without FK."""
-    try:
-        import psycopg
-    except ImportError:
-        return None
-    query = """
-        SELECT COUNT(*) FROM promo_offer_master
-        WHERE status = 'active'
-          AND membership_name IS NOT NULL
-          AND membership_plan_id IS NULL
-    """
-    try:
-        with psycopg.connect(db_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute(query)
-                count = int(cur.fetchone()[0])
-    except Exception as exc:
-        return f"Drop gate check failed: {exc}"
-    if count:
-        return (
-            f"Refusing DROP: {count} active offers still have membership_name without membership_plan_id. "
-            "Backfill membership_plan_id on active offers first (one-off migration removed; see git history)."
-        )
-    return None
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Apply SQL migration file to Supabase Postgres")
     parser.add_argument("sql_file", help="Path to .sql file")

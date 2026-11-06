@@ -434,11 +434,3 @@ class SagKnowledgeEngine:
             )
         )
         return sections
-
-
-def is_sag_enabled() -> bool:
-    """Check if SAG knowledge indexing is enabled via environment.
-
-    Set SAG_ENABLED=true in .env to activate SAG integration in the crawl pipeline.
-    """
-    return os.getenv("SAG_ENABLED", "").strip().lower() in ("true", "1", "yes")

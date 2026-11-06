@@ -85,5 +85,101 @@ def exclude_reason(offer: Dict[str, Any]) -> str:
     return ""
 
 
+ITEM_NAME_MAX_LENGTH = 60
+
+
+def short_item_label(text: Any) -> str:
+    """整句原文充当 item 名称时的短标签：折叠空白，超长时在单词边界截断，截断后括号不成对则去掉未闭合部分。"""
+    label = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(label) <= ITEM_NAME_MAX_LENGTH:
+        return label
+    label = label[:ITEM_NAME_MAX_LENGTH].rsplit(" ", 1)[0]
+    if label.count("(") > label.count(")"):
+        label = label[: label.rindex("(")]
+    return label.strip(" ,;:-—|")
+
+
+def _services_in(text: Any) -> set[str]:
+    """文本中出现的枚举服务名；延迟导入以避免与 service_linking 循环依赖。"""
+    from utils.service_linking import scan_services
+    return scan_services(text)
+
+
+def multiple_services_reason(offer: Dict[str, Any]) -> str:
+    """非 package 的 offer 一条只对应一个服务；原文里并列多个服务时返回原因，应拆成独立 offer。"""
+    if offer.get("is_package") or offer.get("purchase_type") == "bundle":
+        return ""
+    return "multiple_services_in_offer" if len(_services_in(offer.get("offer_raw_text"))) > 1 else ""
+
+
+_PRICE_WORD_RE = re.compile(r"[$%]|\b(?:off|free|save|discount|savings?|percent)\b", re.IGNORECASE)
+
+
+_TRAILING_PRICE_PHRASE_RE = re.compile(r"\s+at\s+(?:standard|regular|member|everyday)\s+prices?\s*$", re.IGNORECASE)
+_LEADING_QUANTITY_RE = re.compile(
+    r"^(?:one|two|three|four|five|a|an|\d+)\s+(?:full\s+|single\s+)?(?:syringes?|vials?|units?|sessions?)\s+of\s+",
+    re.IGNORECASE)
+
+
+def clean_item_name(name: Any) -> str:
+    """去掉名称两端的价格措辞与数量前缀（如 "at standard prices"、"one full syringe of"），保留服务或商品本身。"""
+    text = str(name or "").strip()
+    text = _TRAILING_PRICE_PHRASE_RE.sub("", text)
+    return _LEADING_QUANTITY_RE.sub("", text).strip()
+
+
+def item_name_problem(name: Any) -> str:
+    """item_name 必须是服务、产品或项目的短名称；有问题时返回原因，否则返回空串。"""
+    text = str(name or "")
+    if not text.strip():
+        return "empty"
+    if len(text) > ITEM_NAME_MAX_LENGTH:
+        return "too_long"
+    if re.search(r"[\r\n]", text):
+        return "multiline"
+    if _PRICE_WORD_RE.search(text):
+        return "price_or_discount_words"
+    if len(_services_in(text)) > 1:
+        return "multiple_services"
+    if _NON_SERVICE_TARGET_RE.search(text):
+        return "member_event_or_gift_card"
+    if text.count("(") != text.count(")"):
+        return "unbalanced_parenthesis"
+    if _CONJUNCTION_START_RE.match(text.strip()) or re.match(r"^\s*(?:\d+\)|[\)\(;:|.,-])", text):
+        return "fragment_start"
+    if re.search(r"[\s,;:|.-]$", text):
+        return "trailing_punctuation"
+    return ""
+
+
+_CONJUNCTION_START_RE = re.compile(r"^(?:and|or|plus|including|excluding|except)\b", re.IGNORECASE)
+_MEMBERSHIP_TERM_RE = re.compile(
+    r"\badditional\s+months?\s+free\b|"
+    r"\b(?:purchase|pay|paying|prepay)\b[^.]{0,40}\b\d+\s+months?\b[^.]{0,30}\b(?:upfront|up\s+front|in\s+advance)\b",
+    re.IGNORECASE,
+)
+_GIFT_CARD_RE = re.compile(r"\bgift\s*cards?\b", re.IGNORECASE)
+_NON_SERVICE_TARGET_RE = re.compile(
+    r"\b(?:members?|memberships?|vip|events?|parties|party|gift\s*cards?)\b", re.IGNORECASE)
+
+
+def non_promotable_reason(offer: Dict[str, Any]) -> str:
+    """offer 带有价格或折扣数值，但原文是展平后的碎片，或折扣对象不是服务或商品时给出原因，否则返回空串。"""
+    raw = str(offer.get("offer_raw_text") or "")
+    bracketed = re.sub(r"(?m)^\s*\d+\)\s*", "", raw)
+    if bracketed.count("(") != bracketed.count(")"):
+        return "fragment_offer_text"
+    if any(_CONJUNCTION_START_RE.match(part.strip()) for part in raw.split("|")[1:]):
+        return "fragment_offer_text"
+    if _MEMBERSHIP_TERM_RE.search(raw):
+        return "membership_term_offer"
+    if _GIFT_CARD_RE.search(raw):
+        return "gift_card_offer"
+    names = [str(item.get("item_name") or "").strip() for item in offer.get("items") or []]
+    if any(_NON_SERVICE_TARGET_RE.search(name) for name in names):
+        return "non_service_target"
+    return ""
+
+
 def filter_service_offers(offers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [offer for offer in offers if not should_exclude_from_offer_master(offer)]

@@ -25,16 +25,24 @@ from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, pla
 from utils.promo_offer_items_db import _BLANKET_OFFER_RE, AGENTS_BLANKET_PATTERN, is_blanket_offer_text
 from utils.service_price_guard import normalize_source_url
 
-SNAPSHOT_TABLES = {
-    "items": ("promo_offer_items", "offer_item_id, offer_id, item_name, service_id, delivered_units, unit_price", "true"),
-    "offers": ("promo_offer_master", "id, business_id, offer_raw_text, promotion_id, membership_plan_id, "
-               "is_package, discount_price", "true"),
-    "services": ("clinic_services", "service_id, business_id, service_name::text as service_name, unit_type, "
-                 "service_area", "true"),
-    "promotions": ("clinic_promotions", "promotion_id, source_url, is_offer_extracted", "true"),
-    "memberships": ("clinic_memberships", "plan_id, source_url, is_offer_extracted", "true"),
-    "enums": SERVICE_NAME_ENUM_SNAPSHOT,
-}
+def snapshot_tables(business_ids: list[int] | None = None) -> dict[str, tuple[str, str, str]]:
+    """快照表定义；给出 business_ids 时只读取这些商家的 offer、item、service 与来源（只处理这些商家）。"""
+    where = "true" if not business_ids else f"business_id = any({literal(sorted(set(business_ids)))}::bigint[])"
+    offer_ids = f"offer_id in (select id from public.promo_offer_master where {where})"
+    return {
+        "items": ("promo_offer_items", "offer_item_id, offer_id, item_name, service_id, delivered_units, unit_price",
+                  "true" if not business_ids else offer_ids),
+        "offers": ("promo_offer_master", "id, business_id, offer_raw_text, promotion_id, membership_plan_id, "
+                   "is_package, discount_price", where),
+        "services": ("clinic_services", "service_id, business_id, service_name::text as service_name, unit_type, "
+                     "service_area", where),
+        "promotions": ("clinic_promotions", "promotion_id, source_url, is_offer_extracted", where),
+        "memberships": ("clinic_memberships", "plan_id, source_url, is_offer_extracted", where),
+        "enums": SERVICE_NAME_ENUM_SNAPSHOT,
+    }
+
+
+SNAPSHOT_TABLES = snapshot_tables()
 
 # is_blanket_offer_text 的 SQL 等价形式：AGENTS.md 的正则原文，加上 promo_offer_items_db 中的其余 blanket 词（\b 对应 \y）
 BLANKET_SQL_PATTERN = f"({AGENTS_BLANKET_PATTERN})|" + _BLANKET_OFFER_RE.pattern.replace(r"\b", r"\y")
@@ -49,7 +57,8 @@ SUBSUMED_BY = {
     "Dermal Filler": {"Juvéderm", "Restylane", "Radiesse", "Belotero", "RHA Filler", "Skinvive", "Versa",
                       "Evolysse", "EZ Gel", "Sculptra"},
     "Microneedling": {"Morpheus8", "RF Microneedling", "SkinPen Microneedling", "Sylfirm X", "Microchanneling"},
-    "Facial": {"Hydrafacial", "DiamondGlow", "Glo2 Facial", "Customized Facial", "Dermaplaning"},
+    # Clear + Brilliant 常以「laser facial」宣传
+    "Facial": {"Hydrafacial", "DiamondGlow", "Glo2 Facial", "Customized Facial", "Dermaplaning", "Clear + Brilliant"},
     "Chemical Peel": {"VI Peel", "Lunchtime Peel", "PRX Skin Perfecting", "Perfect Derma Peel", "CoolPeel"},
     "Laser Treatment": {"CO2 Laser", "Halo Laser", "Moxi Laser", "Picoway", "Vbeam", "ClearSilk", "Laser Genesis",
                         "Fraxel", "Clear + Brilliant", "Pearl Fractional"},
@@ -345,38 +354,52 @@ def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], client: StructuredC
         enum_values=enum_values, resolver=resolver)
 
 
-def _create_service_statements(index: int, spec: dict[str, Any]) -> list[str]:
-    """复用计划之后已出现的唯一同名行；没有则新建（regular_price 为 NULL），出现多行即视为计划过期。"""
-    variable = f"v_service_{index}"
-    payload = live_clinic_service_payload({
-        "business_id": spec["business_id"], "service_name": spec["service_name"], "regular_price": None,
-        "unit_type": spec["unit_type"], "source_url": spec["source_url"]})
-    stale = literal(f"stale_plan: business {spec['business_id']} now has several {spec['service_name']} rows")
-    insert = render(
-        "insert into public.clinic_services (business_id, service_name, regular_price, unit_type, source_url, "
-        "updated_at) values ({business_id}, {service_name}::clinic_service_name_enum, {regular_price}, "
-        "{unit_type}, {source_url}, now()) returning service_id into " + variable + ";", **payload)
+def _json_literal(rows: list[list[Any]]) -> str:
+    return literal(json.dumps(rows, ensure_ascii=False)) + "::jsonb"
+
+
+def _create_service_statements(specs: list[dict[str, Any]]) -> list[str]:
+    """逐个 service 规格：复用计划之后已出现的唯一同名行；没有则新建（regular_price 为 NULL），出现多行即视为计划过期。
+    新建或复用的 service_id 按 create_key 记入 v_map。"""
+    rows = []
+    for spec in specs:
+        payload = live_clinic_service_payload({
+            "business_id": spec["business_id"], "service_name": spec["service_name"], "regular_price": None,
+            "unit_type": spec["unit_type"], "source_url": spec["source_url"]})
+        rows.append([spec["key"], payload["business_id"], payload["service_name"], payload.get("unit_type"),
+                     payload.get("source_url")])
     return [
-        render("select coalesce(array_agg(service_id), '{{}}'::bigint[]) into v_ids from public.clinic_services "
-               "where business_id = {business_id} and service_name = {service_name}::clinic_service_name_enum;",
-               business_id=spec["business_id"], service_name=spec["service_name"]),
-        f"if cardinality(v_ids) > 1 then raise exception {stale}; "
-        f"elsif cardinality(v_ids) = 1 then {variable} := v_ids[1]; "
-        f"else {insert} end if;",
+        "for r in select e->>0 as key, (e->>1)::bigint as business_id, e->>2 as service_name, e->>3 as unit_type, "
+        f"e->>4 as source_url from jsonb_array_elements({_json_literal(rows)}) e loop",
+        "select coalesce(array_agg(service_id), '{}'::bigint[]) into v_ids from public.clinic_services "
+        "where business_id = r.business_id and service_name = r.service_name::clinic_service_name_enum;",
+        "if cardinality(v_ids) > 1 then raise exception 'stale_plan: business % now has several % rows', "
+        "r.business_id, r.service_name; "
+        "elsif cardinality(v_ids) = 1 then v_service := v_ids[1]; "
+        "else insert into public.clinic_services (business_id, service_name, regular_price, unit_type, source_url, "
+        "updated_at) values (r.business_id, r.service_name::clinic_service_name_enum, NULL, r.unit_type, "
+        "r.source_url, now()) returning service_id into v_service; end if;",
+        "v_map := v_map || jsonb_build_object(r.key, v_service);",
+        "end loop;",
     ]
 
 
-def _link_statements(entry: dict[str, Any], service_ref: str) -> list[str]:
-    """逐条关联：只更新 service_id 仍为空且服务属于同一商家的 item，恰好 1 行。"""
-    item = literal(entry["offer_item_id"])
-    failure = literal(f"stale_plan: item {entry['offer_item_id']} cannot be linked to its service")
+def _link_statements(entries: list[dict[str, Any]]) -> list[str]:
+    """逐条关联：只更新 service_id 仍为空且服务属于同一商家的 item，恰好 1 行。
+    已有 service 以数字 id 给出，新建的以 create_key 给出（从 v_map 取）。"""
+    rows = [[entry["offer_item_id"],
+             str(entry["service_id"]) if entry["action"] == "link" else entry["create_key"]] for entry in entries]
     return [
-        f"update public.promo_offer_items i set service_id = {service_ref}, updated_at = now() "
-        f"from public.promo_offer_master m, public.clinic_services s "
-        f"where i.offer_item_id = {item} and i.service_id is null and m.id = i.offer_id "
-        f"and s.service_id = {service_ref} and s.business_id = m.business_id;",
+        "for r in select (e->>0)::bigint as item_id, e->>1 as ref "
+        f"from jsonb_array_elements({_json_literal(rows)}) e loop",
+        "v_ref := case when r.ref ~ '^[0-9]+$' then r.ref::bigint else (v_map->>r.ref)::bigint end;",
+        "update public.promo_offer_items i set service_id = v_ref, updated_at = now() "
+        "from public.promo_offer_master m, public.clinic_services s "
+        "where i.offer_item_id = r.item_id and i.service_id is null and m.id = i.offer_id "
+        "and s.service_id = v_ref and s.business_id = m.business_id;",
         "get diagnostics v_count = row_count;",
-        f"if v_count <> 1 then raise exception {failure}; end if;",
+        "if v_count <> 1 then raise exception 'stale_plan: item % cannot be linked to its service', r.item_id; end if;",
+        "end loop;",
     ]
 
 
@@ -399,22 +422,16 @@ def _mark_statements(table: str, id_column: str, owner_column: str, owner_id: in
 def render_apply(plan: Mapping[str, Any]) -> str:
     """整个计划渲染为单个 DO 块；任一 item 已变化、标记条件不成立或 blanket 检查非零即整体回滚。"""
     statements: list[str] = []
-    declare = ["v_count bigint", "v_ids bigint[]"]
+    declare = ["v_count bigint", "v_ids bigint[]", "v_service bigint", "v_ref bigint", "v_map jsonb := '{}'::jsonb",
+               "r record"]
     used_keys = {i["create_key"] for i in plan["items"] if i["action"] == "create_and_link"}
-    variables: dict[str, str] = {}
-    for spec in plan["services_to_create"]:
-        if spec["key"] not in used_keys:
-            continue
-        variables[spec["key"]] = f"v_service_{len(variables)}"
-        declare.append(f"{variables[spec['key']]} bigint")
-        statements.extend(_create_service_statements(len(variables) - 1, spec))
-    linked: list[int] = []
-    for entry in plan["items"]:
-        if entry["action"] == "unresolved":
-            continue
-        service_ref = literal(entry["service_id"]) if entry["action"] == "link" else variables[entry["create_key"]]
-        statements.extend(_link_statements(entry, service_ref))
-        linked.append(entry["offer_item_id"])
+    specs = [spec for spec in plan["services_to_create"] if spec["key"] in used_keys]
+    if specs:
+        statements.extend(_create_service_statements(specs))
+    entries = [entry for entry in plan["items"] if entry["action"] != "unresolved"]
+    if entries:
+        statements.extend(_link_statements(entries))
+    linked = [entry["offer_item_id"] for entry in entries]
     for table, id_column, owner_column, ids in (
             ("clinic_promotions", "promotion_id", "promotion_id", plan["promotions_to_mark"]),
             ("clinic_memberships", "plan_id", "membership_plan_id", plan["memberships_to_mark"])):
@@ -426,7 +443,7 @@ def render_apply(plan: Mapping[str, Any]) -> str:
         f"  and i.offer_item_id = any({literal(linked)}::bigint[])) blanket_rows;")
     statements.append(f"if v_count <> 0 then raise exception {literal('blanket_check_failed: linked items under blanket offers')}; end if;")
     header = (f"link-services apply\nplan sha256 {plan_digest(plan)}\n"
-              f"links {len(linked)}, services {len(variables)}, promotions {len(plan['promotions_to_mark'])}, "
+              f"links {len(linked)}, services {len(specs)}, promotions {len(plan['promotions_to_mark'])}, "
               f"memberships {len(plan['memberships_to_mark'])}")
     return do_block(statements, declare=declare, header=header)
 

@@ -103,3 +103,4 @@ architecture-review-*.html
 
 # Archify 架构图产物
 /.archify/
+state/cpa_deploy/

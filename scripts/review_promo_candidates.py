@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Review discovery results, decide which pages join the monitor, and (optionally) add them.
+"""Review discovery results and decide which pages are added.
 
   python scripts/review_promo_candidates.py --input state/discovery/new_promo_all.json [--input ...]
-        [--write-monitor-config PATH] [--merge-config]
+        [--write-monitor-config PATH]
 
 Always writes ``state/discovery/monitor_decisions.json``. ``--write-monitor-config`` writes a
-monitor-style candidate config; ``--merge-config`` also appends the URLs to
-``config/firecrawl_monitor_migration.json`` as ``discovered_NN`` monitors (idempotent). Nothing is
-deployed and the database is only read.
+monitor-style candidate config. Approved pages join the monitor queue once ``extract-pages`` writes them into
+``clinic_promotions`` / ``clinic_memberships``. The database is only read.
 """
 from __future__ import annotations
 
@@ -23,11 +22,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
 from utils.promo_value_review import BusinessContext, decide  # noqa: E402
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
-CONFIG = PROJECT_ROOT / "config" / "firecrawl_monitor_migration.json"
 BUCKET = 50
 
 
@@ -73,44 +70,12 @@ def chunk(urls: List[str], size: int = BUCKET) -> List[List[str]]:
     return [urls[i:i + size] for i in range(0, len(urls), size)]
 
 
-def merge_into_config(urls: List[str], config_path: Path = CONFIG) -> Dict[str, int]:
-    """Append ``urls`` to ``discovered_NN`` monitors, skipping URLs the config already contains."""
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    monitors = config["monitors"]
-    present = {canonical_scrape_url(u) for m in monitors.values() for t in m.get("targets", []) for u in t.get("urls", [])}
-    fresh = [u for u in dict.fromkeys(urls) if canonical_scrape_url(u) not in present]
-    template = monitors[sorted(monitors)[-1]]
-    existing = sorted(k for k in monitors if k.startswith("discovered_"))
-    added = 0
-    for key in existing:
-        group = monitors[key]["targets"][0]["urls"]
-        while fresh and len(group) < BUCKET:
-            group.append(fresh.pop(0))
-            added += 1
-    number = len(existing)
-    while fresh:
-        number += 1
-        key = f"discovered_{number:02d}"
-        batch, fresh = fresh[:BUCKET], fresh[BUCKET:]
-        monitors[key] = {
-            "name": f"costfinder_clinic_promotions_{key}",
-            "schedule": template.get("schedule"),
-            "status": "active",
-            "targets": [{"id": f"{key}_scrape", "type": "scrape", "urls": batch}],
-        }
-        added += len(batch)
-    if added:
-        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return {"added": added, "already_present": len(urls) - added}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, action="append", required=True)
     parser.add_argument("--out", type=Path, default=PROJECT_ROOT / "state" / "discovery" / "monitor_decisions.json")
     parser.add_argument("--write-monitor-config", type=Path, nargs="?", const=Path(
         PROJECT_ROOT / "state" / "crawl_schedule" / "promo_discovery_monitor.json"))
-    parser.add_argument("--merge-config", action="store_true")
     parser.add_argument("--today", help="override today's date (YYYY-MM-DD) for tests")
     args = parser.parse_args()
 
@@ -133,8 +98,6 @@ def main() -> int:
         args.write_monitor_config.parent.mkdir(parents=True, exist_ok=True)
         args.write_monitor_config.write_text(json.dumps({"schema_version": 1, "monitors": monitors}, indent=2) + "\n")
         print(f"wrote {args.write_monitor_config} ({len(selected)} urls)")
-    if args.merge_config:
-        print("merged into config:", json.dumps(merge_into_config(selected)))
     return 0
 
 

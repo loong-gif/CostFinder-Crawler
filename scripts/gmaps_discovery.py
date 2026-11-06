@@ -2,10 +2,11 @@
 """Discover businesses for a city through the google-maps-scraper web API.
 
 Writes a JSON list of places that ``scripts/process_discovery_results.py`` consumes. Read-only
-against the catalogue; the scraper service address and proxy come from the environment:
-``GMAPS_SCRAPER_URL`` (default http://192.168.1.68:8081) and ``GMAPS_SCRAPER_PROXIES``
-(comma-separated, for example ``http://x:x@127.0.0.1:7890``; that service requires a username
-and password even for an unauthenticated proxy).
+against the catalogue. The scraper runs on the Firecrawl server (127.0.0.1:8081 there, task
+``CostFinderGmapsScraper``); open the tunnel first with
+``ssh -f -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl``. The address comes from the environment:
+``GMAPS_SCRAPER_URL`` (default http://127.0.0.1:18081, the tunnel) and optional
+``GMAPS_SCRAPER_PROXIES`` (comma-separated proxy URLs; the server reaches Google directly, so none is needed).
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
-    base_url = os.getenv("GMAPS_SCRAPER_URL", "http://192.168.1.68:8081")
+    base_url = os.getenv("GMAPS_SCRAPER_URL", "http://127.0.0.1:18081")
     proxies = [p.strip() for p in os.getenv("GMAPS_SCRAPER_PROXIES", "").split(",") if p.strip()]
     templates = args.keyword or list(DEFAULT_KEYWORD_TEMPLATES)
     keywords = [t.format(city=args.city, state=args.state) for t in templates]

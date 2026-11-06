@@ -56,6 +56,41 @@ def test_prepare_event_refreshes_old_ego_record_for_current_dual_evidence(tmp_pa
     assert "prior_visual_receipt" not in plan["evidence"]["browser"]
 
 
+def test_chain_page_is_rendered_once_and_planned_for_every_branch(tmp_path, monkeypatch):
+    from scripts import run_monitor_price_sync as runner
+
+    url = "https://www.laseraway.com/promotions/"
+    atomic_json(tmp_path / "evidence/a.json", {"url": url, "captured_at": "2026-11-07T06:00:00Z", "markdown": "Botox $10"})
+    path = tmp_path / "events/1.json"
+    atomic_json(path, {"url": url, "event_id": "1", "status": "pending", "artifact_path": str(tmp_path / "evidence/a.json")})
+    snapshot = {"promotions": [{"promotion_id": 3807, "business_id": 4385, "source_url": "https://laseraway.com/promotions"},
+                               {"promotion_id": 3808, "business_id": 4386, "source_url": "https://laseraway.com/promotions"}],
+                "services": [], "offers": [], "items": [], "terms": [], "service_names": SERVICE_NAMES,
+                "businesses": [{"business_id": 4385, "website": "laseraway.com", "address": "8500 Melrose Ave, West Hollywood, CA"},
+                               {"business_id": 4386, "website": "laseraway.com", "address": "1 Grand Ave, Austin, TX"}]}
+    rendered, extracted, planned = [], [], []
+
+    def render(page_url, *args, **kwargs):
+        rendered.append(page_url)
+        return {"url": page_url, "final_url": page_url, "accessible": True, "text": "Botox $10", "image_review_required": False}
+
+    def plan(source, graph, evidence, protections):
+        planned.append((source["business_id"], [p["promotion_id"] for p in graph["promotions"]]))
+        return {"status": "ready", "source": source, "operations": [{"table": "clinic_promotions", "action": "update",
+                "id": graph["promotions"][0]["promotion_id"], "values": {}}], "review": []}
+
+    monkeypatch.setattr(runner, "render_page", render)
+    monkeypatch.setattr(runner, "extract_evidence", lambda *a: extracted.append(1) or {"offers": []})
+    monkeypatch.setattr(runner, "build_plan", plan)
+    result = runner.prepare_event(path, snapshot, {}, tmp_path)
+    assert rendered == [url] and extracted == [1]
+    assert planned == [(4385, [3807]), (4386, [3808])]
+    assert result["status"] == "ready" and result["source"] == {"url": url, "business_ids": [4385, 4386]}
+    assert [b["source"]["business_id"] for b in result["branches"]] == [4385, 4386]
+    assert [op["id"] for op in result["operations"]] == [3807, 3808]
+    assert all(b["event_id"] == "1" and b["evidence_path"] == result["evidence_path"] for b in result["branches"])
+
+
 def test_visual_reuse_uses_verified_text_and_ignores_layout_punctuation(tmp_path):
     quote = "Enjoy 25% off SkinMedica products in-spa, while supplies last. *excludes TNS serum."
     copied = "enjoy 25% off skinmedica products in-spa, while supplies last *excludes tns serum"

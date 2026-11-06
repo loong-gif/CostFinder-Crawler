@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import requests
 
@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dotenv import load_dotenv  # noqa: E402
 
+from utils.ego_browser import ego_scrape  # noqa: E402
 from utils.firecrawl_client import SelfHostedFirecrawl  # noqa: E402
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
 from utils.promo_page_discovery import (  # noqa: E402
@@ -41,7 +42,6 @@ from utils.promo_page_discovery import (  # noqa: E402
 )
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
-MONITOR_CONFIG = PROJECT_ROOT / "config" / "firecrawl_monitor_migration.json"
 
 
 class SearchHealth:
@@ -146,8 +146,8 @@ class Firecrawl:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.trust_env = False
-        # 单页抓取统一经 SelfHostedFirecrawl：先 fastMode，失败再走浏览器
-        self.pages = SelfHostedFirecrawl(api_url, api_key, timeout)
+        # 单页抓取统一经 SelfHostedFirecrawl：先 fastMode，拿不到正文时由 ego-lite 渲染
+        self.pages = SelfHostedFirecrawl(api_url, api_key, timeout, browser=ego_scrape)
 
     def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         response = self.session.post(f"{self.api_url}{path}", headers=self.headers, json=body, timeout=self.timeout)
@@ -155,8 +155,9 @@ class Firecrawl:
         return response.json()
 
     def map(self, url: str, limit: int) -> List[str]:
-        payload = self._post("/v1/map", {"url": url, "limit": limit})
-        return [str(link.get("url") if isinstance(link, dict) else link) for link in payload.get("links") or []]
+        # /v2/map 只读站点地图与页面链接，不经过 Firecrawl 的浏览器引擎；links 是 {url, title, description}
+        payload = self._post("/v2/map", {"url": url, "limit": limit})
+        return [str(link["url"]) for link in payload.get("links") or []]
 
     def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         with self._search_lock:  # one search at a time, spaced out, so upstream engines are not burst
@@ -167,24 +168,6 @@ class Firecrawl:
         payload = self._post("/v1/search", {"query": query, "limit": limit})
         return [r for r in payload.get("data") or [] if isinstance(r, dict)]
 
-    def crawl(self, url: str, include_paths: List[str], limit: int = 15, depth: int = 2,
-              timeout: float = 150) -> List[Dict[str, Any]]:
-        """Crawl a site restricted to offer-like paths; returns pages with markdown and rawHtml."""
-        started = self._post("/v1/crawl", {"url": url, "limit": limit, "maxDepth": depth, "includePaths": include_paths,
-                                           "scrapeOptions": {"formats": ["markdown", "rawHtml"]}})
-        job = started.get("id")
-        if not job:
-            return []
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            time.sleep(5)
-            response = self.session.get(f"{self.api_url}/v1/crawl/{job}", headers=self.headers, timeout=self.timeout)
-            response.raise_for_status()
-            status = response.json()
-            if status.get("status") in ("completed", "failed", "cancelled"):
-                return [p for p in status.get("data") or [] if isinstance(p, dict)]
-        return []
-
     def links(self, url: str) -> List[str]:
         data = self.pages.scrape(url, ("links",), only_main_content=False)
         return [str(link) for link in data.get("links") or []]
@@ -194,17 +177,8 @@ class Firecrawl:
         return {"markdown": str(data.get("markdown") or ""), "rawHtml": str(data.get("rawHtml") or "")}
 
 
-def host_of(url: str) -> str:
-    host = (urlparse(url if "://" in url else "https://" + url).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
-
-
 def known_urls(client: Any) -> Set[str]:
     known: Set[str] = set()
-    config = json.loads(MONITOR_CONFIG.read_text(encoding="utf-8"))
-    for monitor in config.get("monitors", {}).values():
-        for target in monitor.get("targets", []):
-            known.update(canonical_scrape_url(u) for u in target.get("urls", []))
     for table, pk in (("clinic_promotions", "promotion_id"), ("clinic_services", "service_id"),
                       ("clinic_memberships", "plan_id")):
         for row in fetch_all_rows(client, table, f"{pk},source_url", order=f"{pk}.asc"):
@@ -212,6 +186,25 @@ def known_urls(client: Any) -> Set[str]:
                 known.add(canonical_scrape_url(row["source_url"]))
     known.discard("")
     return known
+
+
+def discover_per_site(rows: List[Dict[str, Any]], discover: Callable[[Dict[str, Any]], Dict[str, Any]],
+                      map_fn: Callable = map) -> List[Dict[str, Any]]:
+    """连锁品牌的分店共用同一个网站：每个站点只发现一次，结果复制给该站点的每家分店（按 rows 原顺序返回）。"""
+    def site(row: Dict[str, Any]) -> str:
+        return registrable_root(urlparse(row["website"].strip()).hostname or "")
+
+    sites: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        sites.setdefault(site(row), []).append(row)
+    firsts = dict(zip(sites, map_fn(lambda group: discover(group[0]), sites.values())))
+    results = []
+    for row in rows:
+        lead = sites[site(row)][0]
+        results.append(firsts[site(row)] if row is lead else
+                       {**firsts[site(row)], "business_id": row["business_id"], "name": row.get("name"),
+                        "city": row.get("city"), "website": row.get("website"), "shared_site_with": lead["business_id"]})
+    return results
 
 
 def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], args: argparse.Namespace) -> Dict[str, Any]:
@@ -230,7 +223,6 @@ def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], 
         for c in candidates:
             c["sources"] = ["map"]
         by_url = {c["url"]: c for c in candidates}
-        crawled: Dict[str, Dict[str, str]] = {}
         if "search" in sources:
             host = urlparse(business["website"] if "://" in business["website"] else "https://" + business["website"]).netloc
             host = host[4:] if host.startswith("www.") else host
@@ -277,25 +269,6 @@ def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], 
                     by_url[c["url"]]["title"] = c.get("title", "")
                 else:
                     by_url[c["url"]] = {**c, "sources": ["search"]}
-        if "crawl" in sources and len(by_url) == 0:  # nothing from map or search: crawl offer-like paths
-            try:
-                pages = fc.crawl(business["website"], [".*[Ss]pecial.*", ".*[Pp]romo.*", ".*[Oo]ffer.*", ".*[Dd]eal.*",
-                                                        ".*[Mm]ember.*", ".*[Pp]ackage.*", ".*[Pp]ric(e|ing).*"])
-            except Exception as exc:
-                pages = []
-                result["crawl_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
-            root = registrable_root(host_of(business["website"]))
-            from utils.firecrawl_scrape_raw_db import canonical_scrape_url as _canon
-            for page in pages:
-                meta = page.get("metadata") or {}
-                url = _canon(str(meta.get("sourceURL") or meta.get("url") or ""))
-                if not url or url in known or url in by_url or registrable_root(host_of(url)) != root:
-                    continue
-                if urlparse(url).path in ("", "/"):
-                    continue
-                by_url[url] = {"url": url, "kind_hint": "promotion", "sources": ["crawl"]}
-                crawled[url] = {"markdown": str(page.get("markdown") or ""), "rawHtml": str(page.get("rawHtml") or "")}
-            result["crawled"] = len(crawled)
         candidates = list(by_url.values())[: max(args.max_candidates, 1) * 2]
         result["candidates"] = len(candidates)
         visited: Set[str] = {c["url"] for c in candidates}
@@ -309,7 +282,7 @@ def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], 
                 return None
             budget -= 1
             try:
-                page = crawled.get(url) or fc.scrape(url)
+                page = fc.scrape(url)
             except Exception as exc:  # one failing page must not stop the site
                 result["pages"].append({"url": url, "hop": hop, "via": via, "status": "scrape_failed",
                                         "error": str(exc)[:160]})
@@ -352,7 +325,7 @@ def main() -> int:
     parser.add_argument("--max-candidates", type=int, default=8)
     parser.add_argument("--allow-blog", action="store_true")
     parser.add_argument("--sources", default="map,search",
-                        help="comma-separated: map, search (site-restricted /v1/search), crawl (fallback, offer paths)")
+                        help="comma-separated: map (/v2/map), search (site-restricted /v1/search)")
     parser.add_argument("--search-limit", type=int, default=10)
     parser.add_argument("--search-backend", choices=("self", "cloud"), default="self",
                         help="cloud = api.firecrawl.dev /v2/search (2 credits per search); candidates are still "
@@ -428,7 +401,7 @@ def main() -> int:
 
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        results = list(pool.map(lambda b: discover_business(fc, b, known, args), rows))
+        results = discover_per_site(rows, lambda b: discover_business(fc, b, known, args), pool.map)
 
     pages = [p | {"business_id": r["business_id"], "business": r["name"]} for r in results for p in r["pages"]]
     summary = {
@@ -442,7 +415,6 @@ def main() -> int:
         "search_skipped_budget": sum(1 for r in results if r.get("search_status") == "skipped_budget"),
         "cloud_credits_spent": getattr(args.search_client, "spent", 0),
         "cloud_searches": getattr(args.search_client, "searches", 0),
-        "from_crawl": sum(1 for p in pages if "crawl" in (p.get("sources") or [])),
         "hub_pages": sum(r.get("hubs", 0) for r in results),
         "hop_pages": sum(1 for p in pages if p.get("hop") == 1),
         "hop_valid": sum(1 for p in pages if p.get("hop") == 1 and p["status"] in ("valid", "needs_review")),

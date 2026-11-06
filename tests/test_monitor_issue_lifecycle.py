@@ -13,7 +13,7 @@ from utils.monitor_price_plan import build_plan
 from utils.monitor_price_store import atomic_json, now
 from utils.monitor_rendered_browser import combine_breakpoint_reports, render_page
 from utils.rendered_visibility_gate import current_page_manifest, filter_visible_membership_benefits
-from test_monitor_price_plan import SOURCE, RAW, _graph, _evidence, _offer
+from monitor_price_plan_support import SOURCE, RAW, _graph, _evidence, _offer
 from test_monitor_price_pipeline import FakeLLM
 
 SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
@@ -196,7 +196,7 @@ def test_direct_from_price_preserves_lower_bound_but_cannot_erase_other_variants
 def test_complete_image_review_can_create_dom_grounded_parent_without_image_offers(tmp_path):
     from utils.monitor_image_gate import image_write_block
     from utils.monitor_price_store import read_json
-    from test_monitor_image_accuracy import proof_plan
+    from monitor_image_support import proof_plan
     plan,proof=proof_plan(tmp_path)
     browser=read_json(tmp_path/'browser.json');browser['text']=RAW
     atomic_json(tmp_path/'browser.json',browser)

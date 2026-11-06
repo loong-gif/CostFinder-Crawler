@@ -1,5 +1,5 @@
 """Failure limits through the actual monitor/event entry points; no network."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -7,6 +7,7 @@ import pytest
 
 from scripts import run_monitor_price_sync as runner
 from scripts.firecrawl_self_hosted_monitor import run_monitor
+from utils.monitor_frequency import SCHEDULE_FILE, record_check
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json
 
@@ -15,6 +16,11 @@ CONFIG = {"schema_version": 1, "monitors": {"daily": {"targets": [{"urls": [URL]
 SNAPSHOT = {"promotions": [], "offers": [], "items": [], "services": [],
             "businesses": [{"business_id": 1, "website": "a.test"}], "confirmations": [], "audit": [],
             "service_names": ["Botox", "Others"]}
+
+
+def capture_browser_unavailable(*args, **kwargs):
+    # 抓取阶段的 ego-lite 渲染在测试中不可用：页面只有爬虫正文
+    raise RuntimeError("rendered_browser_unavailable")
 
 
 def setup_event(root, event_id="1", url=URL):
@@ -117,6 +123,7 @@ def test_failed_weekly_capture_does_not_reopen_processing_pause(tmp_path, monkey
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.SelfHostedMonitor", Monitor)
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.time.sleep", lambda _: None)
     monkeypatch.setattr(runner, "render_page", lambda *a, **k: pytest.fail("No successful weekly capture"))
+    monkeypatch.setattr("utils.monitor_rendered_browser.render_page", capture_browser_unavailable)
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
     monkeypatch.setattr("sys.argv", ["sync", "--state-dir", str(tmp_path), "--config", str(config)])
     assert runner.main() == 2
@@ -206,6 +213,9 @@ def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_pa
     limits = RetryLimits(tmp_path)
     for _ in range(3): limits.failed("processing", URL, "page_not_accessible")
     event_path = setup_event(tmp_path)
+    # 上次抓取已超过 7 天档期，今天的到期抓取会取得新正文
+    atomic_json(tmp_path / SCHEDULE_FILE, {URL: record_check(
+        None, at=datetime.now(timezone.utc) - timedelta(days=8), ok=True, changed=False)})
     config = tmp_path / "config.json"; atomic_json(config, CONFIG)
     class Monitor:
         def __init__(self, *args): pass
@@ -214,6 +224,7 @@ def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_pa
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
     monkeypatch.setattr(runner, "enqueue_expired_campaign_checks", lambda *a: 0)
     monkeypatch.setattr(runner, "render_page", lambda url, *a, **k: {"accessible": True, "final_url": url})
+    monkeypatch.setattr("utils.monitor_rendered_browser.render_page", capture_browser_unavailable)
     seen = []
     monkeypatch.setattr(runner, "extract_evidence", lambda artifact, *a: seen.append(artifact["markdown"]) or {})
     monkeypatch.setattr(runner, "build_plan", lambda *a: {"status": "ready", "operations": [], "review": []})

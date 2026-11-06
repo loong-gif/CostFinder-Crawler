@@ -1,7 +1,8 @@
 """Tests for the evidence gate used before promo offers are persisted."""
 from __future__ import annotations
 
-from utils.extraction_persist import persist_promo_offer, route_and_persist_extraction
+from utils.extraction_persist import route_and_persist_extraction
+from utils.extraction_persist_offer import persist_promo_offer
 from utils.offer_evidence_validator import validate_offer_evidence
 
 

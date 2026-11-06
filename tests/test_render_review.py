@@ -60,6 +60,24 @@ def test_apply_verdicts_promotes_verified_skips_hidden_and_keeps_unavailable() -
     assert out["https://s.com/e"]["decision"] == "add_with_review"  # manual review neither promotes nor drops
 
 
+def test_unreviewed_and_unverified_pages_are_queued_for_the_deep_review_once() -> None:
+    from utils.render_review import build_deep_items
+
+    decisions = [
+        {"url": "https://laseraway.com/promotions", "business_id": 4385, "status": "needs_review",
+         "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
+        {"url": "https://laseraway.com/promotions", "business_id": 4386, "status": "needs_review",
+         "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
+        {"url": "https://spa.com/specials", "business_id": 1, "status": "needs_review",
+         "render_review": {"verdict": "not_visible"}, "evidence": ["Botox $11 per unit"]},
+        {"url": "https://spa.com/deals", "business_id": 1, "status": "needs_review",
+         "render_review": {"verdict": "verified"}, "evidence": ["Filler $499"]},
+        {"url": "https://spa.com/offers", "business_id": 1, "status": "valid", "evidence": ["Peel $99"]},
+    ]
+    assert [i["url"] for i in build_deep_items(decisions)] == ["https://laseraway.com/promotions",
+                                                               "https://spa.com/specials"]
+
+
 def test_deep_verdict_uses_expanded_text_and_image_text() -> None:
     from utils.render_review import deep_verdict
 

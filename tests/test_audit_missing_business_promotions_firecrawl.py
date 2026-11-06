@@ -5,20 +5,21 @@ from datetime import date
 
 import pytest
 
-from scripts.audit_missing_business_promotions_firecrawl import (
-    RawSpoolDb,
-    SelfHostedFirecrawl,
+from scripts.audit_missing_business_promotions_firecrawl import audit_businesses
+from utils.missing_business_audit_attribution import (
     activity_from_dates,
     assign_businesses,
-    audit_businesses,
-    build_audit,
     has_explicit_promotion_signal,
-    is_promotion_page_url,
+)
+from utils.missing_business_audit_firecrawl import RawSpoolDb, SelfHostedFirecrawl
+from utils.missing_business_audit_reports import (
+    build_audit,
     reconcile_audit_raw_ids,
     select_missing_businesses,
-    write_reports,
     write_raw_spool,
+    write_reports,
 )
+from utils.promo_paths import is_promotion_url_strict as is_promotion_page_url
 
 
 def test_promotion_url_requires_bounded_special_or_promotion_token() -> None:
@@ -175,7 +176,7 @@ def test_audit_persists_only_scrape_raw_and_classifies_targets(monkeypatch) -> N
             }
 
     monkeypatch.setattr(
-        "scripts.audit_missing_business_promotions_firecrawl.save_scrape_response",
+        "utils.missing_business_audit_firecrawl.save_scrape_response",
         lambda _db, _fingerprint, source_url, _response, **kwargs: raw_calls.append(
             {"table": "firecrawl_scrape_raw", "source_url": source_url, **kwargs}
         )
@@ -346,7 +347,7 @@ def test_self_hosted_firecrawl_calls_v1_map_and_scrape(monkeypatch) -> None:
             calls.append(("POST", url, json))
             return Response()
 
-    monkeypatch.setattr("scripts.audit_missing_business_promotions_firecrawl.requests.Session", Session)
+    monkeypatch.setattr("utils.missing_business_audit_firecrawl.requests.Session", Session)
     client = SelfHostedFirecrawl("http://192.168.1.68:3002/", "secret", timeout=30)
     client.healthcheck()
     assert client.map("https://clinic.example", limit=50) == ["https://clinic.example/specials"]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from utils.monitor_price_writer import BLANKET_CHECK_SQL
+from utils.monitor_price_writer_plan import BLANKET_CHECK_SQL
 from utils.batch_gate_checks import linked_query
 
 OUT = ROOT / "one-off/outputs/candidates_20261020"

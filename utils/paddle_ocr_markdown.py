@@ -1,10 +1,8 @@
 """Download relevant promotion and membership images and assemble OCR markdown."""
 from __future__ import annotations
 
+import os
 import re
-import shutil
-import subprocess
-import tempfile
 import time
 from pathlib import Path
 from typing import Sequence
@@ -90,29 +88,21 @@ def _download_image(url: str, *, session: requests.Session | None = None) -> byt
     return b"".join(chunks)
 
 
+OCR_SERVICE_URL = os.environ.get("OCR_SERVICE_URL", "http://127.0.0.1:18082")
+
+
 def ocr_lines(image_bytes: bytes) -> list[str]:
     """图片 OCR 的唯一入口：抽取流水线的 markdown_ocr 与可见性清单的图片转写都用它。
 
-    --psm 6 把图片当作一个文本块，同一行的服务名与价格保持在同一行，图片中逐字出现的声明能作为连续原文匹配。
+    调用监控服务器上的 PaddleOCR 服务（utils/ocr_service.py，经 SSH 隧道
+    ``ssh -f -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl``）。同一行的服务名与价格由服务合并在同一行，
+    图片中逐字出现的声明能作为连续原文匹配。
     """
-    image_dir = Path(__file__).resolve().parents[1] / "state" / "pipeline_ocr"
-    image_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".img", dir=image_dir, delete=False) as tmp:
-        tmp.write(image_bytes)
-        path = tmp.name
-    try:
-        result = subprocess.run(
-            ["tesseract", path, "stdout", "--psm", "6"],
-            capture_output=True, text=True, check=True,
-        )
-    finally:
-        Path(path).unlink(missing_ok=True)
-    lines: list[str] = []
-    for line in result.stdout.splitlines():
-        text = " ".join(line.split())
-        if text:
-            lines.append(text)
-    return lines
+    response = requests.post(f"{OCR_SERVICE_URL}/ocr", data=image_bytes, timeout=300,
+                             headers={"Content-Type": "application/octet-stream"},
+                             proxies={"http": None, "https": None})
+    response.raise_for_status()
+    return response.json()["lines"]
 
 
 def build_markdown_ocr(image_urls: Sequence[str]) -> tuple[str, list[dict]]:
@@ -124,11 +114,11 @@ def build_markdown_ocr(image_urls: Sequence[str]) -> tuple[str, list[dict]]:
         name = _image_name(url)
         try:
             data = _download_image(url, session=session)
-            lines = ocr_lines(data)
-        except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
+        except requests.RequestException as exc:
             meta.append({"url": url, "file": name, "error": str(exc)})
             continue
-        meta.append({"url": url, "file": name, "bytes": len(data), "n_lines": len(lines), "engine": "tesseract"})
+        lines = ocr_lines(data)
+        meta.append({"url": url, "file": name, "bytes": len(data), "n_lines": len(lines), "engine": "paddleocr"})
         if not lines:
             continue
         sections.append(f"## Image: {name}\n\nSource: {url}\n\n" + "\n".join(lines))
@@ -136,7 +126,6 @@ def build_markdown_ocr(image_urls: Sequence[str]) -> tuple[str, list[dict]]:
 
 
 if __name__ == "__main__":
-    assert shutil.which("tesseract")
     sample = build_markdown_ocr([])
     assert sample == ("", [])
     assert filter_promo_image_urls(["https://x.com/logo.svg"]) == []

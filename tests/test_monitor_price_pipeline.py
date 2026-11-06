@@ -13,7 +13,7 @@ from scripts.run_monitor_price_sync import (bind_source, enqueue_expired_campaig
                                            verified_batch_results)
 from utils.monitor_price_extract import extract_evidence
 from utils.monitor_price_store import atomic_json, manual_protections, run_lock
-from utils.monitor_rendered_browser import resources_complete
+from utils.monitor_rendered_checks import resources_complete
 
 SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
 
@@ -168,10 +168,25 @@ def test_protections_keep_only_manual_file_entries():
     assert result["promotion_ids"] == []
 
 
-def test_source_binding_does_not_choose_between_branches():
-    snap={"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"},{"business_id":2,"website":"a.test"}]}
-    with pytest.raises(RuntimeError,match="ambiguous"):
-        bind_source("https://a.test/specials",snap)
+def test_source_binding_does_not_choose_between_businesses_it_cannot_tell_apart():
+    # 地址缺失或相同：可能是重复登记，交人工审查
+    for addresses in ([None, None], ["10 Main St, Austin, TX", "10 Main St., Austin TX"]):
+        snap={"promotions":[],"services":[],"businesses":[
+            {"business_id":1,"website":"a.test","address":addresses[0]},
+            {"business_id":2,"website":"a.test","address":addresses[1]}]}
+        with pytest.raises(RuntimeError,match="ambiguous"):
+            bind_source("https://a.test/specials",snap)
+
+
+def test_chain_branches_at_different_addresses_each_bind_to_the_shared_page():
+    url="https://www.laseraway.com/promotions/"
+    snap={"promotions":[{"business_id":4386,"source_url":"https://laseraway.com/promotions"},
+                        {"business_id":4385,"source_url":"https://laseraway.com/promotions"}],
+          "services":[],"businesses":[{"business_id":4385,"website":"laseraway.com","address":"8500 Melrose Ave, West Hollywood, CA"},
+                                      {"business_id":4386,"website":"laseraway.com","address":"1 Grand Ave, Austin, TX"}]}
+    assert bind_source(url,snap) == [{"business_id":4385,"url":url},{"business_id":4386,"url":url}]
+    single={"promotions":[{"business_id":7,"source_url":"https://a.test/specials"}],"services":[],"businesses":[]}
+    assert bind_source("https://a.test/specials",single) == [{"business_id":7,"url":"https://a.test/specials"}]
 
 
 @pytest.mark.parametrize("url,memberships",[
@@ -203,7 +218,7 @@ def test_cached_ready_membership_plan_is_replaced_with_review(tmp_path,monkeypat
     assert plan["status"] == "review" and plan["operations"] == []
     assert plan["review"] == [{"reason":"membership_source_requires_review"}]
     assert json.loads((directory / "plan_attempt_1.json").read_text()) == cached
-    assert json.loads(path.read_text())["status"] == "review"
+    assert json.loads(path.read_text())["status"] == "excluded"
 
 
 def test_live_same_domain_membership_redirect_stops_before_extraction(tmp_path,monkeypatch):
@@ -291,6 +306,18 @@ def test_latest_event_supersedes_old_price_before_any_write(tmp_path,monkeypatch
     assert json.loads((tmp_path / "events/1.json").read_text())["status"] == "superseded"
 
 
+def test_membership_source_is_excluded_from_promotion_monitoring_and_never_selected_again(tmp_path,monkeypatch):
+    url="https://a.test/specials/botox-membership"
+    atomic_json(tmp_path / "events/1.json",{"event_id":"1","status":"pending","url":url,"created_at":"1"})
+    snapshot={"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"}],
+              "memberships":[],"confirmations":[],"audit":[]}
+    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a,**k:pytest.fail("membership source must not render"))
+    report=process_events(tmp_path,snapshot,write_enabled=True)
+    assert report["sources"][0]["status"] == "excluded"
+    assert json.loads((tmp_path / "events/1.json").read_text())["status"] == "excluded"
+    assert process_events(tmp_path,snapshot,write_enabled=True)["selected_events"] == 0
+
+
 def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,monkeypatch):
     from scripts.run_monitor_price_sync import main
     class Monitor:
@@ -304,8 +331,12 @@ def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,
     atomic_json(tmp_path / "price_sync_control.json",{"write_enabled":True})
     atomic_json(tmp_path / "events/review.json",{"event_id":"review","status":"review",
                 "url":"https://review.test","created_at":"2026-10-09T00:00:00+00:00"})
+    def capture_browser_unavailable(*args,**kwargs):
+        # 抓取阶段的 ego-lite 渲染在测试中不可用：页面只有爬虫正文
+        raise RuntimeError("rendered_browser_unavailable")
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.SelfHostedMonitor",Monitor)
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.time.sleep",lambda _:None)
+    monkeypatch.setattr("utils.monitor_rendered_browser.render_page",capture_browser_unavailable)
     monkeypatch.setattr("scripts.run_monitor_price_sync.database_snapshot",lambda:{"confirmations":[],"audit":[]})
     monkeypatch.setattr("scripts.run_monitor_price_sync.enqueue_expired_campaign_checks",lambda *a:0)
     monkeypatch.setattr("scripts.run_monitor_price_sync.prepare_event",lambda path,*a:
@@ -357,15 +388,24 @@ def test_returning_price_change_is_not_deduplicated_forever(tmp_path,monkeypatch
     assert len(list((tmp_path / "events").glob("*.json"))) == 4
 
 
-@pytest.mark.parametrize("resource",["small_image","failed_background","retried_background"])
-def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path,resource):
-    from test_monitor_price_plan import SOURCE, _graph, _offer, _evidence
+def test_images_matter_only_when_text_has_no_promotion():
+    frame={"ready":True,"unreviewed_regions":0,"backgrounds":[{"decoded":False,"network_failed":True}],
+           "images":[{"alt":"Office lobby","loaded":False},{"alt":"","loaded":False}]}
+    assert resources_complete([frame])
+    frame["images"].append({"alt":"Black Friday Botox special","loaded":False})
+    assert not resources_complete([frame],"Contact us")
+    assert resources_complete([frame],"Botox $10 off per unit")
+    frame["images"][-1]["loaded"]=True
+    assert resources_complete([frame],"Contact us")
+    frame["unreviewed_regions"]=1
+    assert not resources_complete([frame],"Contact us")
+    assert resources_complete([frame],"Save $50 today")
+
+
+def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path):
+    from monitor_price_plan_support import SOURCE, _graph, _offer, _evidence
     from utils.monitor_price_plan import build_plan
-    frame={"ready":True,"unreviewed_regions":0,"images":[],"backgrounds":[]}
-    if resource == "small_image":
-        frame["images"]=[{"width":600,"height":60,"loaded":False}]
-    else:
-        frame["backgrounds"]=[{"decoded":resource == "retried_background","network_failed":True}]
+    frame={"ready":True,"unreviewed_regions":0,"images":[{"alt":"Botox special","loaded":False}],"backgrounds":[]}
     assert not resources_complete([frame])
     graph=_graph()
     extra=dict(graph["offers"][0],id=9)

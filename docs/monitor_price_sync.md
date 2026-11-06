@@ -7,11 +7,65 @@
 
 项目位于 `72.52.161.65` 的 `/home/loong/costfinder_monitor`，沿用 Windows 任务
 `CostFinderFirecrawlMonitor` 及其启动文件 `run_monitor_validation.sh`。
-主任务每周日服务器当地时间 00:30 执行一次，时区为 Windows `Pacific Standard Time`
-（自动处理夏令时）。触发器为 Weekly、间隔 1 周；错过执行时间后允许补跑。
-`config/firecrawl_monitor_migration.json` 中各监控的 `cron: "0 0 * * *"` 是从 Firecrawl 云端监控迁移
-时保留的值，自托管执行器不读取它；实际节奏只取决于上述 Windows 任务。
-2026-10-15 已用 `schtasks /query` 核实：`CostFinderFirecrawlMonitor` 为 Weekly、周日 00:30，下次运行 2026-10-18；
+主任务每天服务器当地时间 00:30 执行一次，时区为 Windows `Pacific Standard Time`
+（自动处理夏令时）。触发器为 Daily；错过执行时间后允许补跑。2026-11-06 已用 `Get-ScheduledTask` 核实：
+Daily、00:30，下次运行 2026-11-07 00:30。
+
+### OCR 服务
+
+图片里的促销与会员权益由服务器上的 PaddleOCR 识别（`utils/ocr_service.py`，PP-OCRv6 模型）。它运行在独立的
+Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.14 的安装包；系统库 `libgomp` 解压在该目录的
+`lib_root/`，不改系统；关闭 oneDNN 加速以避开 PaddlePaddle 3.x 的 `ConvertPirAttribute2RuntimeAttribute` 报错），
+只监听服务器本机 `127.0.0.1:8082`，由 Windows 任务 `CostFinderOcrService`（登录时启动，
+`wsl.exe -d Ubuntu -- /home/loong/costfinder_monitor/run_ocr_service.sh`，日志 `logs/ocr_service.log`）启动。
+本机流水线的唯一入口是 `utils.paddle_ocr_markdown.ocr_lines`，经 SSH 隧道
+`ssh -f -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl` 调用（地址用 `OCR_SERVICE_URL` 覆盖）。
+同一行的多个检测框按纵向位置合并为一行（`utils/ocr_rows.py`），服务名与价格因此保持在同一行。
+`tests/test_image_ocr.py` 里三个依赖真实识别的测试在服务不可达时跳过。
+
+### 监控队列
+
+监控队列不写死，每次运行由数据库 `clinic_promotions` 和 `clinic_memberships` 的 `source_url` 动态生成
+（`utils/monitor_queue.py`）：
+
+- 出现在 `clinic_promotions` 的页面是促销页（同时出现在 `clinic_memberships` 的页面也按促销页处理），
+  分桶 `daily_NN`，抓取后做浏览器渲染核验。
+- 只出现在 `clinic_memberships` 的页面是会员页，分桶 `membership_NN`，只做 Firecrawl 抓取检测内容变化，不渲染；
+  它们的事件在处理阶段标为 `excluded`（会员页只进 `clinic_memberships`）。
+- 每桶最多 50 个页面。已有桶状态文件（`daily_NN.json` / `membership_NN.json`）里的页面保持原桶，新页面放进有空位的
+  第一个桶，桶满再开新桶，所以基线始终对应同一批页面。数据库里新增或删除的 URL 下次运行自动入队或出队。
+- `monitor --config <文件>` 仍可指定手写配置（到期抓取闭环用 `state/crawl_schedule/due_monitor.json`）。
+
+### 动态轮询频率
+
+每天的主任务只抓取轮询到期的页面（`utils/monitor_frequency.py`，状态文件 `state/poll_schedule.json`），
+另外总是抓取已过 `campaign_end_date` 仍 active 的促销来源和数据质量复查队列里的来源。
+每个页面按价格行实际变化的间隔分档：
+
+| 更新间隔 | 轮询间隔 |
+| --- | --- |
+| ≤ 21 天 | 7 天 |
+| 22–60 天 | 15 天 |
+| > 60 天 | 30 天 |
+
+会员页更新慢，只有两档：
+
+| 更新间隔 | 轮询间隔 |
+| --- | --- |
+| ≤ 90 天 | 60 天 |
+| > 90 天 | 90 天 |
+
+- 更新指页面状态为 `changed`（价格行集合变化）；只有正文摘要或截图摘要变化不算。
+- 更新间隔 = max(最近 6 次变化之间间隔的中位数, 距最近一次变化的天数)。观察起点算作第一个端点；
+  从未变化的页面取距首次观察的天数。所以新页面先每周查，持续不变就逐档放慢，一旦变得频繁就回到快档。
+- 抓取失败不记变化，下次到期顺延一个档期；失败页仍由每小时重试任务处理。
+- 文件不存在时，第一次运行从 `evidence/` 的抓取时间和 `events/` 里 `change_type=changed` 的事件重建档案。
+- 每次运行结束，启动脚本调用 `promo_pipeline.py notify-run`，以「小扣」机器人（`FEISHU_APP_ID`）私信
+  `FEISHU_NOTIFY_OPEN_ID`：抓取、档期、事件、写入开关与待执行 SQL、暂停重试和失败页面；没有生成报告时发送日志末尾。
+  小时重试没有抓取页面也没有处理事件时不发送。凭据在服务器 `.env`（`FEISHU_APP_SECRET`）。
+- `promo_pipeline.py monitor-schedule [--pages]` 只读查看各档页面数和今天到期数；
+  `monitor --all-pages` 忽略档期抓取全部配置页面。
+
 `Last Result` 为 2 是设计内的退出码，不是崩溃：`run_monitor_price_sync.py` 在任一监控有页面抓取错误或存在 `retryable` 来源时返回 2
 （见脚本末尾 `return 2 if ...`），报告中 `failure_scope` 为 `page_or_source_only`，由每小时的 `CostFinderFirecrawlMonitorRetry` 重试。
 2026-10-11 的运行因部分页面返回 `firecrawl_empty_markdown` 而得到 2，日志无 Traceback。
@@ -24,8 +78,8 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
 同一来源的抓取和浏览器/提取分别累计连续失败，达到 **3 轮**后暂停该阶段的
 小时重试并加入审查清单。抓取一轮内的两个 HTTP 尝试只算一轮失败；重启程序或新事件
-不会绕过来源上限。周任务仍抓取所有配置页面，成功抓取后清除抓取计数；暂停的提取阶段
-只有在本轮周任务取得该页新正文后才重新核验，提取成功后清零。仍失败时继续保持暂停。
+不会绕过来源上限。主任务在页面到期时照常抓取，成功抓取后清除抓取计数；暂停的提取阶段
+只有在主任务取得该页新正文后才重新核验，提取成功后清零。仍失败时继续保持暂停。
 某一阶段成功不会清空其他阶段的失败计数。
 运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文；服务器已有的
 Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
@@ -84,7 +138,8 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 
 ## 匹配、价格与保护
 
-已知会员来源、URL 明确标记的会员页面和混合会员页面进入审查，不创建促销。
+已知会员来源、URL 明确标记的会员页面和混合会员页面只进 `clinic_memberships`：促销监控把对应事件标为
+`excluded`，不渲染、不创建促销，也不进入审查清单。
 这一检查覆盖原 URL、同域重定向后的 URL 和旧的已冻结计划。
 会员表仅只读获取来源归属，不读取或同步会员费、权益。
 

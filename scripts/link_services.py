@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from utils.offer_extraction_llm import build_client_from_env
 from utils.pipeline_db import load_snapshot, snapshot_query, write_text
 from utils.pipeline_run import PROJECT_ROOT
-from utils.service_linking import SNAPSHOT_TABLES, build_plan, dump_plan, render_apply
+from utils.service_linking import SNAPSHOT_TABLES, build_plan, dump_plan, render_apply, snapshot_tables
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "link_services"
 
@@ -24,18 +24,21 @@ OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "link_services"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="step", required=True)
-    sub.add_parser("read-sql")
+    read_parser = sub.add_parser("read-sql")
+    read_parser.add_argument("--business-id", type=int, action="append", help="只处理这些商家（可重复）")
     plan_parser = sub.add_parser("plan")
     plan_parser.add_argument("--snapshot", type=Path, required=True)
     plan_parser.add_argument("--skip-llm", action="store_true",
                              help="不调用 LLM；确定性规则无法识别的 item 仍报错终止，需先处理")
     apply_parser = sub.add_parser("apply-sql")
     apply_parser.add_argument("--plan", type=Path, required=True)
+    apply_parser.add_argument("--batch-size", type=int,
+                              help="每批最多关联的 item 数（按店铺整体分批）；写出 apply_01.sql、apply_02.sql ...")
     args = parser.parse_args()
 
     if args.step == "read-sql":
         run_dir = OUTPUT_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        print(write_text(run_dir / "read.sql", snapshot_query(SNAPSHOT_TABLES)))
+        print(write_text(run_dir / "read.sql", snapshot_query(snapshot_tables(args.business_id))))
         return 0
     if args.step == "plan":
         load_dotenv(PROJECT_ROOT / ".env")
@@ -48,5 +51,25 @@ def main() -> int:
               f"promotions_to_mark={len(plan['promotions_to_mark'])} memberships_to_mark={len(plan['memberships_to_mark'])}")
         return 0
     plan = json.loads(args.plan.read_text())
-    print(write_text(args.plan.parent / "apply.sql", render_apply(plan)))
+    if args.batch_size is None:
+        print(write_text(args.plan.parent / "apply.sql", render_apply(plan)))
+        return 0
+    # 按店铺分批：同一店铺新建的 service 与关联它们的 item 留在同一批
+    by_business: dict[int, list[dict]] = {}
+    for entry in plan["items"]:
+        if entry["action"] != "unresolved":
+            by_business.setdefault(entry["business_id"], []).append(entry)
+    batches: list[list[int]] = [[]]
+    size = 0
+    for business_id, entries in by_business.items():
+        if size and size + len(entries) > args.batch_size:
+            batches.append([])
+            size = 0
+        batches[-1].append(business_id)
+        size += len(entries)
+    for number, businesses in enumerate(batches, start=1):
+        batch = {**plan, "items": [e for b in businesses for e in by_business[b]],
+                 "services_to_create": [s for s in plan["services_to_create"] if s["business_id"] in businesses],
+                 "promotions_to_mark": [], "memberships_to_mark": []}
+        print(write_text(args.plan.parent / f"apply_{number:02d}.sql", render_apply(batch)))
     return 0

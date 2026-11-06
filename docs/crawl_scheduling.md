@@ -35,7 +35,8 @@ python scripts/crawl_report.py                              # 汇总
   首次发现即达标的新商户直接插入；低于线后上升的需连续 2 次达标才晋升。
 - 新城市：每周一个，最多 2 个同时 onboarding；评分 = 3×同州活跃城市数(上限 5) + 2×注册用户数 + 预期供给/10 − 5×失败试点；
   试点达标商户 ≥15 才转 active，否则搁置 90 天。
-- `config/firecrawl_monitor_migration.json` 里的 cron 为迁移遗留值，执行器不读取；实际节奏取决于服务器 Windows 任务。
+- 主监控的页面队列由 `clinic_promotions` / `clinic_memberships` 的 source_url 动态生成，见 `docs/monitor_price_sync.md`「监控队列」；
+  页面轮询节奏由 `utils/monitor_frequency.py` 的页面档位决定（促销页 7/15/30 天，会员页 60/90 天），实际运行时间取决于服务器 Windows 任务。
 
 ## 服务器部署（2026-10-15）
 
@@ -67,10 +68,12 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
   流程：`crawl_scheduler.py plan --apply --cap 30` → 观察模式监控（独立 `state/due_monitor/` 与
   `control.json`，`write_enabled=false`，不写库、不发通知）→ `crawl_record_from_monitor.py` →
   `crawl_scheduler.py record --apply`。单次上限用环境变量 `CRAWL_DUE_CAP` 调整。
-- 该任务只更新 `state/crawl_schedule/`，不会写数据库；现有每周监控与每小时重试任务不变。
+- 该任务只更新 `state/crawl_schedule/`，不会写数据库；每日监控（按页面 7/15/30 天档期抓取，见 `docs/monitor_price_sync.md`）与每小时重试任务不变。
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。
-- 抓取服务（google-maps-scraper）在 `192.168.1.68:8081`（SSH 别名 `thinkbook`，容器
-  `google-maps-scraper-api-8081`），出网必须经代理：设置 `GMAPS_SCRAPER_PROXIES=http://x:x@127.0.0.1:7890`。
+- 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，只监听该机 `127.0.0.1:8081`，
+  Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
+  不需要代理。本机先开隧道 `ssh -f -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl`，`discover-businesses`
+  默认地址 `GMAPS_SCRAPER_URL=http://127.0.0.1:18081`。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 

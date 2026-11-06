@@ -17,6 +17,11 @@ _CHOICE_INVALID = re.compile(
 _BUY_GET = re.compile(r"\b(?:buy|purchase)\b.*\b(?:get|receive)\b|\band/or\b", re.I)
 
 
+def _join_branch(*parts: str) -> str:
+    """拆分后的分支文本：只拼接含字母或数字的部分，句末的标点（如 "."）不单独成段。"""
+    return " | ".join(p for p in parts if p and re.search(r"[A-Za-z0-9]", p))
+
+
 def _text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     return re.sub(r"\s+", " ", re.sub(r"[^\w]+", " ", text)).strip()
@@ -190,6 +195,10 @@ def _choice_parts(raw: str) -> tuple[list[str], str, str] | None:
             choices, prefix, suffix = raw[: money.start()].strip(" :"), "", raw[money.start() :].strip()
             choices = re.sub(r"^choose\s+(?:one\s*:\s*)?", "", choices, flags=re.I)
             choices = re.sub(r"(?:优惠价|特价)\s*$", "", choices, flags=re.I).strip()
+            connector = re.search(r"\s+(?:for|at|only|just|now)\s*$", choices, re.I)
+            if connector:
+                suffix = f"{connector.group().strip()} {suffix}"
+                choices = choices[: connector.start()].strip()
     if not re.search(r",|\bor\b|\band\b|或|/", choices, re.I):
         return None
     parts = _split_choice_list(choices)
@@ -239,7 +248,7 @@ def _split_by_evidence_items(offer: dict[str, Any], raw: str) -> list[dict] | No
     split: list[dict] = []
     for item in branches:
         label = _item_label(item)
-        branch = " | ".join(p for p in (label, raw) if p)
+        branch = _join_branch(label, raw)
         split.append({**offer, "source_offer_raw_text": raw, "offer_raw_text": branch,
                       "purchase_type": "single", "is_package": False, "items": [item]})
     return split
@@ -260,26 +269,39 @@ def _parse_quantity_prefix(name: str) -> tuple[str, int | None, str | None]:
     return name.strip(), None, None
 
 
+# 连接两个项目的「+」；数字后的「+」（8+ Treatments、3+ syringes）表示「及以上」，不是连接符
+JOIN_PLUS = r"(?<!\d)\s*\+\s*"
+
+
 def _split_bundle_component_text(name: str) -> list[str]:
-    chunks = re.split(r"\s*\+\s*", name)
+    chunks = re.split(JOIN_PLUS, name)
     out: list[str] = []
     for chunk in chunks:
-        chunk = chunk.strip(" ,:;—–-")
+        chunk = re.split(r"\s+\$\s*\d", chunk, maxsplit=1)[0].strip(" ,:;—–-")
         if not chunk:
             continue
         if "," in chunk and re.search(r"\d+\s+\w", chunk):
-            out.extend(part.strip() for part in chunk.split(",") if part.strip())
+            out.extend(part.strip() for part in re.split(r",(?!\d{3}\b)", chunk) if part.strip())
         else:
             out.append(chunk)
     return out
+
+
+def _plus_in_service_name(item: dict, name: str) -> bool:
+    """服务名本身含「+」（例如 Clear + Brilliant）且完整出现在 item 名称中：这是一个服务，不是组合。"""
+    service = " ".join(str(item.get("service_name") or "").split()).casefold()
+    return "+" in service and service in " ".join(name.split()).casefold()
 
 
 def _expand_bundle_items(items: list[dict], raw: str) -> list[dict]:
     expanded: list[dict] = []
     for item in items:
         name = _item_label(item)
-        parts = _split_bundle_component_text(name) if re.search(r"\+|&", name) else [name]
-        if len(parts) == 1 and len(items) == 1 and re.search(r"\+|&", raw):
+        if _plus_in_service_name(item, name):
+            expanded.append(item)
+            continue
+        parts = _split_bundle_component_text(name) if re.search(JOIN_PLUS + "|&", name) else [name]
+        if len(parts) == 1 and len(items) == 1 and re.search(JOIN_PLUS + "|&", raw):
             head = re.split(r"\s*—\s*|\s*-\s*\$", raw, maxsplit=1)[0]
             parts = _split_bundle_component_text(head) or parts
         for part in parts:
@@ -308,7 +330,7 @@ def _should_treat_as_bundle(raw: str, offer: dict[str, Any], items: list[dict]) 
         return False
     if offer.get("discount_price") is None and offer.get("discount_percent") is None:
         return False
-    if len(items) > 1 and re.search(r"\+\s*|,\s*\d+\s", raw):
+    if len(items) > 1 and re.search(JOIN_PLUS + r"|,\s*\d+\s", raw):
         return True
     return False
 
@@ -378,7 +400,12 @@ def normalize_purchase_offers(offers: list[dict], evidence: str | Mapping[str, A
         raw = str(offer.get("offer_raw_text") or "").strip()
         from utils.promo_offer_items_db import is_blanket_offer_text
         if is_blanket_offer_text(raw):
-            offer.update(is_package=False, purchase_type="single", items=[{"item_name": raw, "service_name": None,
+            from utils.service_linking import scan_services
+            # blanket offer 不对应具体服务：LLM 给出的名称是商品或服务大类（如 Skincare Products）时保留，
+            # 名称指向枚举中的具体服务（如 Botox）时改用原文
+            given = next((name for item in offer.get("items") or [] if isinstance(item, Mapping)
+                          and (name := str(item.get("item_name") or "").strip()) and not scan_services(name)), "")
+            offer.update(is_package=False, purchase_type="single", items=[{"item_name": given or raw, "service_name": None,
                 "quantity": None, "unit_price": None, "unit_type": None, "service_area": None}])
             output.append(offer)
             if is_generic_offer_scope(raw):
@@ -399,16 +426,16 @@ def normalize_purchase_offers(offers: list[dict], evidence: str | Mapping[str, A
             reviews.extend({**review, "offer_index": index} for review in semi_reviews)
             continue
         per_unit = infer_explicit_per_unit_price(raw) is not None or offer.get("price_model") == "per_unit"
-        if per_unit and re.search(r"\+\s*", raw):
+        if per_unit and re.search(JOIN_PLUS, raw):
             tail = re.sub(r"^.*?(?:(?:/\s*|\bper\s+)unit)\s+", "", raw, flags=re.I).strip(" :")
-            brand_parts = [part.strip() for part in re.split(r"\s*\+\s*", tail) if part.strip()] if tail else []
+            brand_parts = [part.strip() for part in re.split(JOIN_PLUS, tail) if part.strip()] if tail else []
             if len(brand_parts) < 2:
                 brand_parts = _split_choice_list(tail) if tail else []
             if len(brand_parts) >= 2:
                 for part in brand_parts:
                     item = {"item_name": part, "service_name": part, "quantity": None, "unit_price": None,
                             "unit_type": "unit", "service_area": None}
-                    branch = " | ".join(p for p in (part, raw) if p)
+                    branch = _join_branch(part, raw)
                     output.append({**offer, "source_offer_raw_text": raw, "offer_raw_text": branch,
                                    "purchase_type": "single", "is_package": False, "items": [item]})
                 continue
@@ -428,7 +455,7 @@ def normalize_purchase_offers(offers: list[dict], evidence: str | Mapping[str, A
                 item = deepcopy(candidates[0]) if len(candidates) == 1 else {
                     "item_name": part, "service_name": part, "quantity": None, "unit_price": None,
                     "unit_type": None, "service_area": None}
-                branch = " | ".join(p for p in (prefix, part, suffix) if p)
+                branch = _join_branch(prefix, part, suffix)
                 output.append({**offer, "source_offer_raw_text": raw, "offer_raw_text": branch,
                                "purchase_type": "single", "is_package": False, "items": [item]})
             continue
@@ -436,6 +463,9 @@ def normalize_purchase_offers(offers: list[dict], evidence: str | Mapping[str, A
         if item_split and (offer.get("purchase_type") == "independent_options" or choices):
             output.extend(item_split)
             continue
+        if offer.get("purchase_type") == "independent_options" and len(offer.get("items") or []) == 1:
+            # 只有一个 item、原文也没有并列选项时「互斥选项」标签不成立（LLM 有时把适用部位清单当成选项），按单项处理
+            offer = {**offer, "purchase_type": "single"}
         if len(offer.get("items") or []) > 1 and re.search(
                 r"\b(?:buy|purchase)\b.*\b(?:get|receive)\b.*\bfree\b", raw, re.I):
             offer.update(purchase_type="bundle", is_package=True)

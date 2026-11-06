@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,6 +26,35 @@ def test_ready_plan_is_written_as_a_pending_sql_file_with_digest_and_summary(tmp
     assert header[0] == "plan evt1" and header[1] == f"plan sha256 {receipt['plan_sha256']}"
     assert any(line.startswith("source_url:") for line in header) and any(line.startswith("operations:") for line in header)
     assert "do $pipeline$" in path.read_text()
+
+
+def test_chain_branches_are_rendered_into_one_pending_file(tmp_path):
+    from scripts.run_monitor_price_sync import combine_branch_plans
+
+    evidence_path = str(tmp_path / "sync/evt1/evidence.json")
+    first = ready_plan(evidence_path=evidence_path)
+    second = deepcopy(ready_plan(evidence_path=evidence_path))
+    second["source"]["business_id"] = 8
+    for group in ("promotions", "offers", "services"):
+        for row in second["before"][group]:
+            row["business_id"] = 8
+    combined = combine_branch_plans("https://clinic.example/specials", [first, second])
+    receipt = render_pending(combined, {}, tmp_path)
+    assert receipt["status"] == "pending_sql"
+    text = Path(receipt["sql_path"]).read_text()
+    assert text.count("do $pipeline$") == 2
+    assert "business_ids: [7, 8]" in read_header(Path(receipt["sql_path"]))
+
+
+def test_one_blocked_branch_holds_back_the_whole_page(tmp_path):
+    from scripts.run_monitor_price_sync import combine_branch_plans
+
+    evidence_path = str(tmp_path / "sync/evt1/evidence.json")
+    stale = ready_plan(evidence_path=evidence_path,
+                       prepared_at=(datetime.now(timezone.utc) - timedelta(hours=25)).isoformat())
+    combined = combine_branch_plans("https://clinic.example/specials", [stale, ready_plan(evidence_path=evidence_path)])
+    assert render_pending(combined, {}, tmp_path)["category"] == "evidence_expired_requires_review"
+    assert not pending_dir(tmp_path).exists()
 
 
 def test_policy_gates_return_review_without_a_file(tmp_path):

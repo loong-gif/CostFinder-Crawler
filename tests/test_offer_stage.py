@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from utils import offer_stage, pipeline_db
+from utils import offer_stage, offer_stage_spec, pipeline_db
 from utils.offer_schema import base_offer_schema, offer_schema, service_name_enum, with_service_enum
-from utils.offer_stage import (
-    BLANKET_CHECK_SQL, MEMBERSHIPS, PROMOTIONS, build_plan, candidates_from_payload, content_hash,
-    extract_source, fully_mapped, plan_offers, plan_source, reconcile_items, render_apply, snapshot_tables,
-    source_evidence,
-)
+from utils.offer_stage import build_plan, snapshot_tables
+from utils.offer_stage_extract import candidates_from_payload, extract_source
+from utils.offer_stage_reconcile import plan_offers, plan_source, reconcile_items
+from utils.offer_stage_spec import BLANKET_CHECK_SQL, MEMBERSHIPS, PROMOTIONS, content_hash, source_evidence
+from utils.offer_stage_sql import render_apply
 
 ENUM = ["Botox", "Dysport", "Dermal Filler", "Others"]
 NOW = datetime(2026, 10, 29, tzinfo=timezone.utc)
@@ -117,7 +117,7 @@ def test_gift_only_offers_are_filtered_and_do_not_block():
     candidates, rejected = candidates_from_payload(payload, PROMOTIONS, row, "\n".join(lines))
     assert [c["master"]["offer_raw_text"] for c in candidates] == ["Botox special $10/unit"]
     assert len(rejected) == 2 and all(not r["blocking"] for r in rejected)
-    assert {r["reason"] for r in rejected} <= offer_stage.BENIGN_REASONS
+    assert {r["reason"] for r in rejected} <= offer_stage_spec.BENIGN_REASONS
 
 
 def test_text_not_in_content_is_rejected():
@@ -276,37 +276,18 @@ def source_plan(offers, items, valid=frozenset(), payload_offers=None, raw="Boto
     return plan_source(PROMOTIONS, row, payload, raw, offers, items, set(valid))
 
 
-def test_new_unmapped_offer_keeps_is_offer_extracted_false():
+def test_new_unmapped_offer_is_planned_as_insert():
     plan = source_plan([], {})
-    assert plan["status"] == "ready" and plan["set_offer_extracted"] is False
+    assert plan["status"] == "ready" and [o["action"] for o in plan["offers"]] == ["insert"]
 
 
-def test_fully_mapped_existing_offer_sets_is_offer_extracted_true():
-    plan = source_plan([existing_offer(100, "Botox special $10/unit")], {100: [existing_item(500, 100, service_id=55)]}, {55})
-    assert plan["set_offer_extracted"] is True
-
-
-def test_blanket_only_source_sets_is_offer_extracted_true():
-    raw = "20% off all services"
-    offer = llm_offer(raw, discount_price=None, discount_percent=20, price_model="total")
-    plan = source_plan([], {}, payload_offers=[offer], raw=raw)
-    assert plan["set_offer_extracted"] is True and fully_mapped(plan["offers"])
-
-
-def test_gift_only_source_is_extracted_without_offers():
+def test_gift_only_source_plans_no_offers():
     raw = "Free gift with any visit"
     offer = llm_offer(raw, discount_price=None, price_model="total", items=[
         {"item_name": "Gift", "service_name": None, "quantity": None, "unit_price": None, "unit_type": None,
          "service_area": None}])
     plan = source_plan([], {}, payload_offers=[offer], raw=raw)
-    assert plan["offers"] == [] and plan["set_offer_extracted"] is True
-
-
-def test_ambiguity_keeps_is_offer_extracted_false():
-    offers = [existing_offer(100, "Botox special $10/unit"), existing_offer(101, "botox special $10 unit")]
-    items = {100: [existing_item(500, 100, service_id=55)], 101: [existing_item(501, 101, service_id=55)]}
-    plan = source_plan(offers, items, {55})
-    assert plan["set_offer_extracted"] is False
+    assert plan["offers"] == []
 
 
 def test_empty_extraction_with_active_offers_is_blocked():
@@ -330,7 +311,7 @@ def test_build_plan_uses_snapshot_and_calls_llm_once_per_source(tmp_path):
     plan = build_plan(snapshot, client, offer_schema(service_name_enum(snapshot["service_enum"])), tmp_path)
     assert client.calls == 1
     source = plan["sources"][0]
-    assert source["status"] == "ready" and source["set_offer_extracted"] is True
+    assert source["status"] == "ready"
     assert source["source_updated_at"] == NOW.isoformat()
     assert source["existing_state"] == {"100": NOW.isoformat()} and source["existing_item_ids"] == {"100": [500]}
     assert source["offers"][0]["action"] == "unchanged" and source["offers"][0]["items"][0]["service_id"] == 55
@@ -374,10 +355,10 @@ def ready_plan():
     raw = "Botox special $10/unit"
     offers = [existing_offer(100, raw), existing_offer(101, "Dysport $8/unit")]
     items = {100: [existing_item(500, 100, service_id=55)], 101: [existing_item(501, 101)]}
-    plan_row = promo_row([raw, "Dysport special $9/unit"])
-    payload = {"offers": [llm_offer(raw), llm_offer("Dysport special $9/unit", items=[
-        {"item_name": "Dysport", "service_name": "Dysport", "quantity": None, "unit_price": 9, "unit_type": "unit",
-         "service_area": None}], discount_price=9)]}
+    plan_row = promo_row([raw, "Dysport special just $90"])
+    payload = {"offers": [llm_offer(raw), llm_offer("Dysport special just $90", items=[
+        {"item_name": "Dysport", "service_name": "Dysport", "quantity": None, "unit_price": 90, "unit_type": None,
+         "service_area": None}], discount_price=90, price_model="total")]}
     source = plan_source(PROMOTIONS, plan_row, payload, source_evidence(PROMOTIONS, plan_row), offers, items, {55})
     return {"sources": [source]}, plan_row, offers, items
 
@@ -392,11 +373,14 @@ def test_apply_sql_is_single_do_block_with_freshness_checks_first():
     assert text.count("do $pipeline$") == 1 and text.rstrip().endswith("$pipeline$;")
     assert f"'{NOW.isoformat()}'::timestamptz" in text
     first_write = min(text.index(w) for w in ("update public.promo_offer_master", "insert into public.promo_offer_master"))
-    for check in ("stale_plan: clinic_promotions 7", "stale_plan: offers of", "stale_plan: items of offer 100", "stale_plan: offer 101 of"):
+    for check in ("stale_plan: clinic_promotions 7", "stale_plan: offers of", "stale_plan: offers [100, 101] of",
+                  "stale_plan: items of the offers of"):
         assert text.index(check) < first_write
     assert "for update;" in text and "promotion_id = 7" in text
-    # 源行与 offer 的 id/updated_at、item id 集合核对
-    assert "array_agg(offer_item_id order by offer_item_id)" in text and "'{500}'::int2[]::bigint[]" in text
+    # 源行与 offer 的 id/updated_at、item 归属各用一条语句核对
+    assert "array_agg(updated_at order by id)" in text and "::timestamptz[]" in text
+    assert "array_agg(offer_id || ':' || offer_item_id order by offer_id, offer_item_id)" in text
+    assert "'{100:500,101:501}'::text[]" in text
 
 
 def test_apply_sql_deactivates_before_insert_then_activates_after_items():
@@ -426,12 +410,53 @@ def test_apply_sql_runs_blanket_check_on_touched_offers_last():
     assert text.index("v_touched := v_touched ||") < text.index("blanket_check_failed")
 
 
-def test_apply_sql_marks_extracted_when_plan_says_so():
-    plan, *_ = ready_plan()
-    plan["sources"][0]["set_offer_extracted"] = True
-    text = render_apply(plan)
-    assert "update public.clinic_promotions set is_offer_extracted=true where promotion_id=7;" in text
-    assert "is_offer_extracted=true" not in rendered()
+def test_apply_sql_leaves_is_offer_extracted_to_the_trigger():
+    assert "is_offer_extracted" not in rendered()
+
+
+def test_branch_sources_with_identical_new_offers_are_written_in_one_loop():
+    raw = "40% off IPL Photofacial"
+    payload = {"offers": [llm_offer(raw, price_model="total", discount_price=None, discount_percent=40,
+                                    items=[{"item_name": "IPL Photofacial", "service_name": "IPL Photofacial",
+                                            "quantity": None, "unit_price": None, "unit_type": None,
+                                            "service_area": None}])]}
+    sources = []
+    for promotion_id, business_id in ((7, 3), (8, 4), (9, 5)):
+        row = {**promo_row([raw], promotion_id=promotion_id), "business_id": business_id}
+        sources.append(plan_source(PROMOTIONS, row, payload, source_evidence(PROMOTIONS, row), [], {}, set()))
+    # 第四个来源已有 offer，不参与合并，仍逐源写入
+    other = promo_row([raw], promotion_id=10)
+    sources.append(plan_source(PROMOTIONS, other, payload, source_evidence(PROMOTIONS, other),
+                               [existing_offer(100, raw, promotion_id=10)], {100: []}, set()))
+    text = render_apply(json.loads(offer_stage.dump_plan({"sources": sources})))
+    loop = text[text.index("for v_row in select value from jsonb_array_elements("):text.index("end loop;")]
+    for state in ('{"id": 7, "business": 3,', '{"id": 8, "business": 4,', '{"id": 9, "business": 5,'):
+        assert state in loop
+    assert loop.count("insert into public.promo_offer_master") == 1 and "v_business, v_source" in loop
+    assert "stale_plan: % % changed since planning" in loop and "(v_row->>'updated_at')::timestamptz" in loop
+    assert loop.index("for update;") < loop.index("insert into public.promo_offer_master")
+    assert "promotion_id = 10" in text[text.index("end loop;"):]
+    assert text.count("insert into public.promo_offer_master") == 1
+
+    # 名下已有不变 offer、只新增同一条 offer 的分店同样合并：循环内核对各自已有 offer 的 id、updated_at 与 item
+    extra = "Buy 2 Hydrafacials for $299"
+    payload2 = {"offers": payload["offers"] + [llm_offer(extra, price_model="total", discount_price=299, items=[
+        {"item_name": "Hydrafacial", "service_name": "Hydrafacial", "quantity": 2, "unit_price": None,
+         "unit_type": None, "service_area": None}])]}
+    grown = []
+    for promotion_id, business_id, offer_id in ((7, 3, 100), (8, 4, 101)):
+        row = {**promo_row([raw, extra], promotion_id=promotion_id), "business_id": business_id}
+        first = sources[0]["offers"][0]["master"]
+        existing = existing_offer(offer_id, raw, promotion_id=promotion_id, business_id=business_id,
+                                  **{k: first[k] for k in ("price_model", "discount_price", "discount_percent",
+                                                          "conditions", "is_new_customer_required", "is_package")})
+        grown.append(plan_source(PROMOTIONS, row, payload2, source_evidence(PROMOTIONS, row), [existing],
+                                 {offer_id: [existing_item(500 + offer_id, offer_id, name="IPL Photofacial",
+                                                           price=None)]}, set()))
+    assert [[a["action"] for a in s["offers"]] for s in grown] == [["unchanged", "insert"], ["unchanged", "insert"]]
+    text = render_apply(json.loads(offer_stage.dump_plan({"sources": grown})))
+    assert text.count("insert into public.promo_offer_master") == 1
+    assert '"offers": [100]' in text and '"items": ["100:600"]' in text and '"offers": [101]' in text
 
 
 def test_apply_sql_skips_blocked_sources():

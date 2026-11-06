@@ -88,6 +88,7 @@ def scrape_response_to_row_fields(response: Optional[Dict[str, Any]]) -> Dict[st
         "response_json": response,
         "markdown": markdown,
         "markdown_ocr": data.get("markdown_ocr"),
+        "linked_terms": data.get("linked_terms"),
         "html": data.get("html"),
         "raw_html": data.get("rawHtml") or data.get("raw_html"),
         "links": data.get("links"),

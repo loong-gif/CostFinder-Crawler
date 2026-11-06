@@ -21,6 +21,13 @@ for (const item of shard.items) {
     rec.title = await page.title();
     rec.result = await page.evaluate(async () => {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // 文字区域中心点上最上层的元素就是这段文字时，用户确实看得见（高度为 0 但溢出可见的容器不会误判为隐藏）
+      const pointVisible = (node, rect) => {
+        const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+        if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
+        const top = document.elementFromPoint(x, y);
+        return !!top && (node.parentElement.contains(top) || top.contains(node.parentElement));
+      };
       const clipped = (el) => {
         for (let c = el; c && c !== document.body; c = c.parentElement) {
           const s = getComputedStyle(c);
@@ -45,11 +52,12 @@ for (const item of shard.items) {
           const range = document.createRange();
           range.selectNodeContents(n);
           const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
-          if (!rects.length || clipped(p)) continue;
+          if (!rects.length || (clipped(p) && !pointVisible(n, rects[0]))) continue;
           out.push(t);
         }
         return out;
       };
+      window.__rrCollectText = collectText;
       const collectImages = () => {
         const seen = new Set();
         const out = [];
@@ -112,6 +120,35 @@ for (const item of shard.items) {
       addImages();
       return { controls: controls.length, clicked, texts: [...texts], images: [...images.values()].slice(0, 40) };
     });
+    // 页头的下拉菜单与通知卡片：悬停菜单项、点开通知开关后可见的文字同样计入（全站横幅优惠常只放在这里）
+    const reveal = await page.evaluate(() => {
+      const targets = [];
+      for (const li of document.querySelectorAll("header li")) {
+        if (!li.querySelector('ul, [class*="submenu"], [class*="mega"], [class*="dropdown"]')) continue;
+        const handle = li.firstElementChild;
+        const r = handle && handle.getBoundingClientRect();
+        if (r && r.width >= 4 && r.height >= 4) targets.push({ el: handle, click: false });
+      }
+      for (const el of document.querySelectorAll("header button, header [role=button]")) {
+        const label = `${el.getAttribute("aria-label") || ""} ${el.className}`;
+        const r = el.getBoundingClientRect();
+        if (/notif|bell|announce/i.test(label) && r.width >= 4 && r.height >= 4) targets.push({ el, click: true });
+      }
+      return targets.slice(0, 12).map((t, i) => { t.el.setAttribute("data-rr-reveal", String(i)); return { i, click: t.click }; });
+    });
+    const revealed = new Set();
+    for (const target of reveal) {
+      const selector = `[data-rr-reveal="${target.i}"]`;
+      try {
+        if (target.click) await page.click(selector, { timeout: 3000 });
+        else await page.hover(selector, { timeout: 3000 });
+      } catch (_) { continue; }
+      await page.waitForTimeout(800);
+      (await page.evaluate(() => window.__rrCollectText())).forEach((t) => revealed.add(t));
+      if (target.click) { try { await page.click(selector, { timeout: 3000 }); } catch (_) {} }
+    }
+    rec.result.revealed_controls = reveal.length;
+    rec.result.texts = [...new Set([...rec.result.texts, ...revealed])];
   } catch (e) {
     rec.error = String(e && e.message ? e.message : e).slice(0, 300);
   }

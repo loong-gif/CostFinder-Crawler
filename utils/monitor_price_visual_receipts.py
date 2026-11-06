@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from utils.monitor_price_store import atomic_json, read_json
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 
 def reviewed_browser(root: Path, artifact: dict, directory: Path) -> dict | None:

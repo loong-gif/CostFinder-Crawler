@@ -24,7 +24,7 @@ description: 当需要把新商家、新发现的促销页、会员页从发现�
 ### 2. 页面发现与渲染核验
 1. `discover-pages` → `review-pages` → `retry-pages`，得到 `state/discovery/monitor_decisions_final.json`。
 2. `render-shards` 生成分片；每个分片后台运行 `scripts/run_render_review_deep.sh shardN.json outN.json 90000`（展开折叠面板、标签页，滚动懒加载，收集可见文本与大图）。
-3. `render-verdicts` 对可见文本判定，未通过的页面对图片执行 tesseract OCR。
+3. `render-verdicts` 对可见文本判定，未通过的页面对图片执行 PaddleOCR（监控服务器上的 OCR 服务，经 SSH 隧道调用）。
 4. `finalize-pages` 应用结论（验证通过为 add，其余为 skip），断言不再有待确认项。
 
 ### 3. 抓取
@@ -46,14 +46,15 @@ description: 当需要把新商家、新发现的促销页、会员页从发现�
 `link-services` 按三步识别服务、补建 `clinic_services`（regular_price 为 NULL）、回填 `service_id`。
 
 ### 7. 收尾
-每批写入后运行 `batch-gate` 与 AGENTS.md 的 blanket-offer SQL，结果必须为零行，或把保留行记录在批次结果里。把 add 的 URL 合并进 `config/firecrawl_monitor_migration.json`，部署到服务器后确认 `write_enabled` 恢复为 false。
+每批写入后运行 `batch-gate` 与 AGENTS.md 的 blanket-offer SQL，结果必须为零行，或把保留行记录在批次结果里。监控队列由 `clinic_promotions` / `clinic_memberships` 的 source_url 动态生成，写入数据库的 add 页面下次监控运行时自动入队，不需要维护 URL 清单。
 
 ## 维护命令
 - `recrawl-sources`：已有促销/会员重新抓取。`read-sql --promotion-id N --plan-id N` → `read-snapshot` → `decisions --snapshot` 写 decisions.json，再 `COSTFINDER_RAW_DIR=<目录>/raw crawl --decisions <目录>/decisions.json`，之后按第 4、5 步执行。`extract-offers` 对原文互相包含的旧 offer 唯一匹配时沿用其 ID，同一候选包含的多条旧 offer 保留最长者、其余停用。
 - `read-snapshot <read.sql>`：用 Supabase CLI 只读执行 read.sql，写同目录 snapshot.json。
 - `merge-promotions`：按三步合并重复促销与 hub 子页面。
 - `enforce-promotion-rules`：按三步停用违反写入规则的现有启用促销；`plan --deactivate <promotion_id> <原因>`（可重复）只停用人工确认的促销，下游 offer 由触发器一并停用。
-- `crawl --engine lightpanda|ego --url <URL>`：自托管 Firecrawl 抓取失败的页面改由 Lightpanda 或本机 ego-browser 渲染后转 markdown；以 200 返回的拦截页记为失败。站点拦截自动化访问时，先由用户在 ego 中打开该站点，再用 `--engine ego` 抓取。
+- `crawl` 与 `discover-pages` 在 Firecrawl 拿到拦截页（metadata 状态码 ≥ 400 或拦截页标题）时自动改用 ego-lite 渲染；`crawl --engine lightpanda|ego --url <URL>` 指定引擎直接抓取。crawl 同时抓取卡片链接到的条款锚点段落（raw 的 `linked_terms`），extract-pages 由代码把段落追加到对应卡片，可见性清单一并渲染条款页。
+- 连锁分店共用一个网站时，discover-pages 只发现一次并复制给各分店，后续每家分店各写一行。per_unit offer 在 link-services 关联 service 之后，对同一批促销重新运行 `extract-offers`（按 `--promotion-id`）完成激活。`link-services read-sql --business-id N` 只处理指定商家。
 - `delete-offer-shells`：按三步删除没有 item、没有用户引用的停用 offer（门禁 I）。
 - `deactivate-expired`：生成停用过期促销的 apply.sql。
 - `monitor`、`quality`：已有促销的复查与数据质量审计；监控主机上运行时只把待执行 SQL 写入 `state/pending_sql/`。

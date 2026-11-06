@@ -1,5 +1,5 @@
 """Tests for clinic_services catalog price guards and offer item normalization."""
-from utils.extraction_persist import build_master_from_offer
+from utils.extraction_persist_pricing import build_master_from_offer
 from utils.extraction_repair import plan_offer_quality_repairs, plan_service_price_repairs
 from utils.service_price_guard import (
     derive_offer_item_pricing,

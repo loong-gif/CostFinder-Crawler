@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from utils.extraction_persist import persist_promo_offer
+from utils.extraction_persist_offer import persist_promo_offer
 from utils.membership_duplicate_check import (
     find_matching_membership_offer,
     no_material_term_conflict,
