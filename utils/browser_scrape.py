@@ -88,6 +88,9 @@ def ego_scrape(url: str) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         # 页面卡住（例如停在验证页）是该页面的抓取结果
         raise BrowserScrapeFailed("ego_timeout") from None
+    except subprocess.CalledProcessError as exc:
+        # 脚本在该页面上出错（导航失败、页面崩溃）是该页面的抓取结果，与 lightpanda 的导航失败同样处理
+        raise BrowserScrapeFailed(f"ego_script_failed: {(exc.stderr or '').strip()[-300:]}") from None
     # ego-browser 的 console 输出写到 stderr
     line = next(l for l in (done.stdout + done.stderr).splitlines() if l.startswith("EGO_SCRAPE "))
     info = json.loads(line[len("EGO_SCRAPE "):])

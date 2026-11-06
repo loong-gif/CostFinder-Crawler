@@ -19,11 +19,12 @@ from utils.promo_extraction import SYSTEM_PROMPT as PROMOTION_SYSTEM_PROMPT
 from utils.promo_extraction import comparison_key, llm_extract_promotions, merge_content_blocks, merge_promotion_items
 from utils.promotion_rules import PromotionRejected, check_promotion, today
 from utils.render_review import claim_anchors
-from utils.rendered_visibility_gate import filter_visible_promotion_content
+from utils.rendered_visibility_gate import filter_visible_promotion_content, image_claim_verified
+from utils.visibility_manifest import membership_fee_claim
 from utils.source_url import hub_url, is_hub_url, source_url_key
 
 PROMOTION_KINDS = {"promotion", "pricing", ""}
-MEMBERSHIP_TASK = """Extract every purchasable membership tier separately. For each tier, preserve the monthly fee and credit, included service choices and limits, gifts and frequency, discounts, duration, rollover, cancellation, exclusions, and eligibility. Copy each entitlement as a complete verbatim statement in benefits. Do not omit non-discount entitlements, borrow terms from another tier, infer content from missing images, or use an empty array when the source is incomplete."""
+MEMBERSHIP_TASK = """Extract every purchasable membership tier separately, using the plan name and fee exactly as shown; never invent, rename or combine a plan, and skip a tier whose name is not shown. For each tier, list the monthly fee and credit, included service choices and limits, gifts and frequency, discounts, duration, rollover, cancellation, exclusions, and eligibility, one fact per benefit. Rephrasing is allowed, but every service, price, percentage and quantity in a benefit must appear on the page for that tier. Do not join statements from different places on the page, borrow terms from another tier, add explanations, advice, inferences, computed values or placeholders, or infer content from missing images. Use null for benefits when the page states none for the tier."""
 SOURCE_REVIEW_TASK = """Classify this page as promotion, membership, service_price_list, article, about, mixed, or unknown. A price alone does not make a page a promotion. Return every membership plan and every source-stated entitlement, including credits, recurring services, gifts, discounts, rollover, term, cancellation, exclusions, and restrictions. For promotions, return each complete offer card as a source quote that binds its name, prices, discounts, quantities, and conditions. Put the exact card heading in title and all other exact commercial card lines in lines, without repeating the heading. Exclude review counts, ratings, navigation and checkout text. Exclude ordinary price listings without a source-stated discount, promotional claim or other offer condition. Quotes must be verbatim excerpts. If the page is mixed, classify its distinct regions."""
 SOURCE_REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -164,7 +165,7 @@ def _campaign_date(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
 
 
-def _iso(value: date | None) -> str | None:
+def _iso(value: date | datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
@@ -394,9 +395,14 @@ def _plan_promotions(pages: list[dict[str, Any]], *, scrapes, names, existing, l
         content = merge_content_blocks([block for member in members for block in member["blocks"]])
         start, end = _merged_dates(members)
         if (hub is not None or is_hub_url(target_url)) and old is not None:
-            # hub 行由多个子页面组成：本批重新抽取过的页面以新卡片为准，其余子页面的已有卡片与已知日期保留
-            content = [card for card in old["promotion_content"] or []
-                       if not _superseded(card, content, key, batch_pages[(business_id, key)])] + content
+            # hub 行由多个子页面组成：本批重新抽取过的页面以新卡片为准，其余子页面的已有卡片与已知日期保留。
+            # 保留的已有卡片同样清理链接与标记残留；有可见性清单时，只保留在本组渲染页面上可见的卡片。
+            kept = [merge_content_blocks([card.splitlines()])[0] for card in old["promotion_content"] or []
+                    if merge_content_blocks([card.splitlines()])
+                    and not _superseded(card, content, key, batch_pages[(business_id, key)])]
+            if manifest is not None:
+                kept = [card for card in kept if _visible_in_group(card, [m["url"] for m in members], manifest)]
+            content = [card for card in kept if card not in content] + content
             start = start or old["campaign_start_date"]
             end = end or old["campaign_end_date"]
         base ={"kind": "promotion", "business_id": business_id, "source_url": target_url,
@@ -428,9 +434,31 @@ def _plan_promotions(pages: list[dict[str, Any]], *, scrapes, names, existing, l
                 and old["campaign_start_date"] == start and old["campaign_end_date"] == end and old["is_active"])
         entries.append({**base, "action": "unchanged" if same else "update",
                         "reason": "identical" if same else "row_differs",
-                        "promotion_id": old["promotion_id"], "expected_updated_at": old["updated_at"].isoformat(),
+                        "promotion_id": old["promotion_id"], "expected_updated_at": _iso(old["updated_at"]),
                         "content_changed": list(old["promotion_content"] or []) != content})
     return entries
+
+
+def _visible_in_group(card: str, urls: list[str], manifest: Mapping[str, Any]) -> bool:
+    """卡片在本组某个渲染页面上已核验可见。"""
+    for url in urls:
+        page = _visibility_for(manifest, url) or {}
+        for result in page.get("claimResults") or []:
+            if result["claim"] == card and (result["status"] == "visible_match" or (
+                    result["status"] == "image_only" and image_claim_verified(card, result, page))):
+                return True
+    return False
+
+
+def _name_and_fee_visible(page: Mapping[str, Any], name: str, price: float) -> bool:
+    """可见性清单中方案名称与“名称 $费用”两条声明都已核验可见。"""
+    results = {c["claim"]: c for c in page.get("claimResults") or []}
+    for claim in (name, membership_fee_claim(name, price)):
+        result = results.get(claim)
+        if result is None or not (result["status"] == "visible_match" or (
+                result["status"] == "image_only" and image_claim_verified(claim, result, page))):
+            return False
+    return True
 
 
 def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, schema, cache_dir,
@@ -487,6 +515,13 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
                 entries.append(_rejection("membership", page["business_id"], page["url"], decision["reason"],
                                           membership_name=name, source_review=review, ocr_meta=ocr_meta))
                 continue
+            if manifest is not None and not _name_and_fee_visible(
+                    _visibility_for(manifest, page["url"]), name, decision["membership_price"]):
+                # 方案名称或费用在渲染页面上看不到：名称可能是编造的，或费用属于其他方案
+                entries.append(_rejection("membership", page["business_id"], page["url"],
+                                          "membership_name_or_fee_not_visible", membership_name=name,
+                                          membership_price=decision["membership_price"], source_review=review))
+                continue
             identity = (page["business_id"], key, name.casefold())
             candidate = {"kind": "membership", "business_id": page["business_id"], "source_url": source_url,
                          "target_key": {"business_id": page["business_id"], "source_url_key": key,
@@ -541,7 +576,7 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
                 and (entry["benefits"] is None or old["benefits"] == entry["benefits"]))
         entries.append({**entry, "action": "unchanged" if same else "update",
                         "reason": "identical" if same else "row_differs", "plan_id": old["plan_id"],
-                        "expected_updated_at": old["updated_at"].isoformat()})
+                        "expected_updated_at": _iso(old["updated_at"])})
     return entries
 
 
@@ -586,6 +621,10 @@ def build_plan(pages: list[dict[str, Any]], *, scrapes: Mapping[str, Mapping[str
         evidence_key = comparison_key(_page_evidence(row))
         review = verified_source_review(_source_review(page, row, llm=llm, cache_dir=cache_dir), evidence_key)
         page = {**page, "_source_review": review, "_evidence_key": evidence_key}
+        if page["kind"] == "membership":
+            # 会员页面只写会员表，页面上的促销卡片不进促销表
+            membership_pages.append(page)
+            continue
         if review["page_type"] in {"promotion", "mixed"}:
             promotion_pages.append(page)
         if review["page_type"] in {"membership", "mixed"}:
@@ -619,14 +658,15 @@ def _row_where(entry: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def _expect_target_row(entry: Mapping[str, Any], label: str) -> list[str]:
-    """核对目标行：计划时不存在的行仍不存在，存在的行 updated_at 与计划一致（并加行锁）。"""
+    """核对目标行：计划时不存在的行仍不存在，存在的行 updated_at 与计划一致（并加行锁）。
+    旧数据中 updated_at 可能为 NULL，按 NULL 比较。"""
     table, where = _row_where(entry)
     failure = f"raise exception {literal('stale_plan: ' + label)};"
-    expected = entry.get("expected_updated_at")
-    if expected is None:
+    if entry["action"] == "insert":
         return [f"perform 1 from public.{table} where {where};", f"if found then {failure} end if;"]
     return [f"select updated_at into v_updated from public.{table} where {where} for update;",
-            render("if not found or v_updated is distinct from {ts}::timestamptz then ", ts=expected) + failure + " end if;"]
+            render("if not found or v_updated is distinct from {ts}::timestamptz then ",
+                   ts=entry["expected_updated_at"]) + failure + " end if;"]
 
 
 def _entry_statements(entry: Mapping[str, Any]) -> list[str]:

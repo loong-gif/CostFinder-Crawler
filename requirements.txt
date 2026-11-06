@@ -8,6 +8,7 @@ playwright>=1.59.0,<2
 python-dateutil>=2.9,<3
 pandas==2.2.0
 requests>=2.31.0,<3
+snowballstemmer>=2.2,<4
 
 # OCR 图片识别需要系统安装 Tesseract CLI
 

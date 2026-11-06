@@ -38,6 +38,10 @@ Database changes may add triggers, functions, CHECK constraints and indexes to e
 | Rule | Enforced by |
 |---|---|
 | Run the test suite before handing off | `.venv/bin/python3 -m pytest tests` |
-| `promotion_content` is verbatim source text; a struck original price stays `~~$135~~` | strikethrough cases in `tests/test_page_extraction.py` |
+| `promotion_content` and membership `benefits` must be traceable to the source page: every amount and percentage appears on the page and the wording can be located there; rephrasing is allowed. A struck original price keeps its `~~$135~~` marker | `utils.promo_extraction.traceable` and `utils.render_review.claim_matches` at write time; tests in `tests/test_page_extraction.py` and `tests/test_visibility_manifest.py` |
+| A membership is written only when its plan name and "name $fee" are visible in the ego-lite render; benefits are null when the page states none (never placeholders or inferences) | `tests/test_page_extraction.py::test_membership_name_or_fee_not_visible_in_the_render_is_rejected` |
+| A page discovered as a membership page (`kind: membership`) writes only `clinic_memberships`, never `clinic_promotions`, even when its source review is `mixed` | `tests/test_page_extraction.py::test_membership_page_with_promotion_cards_writes_only_memberships` |
+| Stored promotion content carries no links, image markup or URLs | `tests/test_page_extraction.py::test_link_residue_is_not_stored_as_promotion_content` |
+| Data QA of promotions, memberships and offers verifies each claim in an ego-lite render as described in `docs/rendered_visibility_qa.md` (`visibility-manifest` + `scripts/run_render_review_deep.sh`); crawled Markdown and LLM judgement are not visibility evidence | `docs/rendered_visibility_qa.md`; this table |
 | Image OCR runs only through `utils.paddle_ocr_markdown.ocr_lines` | `tests/test_image_ocr.py::test_image_ocr_has_a_single_entry_point` |
 | An LLM answer that fails validation rejects its page, never the whole plan, and stays cached as returned | `tests/test_page_extraction.py::test_paraphrased_source_review_rejects_only_its_page_and_is_not_requested_again` |

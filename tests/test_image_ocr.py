@@ -13,6 +13,12 @@ from utils.paddle_ocr_markdown import ocr_lines
 from utils.rendered_visibility_gate import filter_visible_membership_benefits
 from utils.visibility_manifest import build_manifest, build_shard
 
+# 正常渲染页面的导航与正文，长度足以判断页面已渲染
+PAGE_CHROME = ["Home", "About Us", "Services", "Book Now", "Contact",
+               "Our board-certified injectors have served the community for over ten years with natural results.",
+               "Call us today to schedule a complimentary consultation with one of our aesthetic specialists.",
+               "Hours: Monday to Friday 9am - 6pm, Saturday 10am - 4pm. Located downtown near the main square."]
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -63,7 +69,8 @@ def test_benefit_only_in_an_image_passes_the_membership_gate(tmp_path):
     plan = {"entries": [{"kind": "membership", "action": "insert", "source_url": page_url, "membership_name": "VIP Membership",
                          "benefits": ["One facial per month $99"]}]}
     render = {"results": [{"url": page_url, "checked_at": "2026-11-05T00:00:00Z",
-                           "result": {"texts": ["VIP Membership", "Join today"], "images": [{"url": image_url}]}}]}
+                           "result": {"texts": [*PAGE_CHROME, "VIP Membership", "Join today"],
+                                      "images": [{"url": image_url}]}}]}
     try:
         manifest = build_manifest(build_shard(plan, "run"), render)
     finally:

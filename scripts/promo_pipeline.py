@@ -58,6 +58,8 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
                          "apply-sql via MCP"),
     "enforce-promotion-rules": ("scripts.enforce_promotion_rules",
                                 "deactivate existing active promotions that break the write rules", "apply-sql via MCP"),
+    "clear-membership-benefits": ("scripts.clear_membership_benefits",
+                                  "set unverified membership benefits to NULL (unknown)", "apply-sql via MCP"),
     "delete-offer-shells": ("scripts.delete_offer_shells",
                             "delete inactive offers without items or user references (gate I)", "apply-sql via MCP"),
     "deactivate-expired": ("scripts.deactivate_expired", "daily: deactivate promotions past campaign_end_date",

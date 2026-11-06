@@ -2,6 +2,8 @@ from __future__ import annotations
 import math
 import re
 from typing import Any, Mapping
+from utils.promo_extraction import traceable
+from utils.render_review import claim_matches
 from utils.rendered_visibility_gate import filter_visible_membership_benefits, normalize_claim
 
 
@@ -62,7 +64,8 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     verified = None
     if isinstance(benefits, list) and benefits:
         values = [str(value.get('desc') or '') if isinstance(value, dict) else str(value) for value in benefits]
-        values = [value.strip() for value in values if value.strip() and normalize_claim(value) in normalize_claim(evidence)]
+        # 允许改写，但每条权益必须能在页面上追溯（金额、百分比与数量都在页面上）
+        values = [value.strip() for value in values if value.strip() and traceable(value, evidence)]
         gate = filter_visible_membership_benefits(values, rendered_visibility)
         if gate.accepted:
             verified = list(gate.content)
@@ -74,14 +77,12 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     fee_supported = (bool(name) and not isinstance(price, bool) and math.isfinite(fee) and fee > 0
                      and _visible_named_fee(name, amount, evidence, quote, rendered_visibility))
     # 来源清单独立于抽取结果，避免只验证模型已经输出的权益。
-    normalized_benefits = [normalize_claim(value) for value in verified or []]
-    normalized_source_claims = [normalize_claim(claim) for claim in source_claims or []]
+    # 来源清单中的每条权益都要有对应的抽取权益，每条抽取权益也要出自来源清单（允许改写）
     missing_claims = [claim for claim in source_claims or []
-                      if not normalize_claim(claim)
-                      or normalize_claim(claim) not in normalize_claim(evidence)
-                      or normalize_claim(claim) not in normalized_benefits]
+                      if not normalize_claim(claim) or not traceable(claim, evidence)
+                      or not claim_matches({'line': claim}, verified or [])]
     missing_claims.extend(value for value in verified or []
-                          if normalize_claim(value) not in normalized_source_claims)
+                          if not claim_matches({'line': value}, source_claims or []))
     complete = (bool(verified) and len(verified) == len(benefits or [])
                 and bool(source_claims) and not missing_claims
                 and ocr_complete

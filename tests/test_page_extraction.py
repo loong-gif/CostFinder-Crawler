@@ -407,6 +407,17 @@ def test_duplicate_plan_name_in_source_inventory_requires_review(tmp_path):
     assert (row["action"], row["reason"]) == ("rejected", "ambiguous_membership_source_inventory")
 
 
+def test_membership_page_with_promotion_cards_writes_only_memberships(tmp_path):
+    url = "https://glow.example/memberships"
+    md = "VIP Membership $199 per month\nBotox Bonus\nSave 20% on Botox."
+    review = {**membership_review(("VIP Membership", [])), "page_type": "mixed",
+              "promotion_quotes": [{"title": "Botox Bonus", "lines": ["Save 20% on Botox."]}]}
+    llm = FakeLLM({url: {"explanation": "x", "memberships": [membership_item("VIP Membership", 199)],
+                         "promotions": [promo_item("Botox Bonus", "Save 20% on Botox.")]}}, {url: review})
+    plan = plan_for([page(url, "membership")], [scrape(url, md, "Members")], llm, tmp_path)
+    assert [e["kind"] for e in plan["entries"]] == ["membership"]
+
+
 def test_membership_missing_from_source_inventory_is_written_without_benefits(tmp_path):
     url = "https://glow.example/membership"
     md = "VIP Membership $199 per month\nOne facial monthly"
@@ -426,7 +437,7 @@ def test_paraphrased_membership_claim_makes_the_benefit_inventory_incomplete(tmp
     review = membership_review(("VIP", ["One facial monthly", "Two free peels"]))
     manifest = {url: {"status": "page_accessible", "complete": True, "claimResults": [
         {"recordType": "membership", "claim": claim, "status": "visible_match"}
-        for claim in ("VIP", "One facial monthly")]}}
+        for claim in ("VIP", "VIP $199", "One facial monthly")]}}
     plan = plan_for([page(url, "membership")], [scrape(url, md, "Members")], membership_llm(url, [item], review),
                     tmp_path, manifest=manifest)
     row = entry_for(plan, kind="membership")
@@ -440,6 +451,38 @@ def test_paraphrased_membership_claim_makes_the_benefit_inventory_incomplete(tmp
     verified = plan_for([page(url, "membership")], [scrape(url, md, "Members", fingerprint="c")],
                         membership_llm(url, [item], complete), tmp_path, manifest=manifest)
     assert entry_for(verified, kind="membership")["benefits"] == ["One facial monthly"]
+
+
+def test_membership_name_or_fee_not_visible_in_the_render_is_rejected(tmp_path):
+    url = "https://glow.example/membership"
+    md = "Founders Beauty Bank $99 per month\nOne facial monthly"
+    item = {**membership_item("Founders Beauty Bank", 99), "benefits": ["One facial monthly"]}
+    review = membership_review(("Founders Beauty Bank", ["One facial monthly"]))
+    # 渲染页面上只看到权益，方案名称与费用都不可见
+    manifest = {url: {"status": "page_accessible", "complete": False, "claimResults": [
+        {"recordType": "membership", "claim": "One facial monthly", "status": "visible_match"}]}}
+    plan = plan_for([page(url, "membership")], [scrape(url, md, "Members")], membership_llm(url, [item], review),
+                    tmp_path, manifest=manifest)
+    row = entry_for(plan, kind="membership")
+    assert (row["action"], row["reason"]) == ("rejected", "membership_name_or_fee_not_visible")
+
+
+def test_rephrased_benefit_is_kept_and_a_benefit_with_a_price_not_on_the_page_is_dropped(tmp_path):
+    from utils.membership_evidence import prepare_membership_write
+
+    evidence = "VIP $199 per month\nOne complimentary facial each month\n20% off all skincare"
+    item = {"membership_name": "VIP", "membership_price": 199,
+            "benefits": ["One free facial every month", "20% off skincare products", "$50 off any filler"]}
+    rendered = {"status": "page_accessible", "claimResults": [
+        {"recordType": "membership", "claim": claim, "status": "visible_match"} for claim in item["benefits"]]}
+    decision = prepare_membership_write(item, evidence, rendered)
+    assert decision["accepted"] and decision["verified_benefits"] == ["One free facial every month",
+                                                                      "20% off skincare products"]
+
+
+def test_link_residue_is_not_stored_as_promotion_content():
+    assert merge_content_blocks([["! Juvederm $75 off 1st syringe (https://oubeauty.com/juvederm-special/)",
+                                  "Save now https://oubeauty.com/book"]]) == ["Juvederm $75 off 1st syringe\nSave now"]
 
 
 def test_membership_fee_not_supported_is_rejected(tmp_path):
@@ -499,7 +542,8 @@ def test_render_apply_checks_updated_at_for_existing_rows_and_memberships(tmp_pa
     mold = {"plan_id": 3, "membership_name": "Glow Club", "membership_price": 80.0, "billing_period": "monthly",
             "minimum_commitment_months": None, "benefits": None, "updated_at": UPDATED_AT}
     mstate = {**EMPTY_STATE, "memberships": {(BUSINESS, "glow.example/membership", "glow club"): mold}}
-    mvisible = {"status": "page_accessible", "claimResults": []}
+    mvisible = {"status": "page_accessible", "claimResults": [
+        {"recordType": "membership", "claim": claim, "status": "visible_match"} for claim in ("Glow Club", "Glow Club $99")]}
     mllm = membership_llm(murl, [membership_item("Glow Club", 99)], membership_review(("Glow Club", [])))
     mplan = plan_for([page(murl, "membership")], [scrape(murl, "Glow Club $99 per month\n", "Members")], mllm, tmp_path,
                      manifest={murl: mvisible}, state=mstate)
