@@ -202,11 +202,20 @@ class SelfHostedFirecrawl:
         if api_key:
             self.session.headers["Authorization"] = f"Bearer {api_key}"
 
-    def scrape(self, url: str, formats: tuple[str, ...] = ("markdown",)) -> dict[str, Any]:
-        response = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout,
-                                     json={"url": url, "formats": list(formats), "onlyMainContent": True})
-        response.raise_for_status()
-        return response.json()["data"]
+    def scrape(self, url: str, formats: tuple[str, ...] = ("markdown",), *,
+               only_main_content: bool = True) -> dict[str, Any]:
+        """先 fastMode（只走 HTTP fetch 引擎，几秒完成）；失败时去掉 fastMode 重新请求，由浏览器引擎抓取。
+
+        默认请求先等浏览器引擎最多 30 秒才退回 fetch；fastMode 下 fetch 被站点拦截时 Firecrawl 不会改用浏览器，
+        直接返回错误状态，所以浏览器路径只在 fastMode 失败后调用。连接错误与超时照常抛出。
+        """
+        body = {"url": url, "formats": list(formats), "onlyMainContent": only_main_content}
+        fast = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout, json={**body, "fastMode": True})
+        if fast.ok:
+            return fast.json()["data"]
+        browser = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout, json=body)
+        browser.raise_for_status()
+        return browser.json()["data"]
 
 
 def self_hosted_firecrawl(*, project_root: Path | None = None) -> SelfHostedFirecrawl:

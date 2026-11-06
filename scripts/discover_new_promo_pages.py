@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from dotenv import load_dotenv  # noqa: E402
 
+from utils.firecrawl_client import SelfHostedFirecrawl  # noqa: E402
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
 from utils.promo_page_discovery import (  # noqa: E402
     assess_offer_page,
@@ -145,6 +146,8 @@ class Firecrawl:
         self.timeout = timeout
         self.session = requests.Session()
         self.session.trust_env = False
+        # 单页抓取统一经 SelfHostedFirecrawl：先 fastMode，失败再走浏览器
+        self.pages = SelfHostedFirecrawl(api_url, api_key, timeout)
 
     def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         response = self.session.post(f"{self.api_url}{path}", headers=self.headers, json=body, timeout=self.timeout)
@@ -183,12 +186,11 @@ class Firecrawl:
         return []
 
     def links(self, url: str) -> List[str]:
-        payload = self._post("/v1/scrape", {"url": url, "formats": ["links"], "onlyMainContent": False})
-        return [str(link) for link in (payload.get("data") or {}).get("links") or []]
+        data = self.pages.scrape(url, ("links",), only_main_content=False)
+        return [str(link) for link in data.get("links") or []]
 
     def scrape(self, url: str) -> Dict[str, str]:
-        payload = self._post("/v1/scrape", {"url": url, "formats": ["markdown", "rawHtml"], "onlyMainContent": False})
-        data = payload.get("data") or {}
+        data = self.pages.scrape(url, ("markdown", "rawHtml"), only_main_content=False)
         return {"markdown": str(data.get("markdown") or ""), "rawHtml": str(data.get("rawHtml") or "")}
 
 
