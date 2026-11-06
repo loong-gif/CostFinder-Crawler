@@ -15,7 +15,7 @@ For any matching row that is not intentionally retained, set `promo_offer_items.
 
 ## Monitor synchronization policy
 
-For Firecrawl promotion synchronization, a missing year or unresolved service mapping is not a write blocker. Store unknown campaign dates and service IDs as NULL; retain evidenced item names, prices, quantities and conditions. Preserve a known valid service mapping and existing Offer/Item IDs when the match is unique. Keep `is_offer_extracted=false` while service mapping remains incomplete. Reuse persisted Ego Lite verification for the capture it actually reviewed, keeping its original timestamp; later captures require current visibility evidence. Source/Offer identity ambiguity, contradictory price evidence and manual protections still require review.
+For Firecrawl promotion synchronization, a missing year or unresolved service mapping is not a write blocker. Store unknown campaign dates and service IDs as NULL; retain evidenced item names, prices, quantities and conditions. Preserve a known valid service mapping and existing Offer/Item IDs when the match is unique. `is_offer_extracted` is derived by the database trigger `trg_sync_is_offer_extracted` on `promo_offer_master` (true when a row with the matching `promotion_id` / `membership_plan_id` exists, false otherwise); service mapping completeness does not affect it. Reuse persisted Ego Lite verification for the capture it actually reviewed, keeping its original timestamp; later captures require current visibility evidence. Source/Offer identity ambiguity, contradictory price evidence and manual protections still require review.
 
 ## Standard pipeline
 
@@ -43,5 +43,12 @@ Database changes may add triggers, functions, CHECK constraints and indexes to e
 | A page discovered as a membership page (`kind: membership`) writes only `clinic_memberships`, never `clinic_promotions`, even when its source review is `mixed` | `tests/test_page_extraction.py::test_membership_page_with_promotion_cards_writes_only_memberships` |
 | Stored promotion content carries no links, image markup or URLs | `tests/test_page_extraction.py::test_link_residue_is_not_stored_as_promotion_content` |
 | Data QA of promotions, memberships and offers verifies each claim in an ego-lite render as described in `docs/rendered_visibility_qa.md` (`visibility-manifest` + `scripts/run_render_review_deep.sh`); crawled Markdown and LLM judgement are not visibility evidence | `docs/rendered_visibility_qa.md`; this table |
+| `is_offer_extracted` equals "an offer row exists for the promotion / membership" | Trigger `trg_sync_is_offer_extracted` (`supabase/migrations/20261106000000_sync_is_offer_extracted.sql`) |
+| An offer is written only when its text is a complete statement about a service or product: flattened table fragments (unbalanced parentheses, a `\|` part starting with and/or/including/excluding), membership prepay terms, gift card purchases and discounts on events are rejected | `utils.offer_scope_filter.non_promotable_reason` called from `utils.offer_stage.candidates_from_payload`; tests in `tests/test_offer_extraction_fixes.py` |
 | Image OCR runs only through `utils.paddle_ocr_markdown.ocr_lines` | `tests/test_image_ocr.py::test_image_ocr_has_a_single_entry_point` |
 | An LLM answer that fails validation rejects its page, never the whole plan, and stays cached as returned | `tests/test_page_extraction.py::test_paraphrased_source_review_rejects_only_its_page_and_is_not_requested_again` |
+
+## Working in this repository
+
+- When the pre-commit hook rejects a commit for file size (over 20,000 bytes, about 5,000 tokens), split the named file by feature according to the error message, then commit again.
+- Before writing a new function or rule, search the project for an existing one and reuse it.

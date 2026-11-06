@@ -2,7 +2,7 @@
 
 This document describes CostFinder's active Supabase data model and the production ingestion path that populates it. It was verified against the live `costfinder` project on 2026-07-30.
 
-The live database is the source of truth for field names and foreign keys. [`schema/live_schema_snapshot.json`](../schema/live_schema_snapshot.json) is the checked-in repository contract, but it can lag a live schema change; refresh it alongside future database changes rather than using it to override verified live facts. Historical schema material under `config/sql/archive/` and `docs/superpowers/` is context only and must not be executed as the current schema.
+The live database is the source of truth for field names and foreign keys. [`schema/live_schema_snapshot.json`](../schema/live_schema_snapshot.json) is the checked-in repository contract, but it can lag a live schema change; refresh it alongside future database changes rather than using it to override verified live facts. Historical schema material under `config/sql/archive/` is context only and must not be executed as the current schema.
 
 ## Core relationships
 
