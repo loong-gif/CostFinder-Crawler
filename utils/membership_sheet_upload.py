@@ -107,14 +107,15 @@ def build_plan(rows: list[Mapping[str, Any]], snapshot: Mapping[str, list[Mappin
     rejected: list[dict[str, Any]] = []
     seen: set[tuple[int, str, str]] = set()
     for row in rows:
-        key = identity(row["business_id"], row["source_url"], row["membership_name"])
-        if key in existing:
-            continue
         entry, reason = screen_row(row, businesses)
         if entry is None:
             rejected.append({"sheet_row": row["sheet_row"], "membership_name": row.get("membership_name"),
                              "source_url": row.get("source_url"), "reason": reason})
-        elif key in seen:
+            continue
+        key = identity(entry["business_id"], entry["source_url"], entry["membership_name"])
+        if key in existing:
+            continue
+        if key in seen:
             rejected.append({"sheet_row": row["sheet_row"], "membership_name": entry["membership_name"],
                              "source_url": entry["source_url"], "reason": "duplicate_in_sheet"})
         else:

@@ -37,7 +37,10 @@ def match_master(
     host = website_host(place.get("website"))
     if host:
         same_host = [m for m in unlinked if website_host(m.get("website")) == host]
-        if len(same_host) == 1 and place_hosts.get(host, 0) == 1:
+        # 同一网站、不同城市的是连锁品牌的另一家分店，不能按网站把这个地点挂到它上面
+        city = str(place.get("city") or "").strip().casefold()
+        if (len(same_host) == 1 and place_hosts.get(host, 0) == 1
+                and str(same_host[0].get("city") or "").strip().casefold() == city):
             return same_host[0], "host"
     key = _name_key(place.get("name"), place.get("city"))
     if key:

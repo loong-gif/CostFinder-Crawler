@@ -143,7 +143,8 @@ def test_unmapped_existing_offer_price_change_preserves_offer_and_item_ids():
     assert not any(op["action"] == "insert" for op in plan["operations"])
     assert _operation(plan, "promo_offer_master", 4)["values"]["discount_price"] == 400
     assert _operation(plan, "promo_offer_items", 5)["values"]["unit_price"] == 8
-    assert _operation(plan, "clinic_promotions", 3)["values"]["is_offer_extracted"] is False
+    assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
+               if op["table"] == "clinic_promotions")
 
 
 def test_new_evidenced_offer_needs_neither_year_nor_catalogue_mapping():

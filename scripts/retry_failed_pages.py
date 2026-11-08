@@ -33,7 +33,8 @@ from utils.url_safety import assert_safe_crawl_entry_url  # noqa: E402
 
 
 def collect_failed(paths: Iterable[Path]) -> Dict[str, Dict[str, Any]]:
-    """Unique failed URLs (with their business and original sources), minus URLs that later succeeded."""
+    """Unique failed URLs (with every business that failed on them and the original sources), minus URLs that
+    later succeeded. 连锁分店共用同一网站时同一网址只重试一次，结果写给每家分店。"""
     failed: Dict[str, Dict[str, Any]] = {}
     good: set = set()
     for path in paths:
@@ -42,11 +43,13 @@ def collect_failed(paths: Iterable[Path]) -> Dict[str, Dict[str, Any]]:
                 url = page["url"]
                 if page.get("status") == "scrape_failed":
                     record = failed.setdefault(url, {
-                        "business_id": business["business_id"], "name": business.get("name"),
-                        "city": business.get("city"), "website": business.get("website"),
-                        "kind_hint": page.get("kind_hint") or "promotion", "sources": [], "title": page.get("title", ""),
-                        "hop": page.get("hop", 0), "via": page.get("via"), "error": page.get("error"),
+                        "businesses": [], "kind_hint": page.get("kind_hint") or "promotion", "sources": [],
+                        "title": page.get("title", ""), "hop": page.get("hop", 0), "via": page.get("via"),
+                        "error": page.get("error"),
                     })
+                    if business["business_id"] not in {b["business_id"] for b in record["businesses"]}:
+                        record["businesses"].append({key: business.get(key) for key in
+                                                     ("business_id", "name", "city", "website")})
                     for source in page.get("sources") or []:
                         if source not in record["sources"]:
                             record["sources"].append(source)
@@ -119,10 +122,9 @@ def main() -> int:
 
     businesses: Dict[int, Dict[str, Any]] = {}
     for record, page in pages:
-        entry = businesses.setdefault(record["business_id"], {
-            "business_id": record["business_id"], "name": record["name"], "city": record["city"],
-            "website": record["website"], "pages": []})
-        entry["pages"].append(page)
+        for business in record["businesses"]:
+            entry = businesses.setdefault(business["business_id"], {**business, "pages": []})
+            entry["pages"].append(page)
     counts = {s: sum(1 for _, p in pages if p["status"] == s)
               for s in ("valid", "needs_review", "rejected", "scrape_failed")}
     summary = {"urls": len(items), **counts,

@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from utils.page_title import fetch_page_title
+from utils.ego_browser import fetch_page_title
 from utils.pipeline_db import load_snapshot, snapshot_query, write_text
 from utils.pipeline_run import PROJECT_ROOT
 from utils.promotion_merge import SNAPSHOT_TABLES, build_plan, dump_plan, render_apply, verify_applied

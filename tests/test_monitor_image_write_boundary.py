@@ -22,8 +22,7 @@ def test_shadow_keeps_parent_fields_and_image_siblings_while_text_price_updates(
     evidence=_evidence([raw],complete=False,image_policy={'version':1,'depends_on_images':False,'hold_parent_fields':True})
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan['status']=='ready'
-    parent=next(op for op in plan['operations'] if op['table']=='clinic_promotions')
-    assert parent['values']=={'is_offer_extracted':False}
+    assert not any(op['table']=='clinic_promotions' for op in plan['operations'])
     sql=render_apply(plan,{})
     updates=[line for line in sql.splitlines() if line.strip().startswith('update public.')]
     assert updates and not any('where id = 99' in line or 'offer_item_id = 98' in line for line in updates)
@@ -128,7 +127,7 @@ def test_shadow_images_allow_new_independent_text_parent_without_reactivating_hi
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan['status']=='ready',plan['review']
     parent=next(op for op in plan['operations'] if op['table']=='clinic_promotions')
-    assert parent['action']=='insert' and parent['values']['is_offer_extracted'] is False
+    assert parent['action']=='insert' and 'is_offer_extracted' not in parent['values']
     assert all(op['action']=='insert' for op in plan['operations'])
 
 
@@ -170,14 +169,13 @@ def test_firecrawl_failure_falls_back_to_complete_pure_image_page(tmp_path,monke
     assert len(list((tmp_path/'events').glob('*.json')))==1
 
 
-def test_flag_only_change_and_independent_text_offer_preserve_protected_image_sibling(tmp_path):
+def test_independent_text_offer_preserves_protected_image_sibling(tmp_path):
     data=writer_state()
     sibling=deepcopy(data['offers'][0]);sibling.update(id=21,offer_raw_text='Other image offer $100')
     data['offers'].append(sibling)
     item=deepcopy(data['items'][0]);item.update(offer_item_id=31,offer_id=21,item_name='Other')
     data['items'].append(item)
     plan=rest_plan(data)
-    plan['operations'].append({'table':'clinic_promotions','action':'update','id':10,'values':{'is_offer_extracted':False}})
     plan['image_policy']={'version':1,'depends_on_images':False,'hold_parent_fields':True}
     receipt=render_pending(plan,{'offer_ids':[21]},tmp_path)
     assert receipt['status']=='pending_sql',receipt

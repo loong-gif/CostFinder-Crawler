@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
+import pytest
+
 from page_extraction_support import (
     BOTOX,
     BOTOX_PAGE,
@@ -54,6 +60,86 @@ def test_card_missing_from_the_source_review_is_not_written(tmp_path):
     row = entry_for(plan, kind="promotion")
     assert (row["action"], row["content"]) == ("insert", [BOTOX])
     assert row["source_reviews"][0]["cards_not_in_source_review"] == ["Referral Bonus"]
+
+
+def test_a_card_listed_twice_on_the_page_is_one_card():
+    from utils.page_extraction_source_review import _pair_with_source_cards
+
+    # 页面重复布局复用 OU Beauty 缓存中的完整真实卡片，不新增商业文本。
+    fixture_path = Path(__file__).parent / "fixtures/page_extraction/oubeauty_alchemy43_source_review.json"
+    fixture = json.loads(fixture_path.read_text())["oubeauty_specials"]
+    quotes = fixture["promotion_quotes"] * 2
+    blocks = [block for block in fixture["blocks"] for _ in range(2)]
+    confirmed, used = _pair_with_source_cards(blocks, quotes)
+    assert confirmed == [0, 2] and used == {0, 1, 2, 3}
+
+
+def test_cached_los_angeles_cards_with_the_same_price_keep_their_service_names():
+    from utils.page_extraction_source_review import _pair_with_source_cards
+
+    # OU Beauty 页面缓存：source-review-508d...d9c8e82943280852 与 promotion-508d...79c36df40a119b76。
+    # 两张真实卡片分别是 Juvederm 和 Restylane，价格都为 $395。
+    fixture_path = Path(__file__).parent / "fixtures/page_extraction/oubeauty_alchemy43_source_review.json"
+    fixture = json.loads(fixture_path.read_text())["oubeauty_specials"]
+    assert _pair_with_source_cards(fixture["blocks"], fixture["promotion_quotes"]) == ([0, 1], {0, 1})
+
+
+def test_cached_alchemy43_rf_cards_with_different_content_are_not_merged():
+    from utils.page_extraction_source_review import _pair_with_source_cards
+
+    # Alchemy 43 /services 页面缓存：source-review-549b...bf8a36cb45 与 promotion-549b...5a9c949c4f2806ee。
+    fixture_path = Path(__file__).parent / "fixtures/page_extraction/oubeauty_alchemy43_source_review.json"
+    fixture = json.loads(fixture_path.read_text())["alchemy43_services"]
+    assert _pair_with_source_cards(fixture["blocks"], fixture["promotion_quotes"]) is None
+
+
+def test_one_review_card_split_into_several_extracted_cards_is_confirmed_card_by_card():
+    from utils.page_extraction_source_review import _pair_with_source_cards
+
+    quotes = [{"title": "Botox & Dysport", "lines": ["Botox Per Unit $12.50 ~$14~", "Botox 50 Units $490 ~$630~"]}]
+    blocks = [["Botox & Dysport", "Botox Per Unit $12.50 ~$14~"], ["Botox & Dysport", "Botox 50 Units $490 ~$630~"]]
+    assert _pair_with_source_cards(blocks, quotes) == ([0, 1], {0})
+    # 价格不在复核卡片里：标题对上而价格证据不一致，整页进入复核
+    assert _pair_with_source_cards([["Botox & Dysport", "Botox Per Unit $11"]], quotes) is None
+
+
+def test_extracted_cards_under_one_umbrella_review_card_pair_by_price():
+    from utils.page_extraction_source_review import _pair_with_source_cards
+
+    quotes = [{"title": "Holiday Specials", "lines": ["Cool Sculpting $400 per cycle", "Botox $9/unit",
+                                                      "Ultherapy full face $2000"]},
+              {"title": "Gift Cards", "lines": ["Buy $500 get $100"]}]
+    blocks = [["Cool Sculpting Special", "$400 per cycle"], ["Botox Special", "$9/unit"],
+              ["Referral Bonus", "Get $50 when a friend books"]]
+    assert _pair_with_source_cards(blocks, quotes) == ([0, 1], {0})
+
+
+@pytest.mark.parametrize("payload", [
+    {"page_type": "promotion", "memberships": [], "promotion_quotes": [{"title": "", "lines": [None]}]},
+    {"page_type": "membership", "memberships": [{"name": "", "source_claims": [None]}], "promotion_quotes": []},
+])
+def test_source_review_schema_validation_rejects_non_string_nested_values(payload):
+    from utils.page_extraction_source_review import SourceReviewValidationError, verified_source_review
+
+    # 空字段仅覆盖结构错误，不代表网页内容或模型回答。
+    with pytest.raises(SourceReviewValidationError):
+        verified_source_review(payload, "")
+
+
+def test_page_extraction_upserts_leave_offer_flags_to_the_database_trigger():
+    from pglast import parse_sql
+
+    from utils.page_extraction import MEMBERSHIP_UPSERT, PROMOTION_UPSERT
+
+    for template in (PROMOTION_UPSERT, MEMBERSHIP_UPSERT):
+        # 参数位以 NULL 代替，只解析当前 SQL 的字段赋值结构。
+        sql = re.sub(r"\s+into v_inserted;", ";", re.sub(r"\{[^{}]+\}", "NULL", template))
+        statement = parse_sql(sql)[0].stmt
+        columns = [column.name for column in statement.cols]
+        values = dict(zip(columns, statement.selectStmt.valuesLists[0]))
+        assignments = {target.name for target in statement.onConflictClause.targetList}
+        assert values["is_offer_extracted"].val.boolval is False
+        assert "is_offer_extracted" not in assignments
 
 
 def test_review_title_with_the_price_pairs_with_the_extracted_card(tmp_path):

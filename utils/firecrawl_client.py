@@ -7,8 +7,24 @@ from typing import Any, Callable, Dict
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from utils.page_title import is_block_page
+
+
+def firecrawl_session() -> requests.Session:
+    """自托管 Firecrawl 的会话：不走本机代理；连接被拒或被断开时自动重试（请求都是幂等的抓取、map、搜索）。
+
+    Firecrawl（Node.js）会关闭空闲的 keep-alive 连接，连接池复用到已关闭的连接时报
+    RemoteDisconnected；HTTP 状态码（408、500 等）是该页面的结果，不重试。
+    """
+    session = requests.Session()
+    session.trust_env = False
+    retry = Retry(total=3, connect=3, read=3, status=0, backoff_factor=1, allowed_methods=None)
+    for prefix in ("https://", "http://"):
+        session.mount(prefix, HTTPAdapter(max_retries=retry))
+    return session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,8 +129,7 @@ class SelfHostedFirecrawl:
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
         self.browser = browser
-        self.session = requests.Session()
-        self.session.trust_env = False
+        self.session = firecrawl_session()
         self.session.headers["Content-Type"] = "application/json"
         if api_key:
             self.session.headers["Authorization"] = f"Bearer {api_key}"

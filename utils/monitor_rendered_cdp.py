@@ -76,7 +76,7 @@ class EgoCdpPage:
         except requests.Timeout:
             raise RuntimeError("rendered_page_timeout") from None
         if not reply["ok"]:
-            raise RuntimeError("rendered_browser_command_failed")
+            raise RuntimeError(f"rendered_browser_command_failed: {message.get('method') or message['op']}: {reply['error']}")
         return reply["value"]
 
     def ready(self) -> bool:
@@ -94,7 +94,9 @@ class EgoCdpPage:
         remaining = min(65, self.deadline - time.monotonic())
         if remaining <= 0:
             raise RuntimeError("rendered_page_timeout")
-        value = self._send({"op":"cdp","method":method,"params":params}, remaining)
+        # ego 内部超时比本地 HTTP 超时早 2 秒，让浏览器端先返回错误原文
+        value = self._send({"op":"cdp","method":method,"params":params,
+                            "timeout":int(max(1, remaining - 2) * 1000)}, remaining)
         self._drain_events()
         return value or {}
 

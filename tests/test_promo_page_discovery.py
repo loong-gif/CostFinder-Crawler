@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from argparse import Namespace
+from pathlib import Path
+
 import pytest
 
-from utils.promo_page_discovery import assess_offer_page, candidate_urls
+from utils.promo_page_discovery import assess_offer_page, candidate_urls, search_candidates
 
 FILLER = "Our medspa offers a full range of aesthetic services for every patient in town. " * 6
 
@@ -201,6 +205,9 @@ def test_specialty_and_navigation_pages_are_not_offers_or_hops() -> None:
             "<a href='/products/botox-promo-49'>Botox</a></main>")
     assert hub_links(html, "https://spa.com/pages/deals") == ["https://spa.com/products/botox-promo-49"]
     assert not candidate_urls("https://spa.com", ["https://spa.com/event-rsvp", "https://spa.com/rewards-club-terms-and-conditions"])
+    # 条款页（laseraway.com/offer-terms）是卡片的补充证据，不是促销来源
+    assert not candidate_urls("https://spa.com", ["https://spa.com/offer-terms", "https://spa.com/specials-terms/fall"])
+    assert not search_candidates("https://spa.com", [{"url": "https://spa.com/offer-terms", "title": "Offer Terms | 20% off"}])
 
 
 def test_search_candidates_filter_site_aggregators_and_titles() -> None:
@@ -271,6 +278,33 @@ def test_map_reads_v2_map_link_objects(monkeypatch) -> None:
     links = Firecrawl("http://127.0.0.1:3002").map("https://spa.com", 50)
     assert links == ["https://spa.com/specials", "https://spa.com/memberships"]
     assert posted == [("/v2/map", {"url": "https://spa.com", "limit": 50})]
+
+
+def test_topic_search_seeds_are_assessed_first_for_their_site() -> None:
+    import argparse
+
+    from scripts.discover_new_promo_pages import discover_business
+
+    class Fc(_FakeFirecrawl):
+        def map(self, url, limit):
+            return ["https://spa.com/", "https://spa.com/specials"]
+
+    pages = {"https://spa.com/botox-special": {"markdown": "Botox $10 per unit special",
+                                               "rawHtml": _html("<p>Botox $10 per unit special</p>")},
+             "https://spa.com/specials": {"markdown": "Filler $500 special", "rawHtml": _html("<p>Filler $500 special</p>")}}
+    fc = Fc(pages)
+    seeds = {"spa.com": [{"url": "https://spa.com/botox-special", "kind_hint": "promotion", "title": "Botox Special",
+                          "query": "botox specials Los Angeles"},
+                         {"url": "https://spa.com/specials", "kind_hint": "promotion", "title": "Specials", "query": "q"}]}
+    args = argparse.Namespace(map_limit=100, allow_blog=False, max_candidates=5, hops=0, max_hop_links=8, max_pages=10,
+                              sources="map", search_limit=10, seeds=seeds)
+    result = discover_business(fc, {"business_id": 2, "name": "Spa", "city": "X", "website": "https://www.spa.com"},
+                               set(), args)
+    found = {p["url"]: p for p in result["pages"]}
+    assert fc.scraped[0] == "https://spa.com/botox-special"
+    assert found["https://spa.com/botox-special"]["sources"] == ["topic_search"]
+    # map 也找到的种子页面两个来源都记下
+    assert found["https://spa.com/specials"]["sources"] == ["topic_search", "map"]
 
 
 def test_empty_search_is_retried_and_a_dead_backend_is_not_hammered() -> None:
@@ -406,3 +440,37 @@ def test_branches_sharing_a_website_are_discovered_once() -> None:
                                                            "status": "needs_review"}]
     assert results[2]["city"] == "Huntington Beach" and results[2]["shared_site_with"] == 4385
     assert "shared_site_with" not in results[0]
+
+
+def test_naked_domain_businesses_use_their_real_site_roots_for_grouping() -> None:
+    from scripts.discover_new_promo_pages import discover_business, discover_per_site
+
+    # 裸域名摘自 output/monitor_price_sync/expired_recheck_20261021/database_snapshot.json。
+    rows = json.loads((Path(__file__).parent / "fixtures/discovery/naked_domain_businesses.json").read_text())
+    args = Namespace(sources="", seeds={}, allow_blog=False, max_candidates=8, hops=0, max_hop_links=0, max_pages=0)
+    discovered: list[int] = []
+
+    def discover(business):
+        discovered.append(business["business_id"])
+        return discover_business(None, business, set(), args)
+
+    results = discover_per_site(rows, discover)
+
+    assert discovered == [47, 51]
+    assert [row["business_id"] for row in results] == [47, 51]
+    assert all("shared_site_with" not in row for row in results)
+
+
+def test_empty_topic_search_seeds_select_no_real_business_sites() -> None:
+    from scripts.discover_new_promo_pages import select_discovery_businesses
+
+    fixture_dir = Path(__file__).parent / "fixtures"
+    seed_path = fixture_dir / "topic_search/la_botox_search_seeds.json"
+    # 空 seeds 复制自 output/pipeline/topic_search/la_botox/search/seeds.json。
+    seeds = json.loads(seed_path.read_text())
+    rows = json.loads((fixture_dir / "discovery/naked_domain_businesses.json").read_text())
+
+    assert seeds == {}
+    assert select_discovery_businesses(rows, set(), seeds) == []
+    assert select_discovery_businesses(rows, {51}, seeds) == [rows[1]]
+    assert select_discovery_businesses(rows, set(), None) == rows

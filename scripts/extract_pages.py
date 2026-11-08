@@ -24,7 +24,7 @@ from utils.page_extraction_snapshot import (
     load_decision_pages,
     snapshot_tables_for_pages,
 )
-from utils.page_title import fetch_page_title
+from utils.ego_browser import fetch_page_title
 from utils.pipeline_db import load_snapshot, snapshot_query, write_text
 from utils.pipeline_run import PROJECT_ROOT
 from utils.raw_file_store import RawFileStore

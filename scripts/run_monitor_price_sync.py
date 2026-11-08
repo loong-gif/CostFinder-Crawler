@@ -132,7 +132,7 @@ def not_found_plan(source: dict, graph: dict, protections: dict) -> dict:
                    "values":{"is_active":False}} for o in graph["offers"]
                   if o.get("is_active") is True and o["promotion_id"] == parent_id]
     operations.append({"table":"clinic_promotions","action":"update","id":parent_id,
-                       "values":{"is_active":False,"is_offer_extracted":False}})
+                       "values":{"is_active":False}})
     _protect(graph,operations,protections)
     return {"schema_version":1,"status":"ready","source":source,"before":graph,
             "operations":operations,"review":[],"evidence_summary":{"confirmed_http_and_visible_404":True},

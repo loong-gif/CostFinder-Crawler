@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from utils.page_extraction_snapshot import _cache_name, _cached, _page_evidence
-from utils.promo_extraction import comparison_key
+from utils.promo_extraction import comparison_key, content_line
 from utils.render_review import claim_anchors
 from utils.source_url import is_hub_url
 
@@ -24,6 +24,12 @@ SOURCE_REVIEW_SCHEMA = {
                 "title": {"type": "string"}, "lines": {"type": "array", "items": {"type": "string"}}}}},
     },
 }
+
+
+class SourceReviewValidationError(ValueError):
+    """来源复核回答不符合声明的 JSON schema。"""
+
+
 # 全站横幅优惠只在促销中心页上写入（决策第 8 条）；其他页面上的导航与横幅仍然排除
 HUB_BANNER_NOTE = ("This is the site's main promotions page: also include each promotional offer shown in a site-wide "
                    "banner, menu panel or notification card (for example a seasonal sale headline with its discount), "
@@ -44,31 +50,84 @@ def _card_facts(lines: list[str]) -> frozenset[str]:
     return frozenset(anchor for line in lines for anchor in claim_anchors(line))
 
 
+def _card_content(lines: list[str]) -> str:
+    """完整卡片的规范内容；格式和脚注统一后保留服务、金额与条件。"""
+    return comparison_key("\n".join(value for line in lines if (value := content_line(line))))
+
+
+_SERVICE_TITLE_FILLER = re.compile(
+    r"\b(?:your|first|new|client|customer|treatment|special|offer|deal|sale|promotion|promo|discount|"
+    r"savings|save|off|up|to|per|unit|units|for|on|the)\b", re.IGNORECASE)
+_SERVICE_TITLE_PRICE = re.compile(r"\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s?%")
+_SERVICE_TITLE_QUANTITY = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:units?|treatments?|sessions?|packages?|areas?|months?|weeks?|days?)\b",
+    re.IGNORECASE)
+
+
+def _service_key(title: str) -> str:
+    value = _SERVICE_TITLE_QUANTITY.sub(" ", _SERVICE_TITLE_PRICE.sub(" ", _title_key(title)))
+    return " ".join(_SERVICE_TITLE_FILLER.sub(" ", value).split())
+
+
+def _service_commercial_title(title: str) -> str:
+    return " ".join(_SERVICE_TITLE_FILLER.sub(" ", _title_key(title)).split())
+
+
 def _pair_with_source_cards(blocks: list[list[str]],
                             quotes: list[dict[str, Any]]) -> tuple[list[int], set[int]] | None:
-    """抽取卡片按标题对应来源复核中的卡片，返回 (被复核证实的抽取卡片序号, 用到的复核卡片序号)。
+    """抽取卡片由来源复核证实，返回 (被复核证实的抽取卡片序号, 用到的复核卡片序号)。
 
-    标题规范化后相等优先；没有相等时一方包含另一方也算同一标题（复核常把价格并入标题行）。
-    对应上的两张卡片金额与百分比集合必须相同。复核中没有的抽取卡片不写入；
-    一张抽取卡片对应多张复核卡片、两张抽取卡片对应同一张复核卡片或价格证据不一致时返回 None，整页进入复核。
+    - 规范化后的完整复核卡片相同才去重；相同标题、金额或百分比不代表同一张卡片。
+    - 抽取卡片先按标题对应复核卡片：规范化后相等优先，没有相等时一方包含另一方（复核常把价格并入标题行）。
+      没有标题对应时，恰好一张复核卡片须同时包含全部金额与百分比及标题中的服务名称。
+    - 抽取卡片的金额与百分比必须都出现在对应的复核卡片里，一张复核卡片可以对应多张抽取卡片（抽取把一张卡片拆开）；
+      没有金额的抽取卡片要求复核卡片也没有金额。同一来源卡片下规范化后的完整抽取卡片重复时只写一次。
+    - 复核中没有对应的抽取卡片不写入。标题同时对应多张不同的复核卡片且无法按原文唯一对应，或价格证据不一致时返回 None，整页进入复核。
     """
     titles = [_title_key(offer["title"]) for offer in quotes]
+    facts = [_card_facts([offer["title"], *offer["lines"]]) for offer in quotes]
+    contents = [_card_content([offer["title"], *offer["lines"]]) for offer in quotes]
+    canonical = [next(first for first in range(index + 1) if contents[first] == contents[index])
+                 for index in range(len(quotes))]
+    distinct = sorted(set(canonical))
     confirmed: list[int] = []
     used: set[int] = set()
+    paired_content: dict[int, set[str]] = {index: set() for index in distinct}
     for position, block in enumerate(blocks):
-        title = _title_key(block[0])
-        exact = [index for index, other in enumerate(titles) if other == title]
-        candidates = exact or [index for index, other in enumerate(titles)
-                               if title and other and (title in other or other in title)]
-        if not candidates:
+        title, block_facts = _title_key(block[0]), _card_facts(block)
+        block_content = _card_content(block)
+        exact = [index for index in distinct if titles[index] == title]
+        candidates = exact or [index for index in distinct
+                               if title and titles[index] and (title in titles[index] or titles[index] in title)]
+        if candidates:
+            if len(candidates) > 1:
+                body = [comparison_key(value) for line in block[1:]
+                        if (value := content_line(line))]
+                candidates = [index for index in candidates
+                              if body and all(line in contents[index] for line in body)]
+                if len(candidates) != 1:
+                    return None
+            index = candidates[0]
+            if not (block_facts <= facts[index] if block_facts else not facts[index]):
+                return None
+        else:
+            service = _service_key(block[0])
+            commercial_title = _service_commercial_title(block[0])
+            commercial_excerpt = _card_content([commercial_title, *block[1:]])
+            price_candidates = [index for index in distinct if block_facts and block_facts <= facts[index]]
+            by_price = [index for index in price_candidates if service
+                        and block_facts <= _card_facts([commercial_title, *block[1:]])
+                        and commercial_excerpt and commercial_excerpt in contents[index]]
+            if not price_candidates:
+                continue
+            if len(by_price) != 1:
+                return None
+            index = by_price[0]
+        if block_content in paired_content[index]:
             continue
-        if len(candidates) > 1 or candidates[0] in used:
-            return None
-        offer = quotes[candidates[0]]
-        if _card_facts(block) != _card_facts([offer["title"], *offer["lines"]]):
-            return None
+        paired_content[index].add(block_content)
         confirmed.append(position)
-        used.add(candidates[0])
+        used.update(other for other in range(len(quotes)) if canonical[other] == index)
     return confirmed, used
 
 
@@ -112,14 +171,20 @@ def verified_source_review(payload: Any, evidence_key: str) -> dict[str, Any]:
     名称是原文而部分权益不是原文时，该计划的权益清单不完整，source_claims 置空，权益不会被判定为完整。
     被去掉的内容保留在 unverified_quotes 中供复核。
     """
-    if (not isinstance(payload, dict) or payload.get("page_type") not in
+    if (not isinstance(payload, dict) or set(payload) != {"page_type", "memberships", "promotion_quotes"}
+            or not isinstance(payload.get("page_type"), str) or payload["page_type"] not in
             {"promotion", "membership", "service_price_list", "article", "about", "mixed", "unknown"}
             or any(not isinstance(payload.get(key), list) for key in ("memberships", "promotion_quotes"))
-            or any(not isinstance(offer, dict) or not isinstance(offer.get("title"), str)
-                   or not isinstance(offer.get("lines"), list) for offer in payload["promotion_quotes"])
-            or any(not isinstance(plan, dict) or not isinstance(plan.get("name"), str)
-                   or not isinstance(plan.get("source_claims"), list) for plan in payload["memberships"])):
-        raise ValueError(f"source review does not match SOURCE_REVIEW_SCHEMA: {json.dumps(payload)[:300]}")
+            or any(not isinstance(offer, dict) or set(offer) != {"title", "lines"}
+                   or not isinstance(offer.get("title"), str) or not isinstance(offer.get("lines"), list)
+                   or any(not isinstance(line, str) for line in offer["lines"])
+                   for offer in payload["promotion_quotes"])
+            or any(not isinstance(plan, dict) or set(plan) != {"name", "source_claims"}
+                   or not isinstance(plan.get("name"), str) or not isinstance(plan.get("source_claims"), list)
+                   or any(not isinstance(claim, str) for claim in plan["source_claims"])
+                   for plan in payload["memberships"])):
+        raise SourceReviewValidationError(
+            f"source review does not match SOURCE_REVIEW_SCHEMA: {json.dumps(payload, default=str)[:300]}")
 
     stripped_evidence = _without_marks(evidence_key)
 

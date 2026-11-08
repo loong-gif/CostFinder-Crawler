@@ -10,11 +10,11 @@ from typing import Any, Callable, Mapping
 
 from psycopg.types.json import Jsonb
 
-from utils.page_extraction_common import _campaign_date, index_manifest
+from utils.page_extraction_common import _campaign_date, _rejection, index_manifest
 from utils.page_extraction_memberships import _plan_memberships
 from utils.page_extraction_promotions import _plan_promotions
 from utils.page_extraction_snapshot import _page_evidence
-from utils.page_extraction_source_review import _source_review, verified_source_review
+from utils.page_extraction_source_review import SourceReviewValidationError, _source_review, verified_source_review
 from utils.pipeline_db import LOCK_PROMOTIONS, NEXT_PROMOTION_ID, do_block, literal, plan_digest, render
 from utils.promo_extraction import comparison_key
 from utils.promotion_rules import check_promotion
@@ -30,9 +30,6 @@ on conflict (business_id, public.fn_source_url_key(source_url)) do update set
     campaign_start_date = excluded.campaign_start_date,
     campaign_end_date = excluded.campaign_end_date,
     is_active = excluded.is_active,
-    is_offer_extracted = case
-        when clinic_promotions.promotion_content is distinct from excluded.promotion_content then false
-        else clinic_promotions.is_offer_extracted end,
     updated_at = now()
 returning (xmax = 0) into v_inserted;
 """
@@ -46,9 +43,6 @@ on conflict (business_id, public.fn_source_url_key(source_url), lower(btrim(memb
     billing_period = excluded.billing_period,
     minimum_commitment_months = excluded.minimum_commitment_months,
     benefits = coalesce(excluded.benefits, clinic_memberships.benefits),
-    is_offer_extracted = case
-        when excluded.benefits is not null and excluded.benefits is distinct from clinic_memberships.benefits then false
-        else clinic_memberships.is_offer_extracted end,
     updated_at = now()
 returning (xmax = 0) into v_inserted;
 """
@@ -64,13 +58,20 @@ def build_plan(pages: list[dict[str, Any]], *, scrapes: Mapping[str, Mapping[str
         manifest = index_manifest(manifest)
     promotion_pages: list[dict[str, Any]] = []
     membership_pages: list[dict[str, Any]] = []
+    invalid_source_reviews: list[dict[str, Any]] = []
     for page in pages:
         row = scrapes.get(source_url_key(page["url"]))
         if row is None:
             (membership_pages if page["kind"] == "membership" else promotion_pages).append(page)
             continue
         evidence_key = comparison_key(_page_evidence(row))
-        review = verified_source_review(_source_review(page, row, llm=llm, cache_dir=cache_dir), evidence_key)
+        source_review = _source_review(page, row, llm=llm, cache_dir=cache_dir)
+        try:
+            review = verified_source_review(source_review, evidence_key)
+        except SourceReviewValidationError:
+            kind = "membership" if page["kind"] == "membership" else "promotion"
+            invalid_source_reviews.append(_rejection(kind, page["business_id"], page["url"], "source_review_invalid"))
+            continue
         page = {**page, "_source_review": review, "_evidence_key": evidence_key}
         if page["kind"] == "membership":
             # 会员页面只写会员表，页面上的促销卡片不进促销表
@@ -82,7 +83,7 @@ def build_plan(pages: list[dict[str, Any]], *, scrapes: Mapping[str, Mapping[str
             membership_pages.append(page)
         if review["page_type"] not in {"promotion", "membership", "mixed"}:
             (membership_pages if page["kind"] == "membership" else promotion_pages).append(page)
-    entries = _plan_promotions(
+    entries = invalid_source_reviews + _plan_promotions(
         promotion_pages, scrapes=scrapes, names=state["names"],
         existing=state["promotions"], llm=llm, schema=promotion_schema, cache_dir=cache_dir, manifest=manifest,
         fetch_title=fetch_title)

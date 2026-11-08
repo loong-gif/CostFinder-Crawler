@@ -166,7 +166,11 @@ def validate_plan(plan):
             raise WriterError("duplicate_operation")
         seen.add((table, op["id"]))
         values = op.get("values")
-        if not isinstance(values, dict) or not values or not set(values) <= TABLES[table][2] - {TABLES[table][1], "created_at", "updated_at", "offer_fingerprint"}:
+        if not isinstance(values, dict) or not values:
+            raise WriterError("invalid_fields")
+        if table == "clinic_promotions" and "is_offer_extracted" in values:
+            raise WriterError("derived_is_offer_extracted: regenerate plan")
+        if not set(values) <= TABLES[table][2] - {TABLES[table][1], "created_at", "updated_at", "offer_fingerprint"}:
             raise WriterError("invalid_fields")
     _validate_terms_operations(plan)
     _graph(plan["before"])

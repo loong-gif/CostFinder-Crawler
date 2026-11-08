@@ -26,7 +26,19 @@ def test_collect_failed_dedupes_and_drops_urls_that_later_succeeded(tmp_path) ->
         {"url": "https://s.com/b", "status": "valid", "sources": ["search"]}]}])
     got = collect_failed([a, b])
     assert list(got) == ["https://s.com/a"]  # /b succeeded in the second run
-    assert got["https://s.com/a"]["sources"] == ["map", "search"] and got["https://s.com/a"]["business_id"] == 1
+    assert got["https://s.com/a"]["sources"] == ["map", "search"]
+    assert [b["business_id"] for b in got["https://s.com/a"]["businesses"]] == [1]
+
+
+def test_a_chain_page_is_retried_once_for_every_branch_that_failed(tmp_path) -> None:
+    page = {"url": "https://chain.com/specials", "status": "scrape_failed", "sources": ["map"], "kind_hint": "promotion"}
+    a = _write(tmp_path, "a.json", [
+        {"business_id": 1, "name": "Chain WeHo", "city": "West Hollywood", "website": "https://chain.com", "pages": [page]},
+        {"business_id": 2, "name": "Chain Santa Monica", "city": "Santa Monica", "website": "https://chain.com",
+         "pages": [page]}])
+    got = collect_failed([a])
+    assert list(got) == ["https://chain.com/specials"]
+    assert [b["business_id"] for b in got["https://chain.com/specials"]["businesses"]] == [1, 2]
 
 
 class _Fc:

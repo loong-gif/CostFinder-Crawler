@@ -66,6 +66,13 @@ def test_branches_sharing_one_page_each_keep_a_decision() -> None:
                                                                     ("https://laseraway.com/promotions", 2)]
 
 
+def test_a_retried_page_replaces_its_failed_scrape_record() -> None:
+    failed = _page(status="scrape_failed", evidence=[])
+    retried = _page(status="rejected", evidence=[])
+    records = decide([failed, retried], {1: _biz()}, TODAY)
+    assert [(r["status"], r["decision"]) for r in records] == [("rejected", "skip")]
+
+
 def test_boilerplate_evidence_repeated_across_pages_counts_once() -> None:
     shared = ["Get $50 off your first visit. Book now."]
     pages = [_page(url="https://spa.com/botox-cost", evidence=shared),

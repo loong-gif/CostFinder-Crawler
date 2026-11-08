@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv  # noqa: E402
 
 from utils.ego_browser import ego_scrape  # noqa: E402
-from utils.firecrawl_client import SelfHostedFirecrawl  # noqa: E402
+from utils.firecrawl_client import SelfHostedFirecrawl, firecrawl_session  # noqa: E402
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
 from utils.promo_page_discovery import (  # noqa: E402
     assess_offer_page,
@@ -37,10 +37,10 @@ from utils.promo_page_discovery import (  # noqa: E402
     extract_end_dates,
     hub_links,
     is_hub_page,
-    registrable_root,
     search_candidates,
 )
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
+from utils.topic_search import site_root  # noqa: E402
 
 
 
@@ -144,8 +144,7 @@ class Firecrawl:
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
         self.timeout = timeout
-        self.session = requests.Session()
-        self.session.trust_env = False
+        self.session = firecrawl_session()
         # 单页抓取统一经 SelfHostedFirecrawl：先 fastMode，拿不到正文时由 ego-lite 渲染
         self.pages = SelfHostedFirecrawl(api_url, api_key, timeout, browser=ego_scrape)
 
@@ -192,7 +191,7 @@ def discover_per_site(rows: List[Dict[str, Any]], discover: Callable[[Dict[str, 
                       map_fn: Callable = map) -> List[Dict[str, Any]]:
     """连锁品牌的分店共用同一个网站：每个站点只发现一次，结果复制给该站点的每家分店（按 rows 原顺序返回）。"""
     def site(row: Dict[str, Any]) -> str:
-        return registrable_root(urlparse(row["website"].strip()).hostname or "")
+        return site_root(row["website"].strip())
 
     sites: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
@@ -205,6 +204,15 @@ def discover_per_site(rows: List[Dict[str, Any]], discover: Callable[[Dict[str, 
                        {**firsts[site(row)], "business_id": row["business_id"], "name": row.get("name"),
                         "city": row.get("city"), "website": row.get("website"), "shared_site_with": lead["business_id"]})
     return results
+
+
+def select_discovery_businesses(rows: List[Dict[str, Any]], business_ids: Set[int],
+                                seeds: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if business_ids:
+        return [row for row in rows if row["business_id"] in business_ids]
+    if seeds is not None:
+        return [row for row in rows if site_root(row["website"]) in seeds]
+    return rows
 
 
 def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], args: argparse.Namespace) -> Dict[str, Any]:
@@ -222,7 +230,15 @@ def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], 
                                     limit=args.max_candidates)
         for c in candidates:
             c["sources"] = ["map"]
-        by_url = {c["url"]: c for c in candidates}
+        # topic-search 命中的同站促销类页面排在最前，不受 map 候选数量上限挤占
+        seeds = getattr(args, "seeds", {}).get(site_root(business["website"]), [])
+        by_url = {s["url"]: {"url": s["url"], "kind_hint": s.get("kind_hint") or "promotion", "title": s.get("title", ""),
+                             "sources": ["topic_search"]} for s in seeds if s["url"] not in known}
+        for c in candidates:
+            if c["url"] in by_url:
+                by_url[c["url"]]["sources"].append("map")
+            else:
+                by_url[c["url"]] = c
         if "search" in sources:
             host = urlparse(business["website"] if "://" in business["website"] else "https://" + business["website"]).netloc
             host = host[4:] if host.startswith("www.") else host
@@ -348,6 +364,8 @@ def main() -> int:
     parser.add_argument("--max-hop-links", type=int, default=8, help="links followed per hub page")
     parser.add_argument("--max-pages", type=int, default=24, help="page budget per business")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--seeds", type=Path,
+                        help="topic-search seeds.json: candidate pages per site; without --business-id only these sites run")
     parser.add_argument("--out", type=Path, default=PROJECT_ROOT / "state" / "discovery" / "new_promo_pages.json")
     args = parser.parse_args()
 
@@ -373,8 +391,10 @@ def main() -> int:
     client = load_supabase_client(PROJECT_ROOT, role="service")
     rows = fetch_all_rows(client, "master_business_info", "business_id,name,city,website", order="business_id.asc")
     rows = [r for r in rows if (r.get("website") or "").strip() and r["business_id"] > args.after_business_id]
-    if args.business_id:
-        rows = [r for r in rows if r["business_id"] in set(args.business_id)]
+    seeds = ({root: site["candidates"] for root, site in json.loads(args.seeds.read_text()).items()}
+             if args.seeds is not None else None)
+    rows = select_discovery_businesses(rows, set(args.business_id or []), seeds)
+    args.seeds = seeds or {}
     if args.city:
         rows = [r for r in rows if (r.get("city") or "").lower() == args.city.lower()]
     if args.uncovered_from and args.uncovered_from.exists():

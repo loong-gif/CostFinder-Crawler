@@ -114,6 +114,22 @@ def test_rephrased_benefit_is_kept_and_a_benefit_with_a_price_not_on_the_page_is
                                                                       "20% off skincare products"]
 
 
+def test_fee_on_the_line_after_the_plan_name_is_supported_by_the_render():
+    from utils.membership_evidence import prepare_membership_write
+
+    # markdown 中名称是标题、费用在下一段；只有渲染核验能证实「LUXE ESSENTIAL $249」
+    evidence = "## LUXE ESSENTIAL\n\n$249 / MONTH\n\nWelcome Gifts"
+    item = {"membership_name": "LUXE ESSENTIAL", "membership_price": 249, "benefits": ["Welcome Gifts"]}
+    assert not prepare_membership_write(item, evidence, None)["accepted"]
+    rendered = {"status": "page_accessible", "claimResults": [
+        {"recordType": "membership", "claim": "LUXE ESSENTIAL $249", "status": "visible_match"},
+        {"recordType": "membership", "claim": "Welcome Gifts", "status": "visible_match"}]}
+    assert prepare_membership_write(item, evidence, rendered)["accepted"]
+    # 清单中「名称 $费用」不可见时仍不成立
+    rendered["claimResults"][0]["status"] = "not_visible"
+    assert not prepare_membership_write(item, evidence, rendered)["accepted"]
+
+
 def test_membership_fee_not_supported_is_rejected(tmp_path):
     url = "https://glow.example/membership"
     review = membership_review(("Glow Club", []))

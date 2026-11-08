@@ -17,11 +17,14 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
+from utils.promo_page_discovery import EXCLUDED_PATH_RE  # noqa: E402
 from utils.promo_value_review import BusinessContext, decide  # noqa: E402
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 
@@ -62,7 +65,11 @@ def load_pages(paths: List[Path]) -> List[Dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
         for business in data.get("businesses", []):
             for page in business.get("pages", []):
-                pages.append({**page, "business_id": business["business_id"]})
+                # 早先的发现结果按现行发现规则复核：URL 规范化（路径中的重复斜杠），条款页等排除路径不作为来源
+                url = canonical_scrape_url(page["url"])
+                if EXCLUDED_PATH_RE.search(urlparse(url).path):
+                    continue
+                pages.append({**page, "url": url, "business_id": business["business_id"]})
     return pages
 
 

@@ -34,6 +34,8 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "discover-businesses": ("scripts.gmaps_discovery", "1: Google Maps scraper places for a city", "no"),
     "register-businesses": ("scripts.process_discovery_results",
                             "1: link / insert discovered places into master_business_info", "--apply"),
+    "topic-search": ("scripts.topic_search",
+                     "2: topic search in a city -> clinics to register and seed pages for discover-pages", "no"),
     "discover-pages": ("scripts.discover_new_promo_pages",
                        "2: promotion / membership pages per business domain (Map + price evidence)", "no"),
     "review-pages": ("scripts.review_promo_candidates", "2: add / skip decisions for discovered pages", "no"),

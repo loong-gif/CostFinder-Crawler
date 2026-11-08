@@ -3,7 +3,7 @@
 No writes or clocks: callers supply the source graph and current page evidence.
 Negative IDs are references local to each table, resolved by the locked writer.
 ``review`` plans never contain operations. Ready plans can contain warnings;
-warnings inhibit removal and keep ``is_offer_extracted`` false.
+warnings inhibit removal. The database trigger derives ``is_offer_extracted`` from related offers.
 """
 from __future__ import annotations
 
@@ -175,14 +175,9 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
                                 "source_url": existing_promotion["source_url"] if existing_promotion else url,
                                 "is_active": True,
                                 "promotion_content": _promotion_content(existing_promotion, promotion_quotes[campaign_key], complete),
-                                "is_offer_extracted": complete and not plan["notes"] and not any(is_blanket_offer_text(q) for q in promotion_quotes[campaign_key]),
                                 **{k: v for k, v in campaign.items() if v is not None or k != "promotion_title"}}
-                if evidence.get("image_policy", {}).get("hold_parent_fields"):
-                    if existing_promotion is not None:
-                        promo_values = {"is_offer_extracted":False}
-                    else:
-                        # A new parent built only from released text has no old image children to alter.
-                        promo_values["is_offer_extracted"] = False
+                if evidence.get("image_policy", {}).get("hold_parent_fields") and existing_promotion is not None:
+                    promo_values = {}
                 if existing_promotion is None:
                     promo_values.setdefault("promotion_title", url)
                     promo_values.setdefault("campaign_start_date", None)
@@ -253,30 +248,20 @@ def build_plan(source: dict, graph: dict, evidence: dict, protections: dict) -> 
         if plan["review"]:
             complete = False
             plan["evidence_summary"]["complete"] = False
-            # Matching can discover uncertainty after the Promotion was emitted.
-            # Clear the completion flag while retaining independent safe changes.
-            for promotion_id in successful_promotion_ids:
-                op = next((op for op in operations if op["table"] == PROMOTIONS
-                           and op["id"] == promotion_id), None)
-                if op is not None:
-                    op["values"]["is_offer_extracted"] = False
-                else:
-                    existing = next(p for p in promotions if p["promotion_id"] == promotion_id)
-                    emit(PROMOTIONS, {"is_offer_extracted": False}, existing)
         if complete:
             for offer in offers:
                 if offer.get("is_active") is True and offer["id"] not in matched and (expected or not expired_page_verified or offer["promotion_id"] in expired_campaigns):
                     emit(OFFERS, {"is_active": False}, offer)
             for promotion in promotions:
                 if promotion.get("is_active") is True and promotion["promotion_id"] not in selected_promotions.values() and (expected or not expired_page_verified or promotion["promotion_id"] in expired_campaigns):
-                    emit(PROMOTIONS, {"is_active": False, "is_offer_extracted": False}, promotion)
+                    emit(PROMOTIONS, {"is_active": False}, promotion)
         elif page_empty_verified or explicitly_empty:
             for offer in offers:
                 if offer.get("is_active") is True:
                     emit(OFFERS, {"is_active": False}, offer)
             for promotion in promotions:
                 if promotion.get("is_active") is True:
-                    emit(PROMOTIONS, {"is_active": False, "is_offer_extracted": False}, promotion)
+                    emit(PROMOTIONS, {"is_active": False}, promotion)
         check_protected_rows(operations, protections, offers, items, existing_items)
         if plan["review"] and not operations:
             plan["status"] = "review"

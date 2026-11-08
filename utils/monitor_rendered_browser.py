@@ -67,7 +67,8 @@ def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_d
             report = _render_page(url, directory / name, force_ocr=force_ocr,
                                   width=width, mobile=mobile, collect_variants="/products/" in urlsplit(url).path)
         except Exception as exc:
-            report = {"url": url, "accessible": False, "complete": False, "failures": [type(exc).__name__]}
+            report = {"url": url, "accessible": False, "complete": False, "failures": [type(exc).__name__],
+                      "error": str(exc)[:500]}
         reports.append({**report, "breakpoint": name, "width": width})
     result = combine_breakpoint_reports(url, reports)
     if product_details and "/collections/" in urlsplit(url).path:
@@ -182,6 +183,7 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
         accessible = 200<=status<400 and bool(text.strip() or has_visual or any(f.get("images") or f.get("backgrounds") for f in scans)) and not blocked
         if any(f.get("obscured") for f in scans): failures.append("image_obscured")
         tiles={"a":[],"b":[]}
+        image_error=None
         if has_visual or force_ocr:
             try:
                 for round_name in ("a","b"):
@@ -196,8 +198,9 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
                         tile["png_digest"]=hashlib.sha256(data).hexdigest()
                         if round_name=="a":tile["pixel_digest"]=pixel_digest(data)
                         tiles[round_name].append(tile)
-            except (RuntimeError,TimeoutError):
+            except (RuntimeError,TimeoutError) as exc:
                 failures.append("image_coverage_partial")
+                image_error = str(exc)[:500]
         visual_digest=digest({"a":[t["pixel_digest"] for t in tiles["a"]],
                               "b":[t["png_digest"] for t in tiles["b"]]}) if tiles["a"] else None
         report = {"url":url,"final_url":final_url,"http_status":status,"title":title,"text":text,
@@ -207,7 +210,7 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
             "image_seconds_remaining":max(0,300-(time.monotonic()-started)),"scroll_complete":bool(stable),
             "complete":bool(accessible and stable and not failures and resources_complete(scans,text)),
             "image_review_required":force_ocr or has_visual,
-            "failures":failures,"screenshot_path":str(directory / "screenshot.png")}
+            "failures":failures,"image_error":image_error,"screenshot_path":str(directory / "screenshot.png")}
         report["product_links"] = page.evaluate(PRODUCT_LINKS)
         if "/collections/" in urlsplit(url).path and page.evaluate("""(()=>[...document.querySelectorAll('a[rel="next"],.pagination a[href*="page="],.pagination__item--next')].some(a=>a.getClientRects().length&&a.href&&a.href!==location.href))()"""):
             report["complete"] = False

@@ -79,7 +79,8 @@ def test_duplicate_scope_candidate_is_reviewed_without_blocking_clear_offer(reve
     assert sum(op["table"]=="promo_offer_master" and op["action"]=="insert" for op in plan["operations"]) == 0
     assert any(row["reason"] == "ambiguous_offer_match" for row in plan["review"])
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
-    assert _operation(plan,"clinic_promotions",3)["values"]["is_offer_extracted"] is False
+    assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
+               if op["table"] == "clinic_promotions")
 
 
 def test_different_pricing_basis_preserves_existing_offer():
@@ -99,7 +100,8 @@ def test_inactive_offer_is_not_restored_and_clear_sibling_can_update():
     assert plan["status"] == "ready",plan
     assert not any(op["table"] == "promo_offer_master" and op["id"] == 4 for op in plan["operations"])
     assert _operation(plan,"promo_offer_master",6)["values"]["discount_price"] == 240
-    assert _operation(plan,"clinic_promotions",3)["values"]["is_offer_extracted"] is False
+    assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
+               if op["table"] == "clinic_promotions")
     assert any(row["reason"] == "historical_offer_requires_review" for row in plan["review"])
 
 
@@ -243,7 +245,8 @@ def test_partial_or_unresolved_image_evidence_can_update_but_cannot_remove(image
     assert plan["status"] == "ready", plan
     assert _operation(plan, "promo_offer_master", 4)["values"]["discount_price"] == 400
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
-    assert _operation(plan, "clinic_promotions", 3)["values"]["is_offer_extracted"] is False
+    assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
+               if op["table"] == "clinic_promotions")
     assert plan["evidence_summary"]["complete"] is False
 
 

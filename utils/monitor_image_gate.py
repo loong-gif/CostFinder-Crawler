@@ -8,6 +8,10 @@ from utils.monitor_image_evidence import compare_reads, critical_fields, source_
 
 
 def capture_is_current(browser):
+    """24 小时内、且按现行宽度集合渲染的结果才可复用；宽度集合不同的旧渲染（例如三宽度时期的）需要重新渲染。"""
+    coverage = browser.get("breakpoint_coverage")
+    if coverage is not None and set(coverage) != BREAKPOINT_NAMES:
+        return False
     try:
         captured = datetime.fromisoformat(browser["captured_at"].replace("Z", "+00:00"))
         age = datetime.now(timezone.utc) - captured

@@ -21,6 +21,16 @@ def test_shard_has_one_item_per_page_with_content():
                                                                  "Free consultation for Radiesse"]
 
 
+def test_plan_whose_fee_needs_the_render_layout_is_rendered():
+    # 费用 "$99/month" 与方案名称不在同一行，只有渲染布局能证实费用属于该方案
+    plan = {"entries": [{"kind": "membership", "action": "rejected", "source_url": "https://f.com/memberships",
+                         "reason": "membership_fee_not_supported_by_named_evidence", "membership_name": "Essence",
+                         "membership_price": 99.0, "source_claims": ["$99/month", "40 Botox units"]}]}
+    shard = build_shard(plan, "run")
+    assert [(c["line"], c["is_name"]) for c in shard["items"][0]["claims"]] == [
+        ("Essence", True), ("Essence $99", True), ("$99/month", False), ("40 Botox units", False)]
+
+
 # 渲染后可见文本：真实页面的导航、正文与页脚，长度足以判断页面已正常渲染
 PAGE_CHROME = ["Home", "About Us", "Services", "Book Now", "Contact",
                "Our board-certified injectors have served the community for over ten years with natural results.",

@@ -15,7 +15,9 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
-from utils.page_title import EGO_TASK_SPACE, PAGE_TIMEOUT_MS, is_block_page
+from utils.page_title import PAGE_TIMEOUT_MS, TitleUnavailable, choose_title, is_block_page
+
+EGO_TASK_SPACE = "costfinder page titles"
 
 NON_CONTENT_TAGS = ["script", "style", "noscript", "svg", "iframe", "template"]
 EGO_PROCESS_TIMEOUT_S = 240
@@ -81,6 +83,43 @@ def ego_scrape(url: str) -> dict[str, Any]:
         # 脚本在该页面上出错（导航失败、页面崩溃）是该页面的抓取结果
         raise BrowserScrapeFailed(f"ego_script_failed: {(exc.stderr or '').strip()[-300:]}") from None
     # ego-browser 的 console 输出写到 stderr
-    line = next(l for l in (done.stdout + done.stderr).splitlines() if l.startswith("EGO_SCRAPE "))
+    # 只按 \n 分行：JSON.stringify 不转义 U+2028/U+2029，splitlines() 会在页面 HTML 中间把这一行截断
+    line = next(l for l in (done.stdout + done.stderr).split("\n") if l.startswith("EGO_SCRAPE "))
     info = json.loads(line[len("EGO_SCRAPE "):])
     return firecrawl_shaped_result(url, info["url"], info["title"], info["html"], None, "ego")
+
+
+EGO_TITLE_SCRIPT = """
+const task = await taskSpace({space});
+const page = task.page("p1");
+await page.goto({url}, {{ timeout: {timeout} }});
+await page.waitForTimeout(6000);
+const info = await page.evaluate(() => ({{
+  title: document.title,
+  og: document.querySelector('meta[property="og:title"]')?.content || "",
+  h1: document.querySelector("h1")?.innerText || "",
+}}));
+console.log("EGO_TITLE " + JSON.stringify(info));
+"""
+
+
+def fetch_page_title(url: str, business_name: str = "") -> str:
+    """抓取结果里没有可用标题时，经 ego-lite 渲染页面取 <title> → og:title → 第一个 <h1>。
+
+    导航失败、页面卡住与没有可用标题都是该页面的结果，记为 TitleUnavailable。
+    """
+    script = EGO_TITLE_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS)
+    command = ego_command()
+    try:
+        # 与 ego_scrape 共用同一个任务空间和页面
+        with _EGO_LOCK:
+            done = subprocess.run([command, "nodejs", "-e", script], capture_output=True, text=True,
+                                  encoding="utf-8", check=True, timeout=EGO_PROCESS_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise TitleUnavailable("ego_timeout") from None
+    except subprocess.CalledProcessError as exc:
+        raise TitleUnavailable(f"navigation_failed: {(exc.stderr or '').strip()[-200:]}") from None
+    # 只按 \n 分行：JSON.stringify 不转义 U+2028/U+2029，splitlines() 会把标题中间截断
+    line = next(l for l in (done.stdout + done.stderr).split("\n") if l.startswith("EGO_TITLE "))
+    info = json.loads(line[len("EGO_TITLE "):])
+    return choose_title([info["title"], info["og"], info["h1"]], business_name)

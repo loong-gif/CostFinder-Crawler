@@ -30,6 +30,9 @@ def main() -> int:
     parser.add_argument("--keyword", action="append", help="repeatable; {city} and {state} are substituted")
     parser.add_argument("--depth", type=int, default=1)
     parser.add_argument("--max-time", type=int, default=900)
+    parser.add_argument("--wait-timeout", type=int,
+                        help="seconds to wait for the job (default max-time + 600); the scraper sometimes never "
+                             "finishes a job after scraping it, so short single-keyword lookups use a small value")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
@@ -41,7 +44,7 @@ def main() -> int:
     client = GmapsClient(base_url, proxies=proxies)
     places = client.discover(
         f"costfinder-{args.city}-{args.state}", keywords, depth=args.depth, max_time=args.max_time,
-        wait_timeout=args.max_time + 600,
+        wait_timeout=args.wait_timeout or args.max_time + 600,
     )
     args.out.write_text(json.dumps(places, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"keywords={keywords} places={len(places)} wrote {args.out}")

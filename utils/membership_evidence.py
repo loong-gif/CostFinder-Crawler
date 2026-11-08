@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from utils.promo_extraction import traceable
 from utils.render_review import claim_matches
 from utils.rendered_visibility_gate import filter_visible_membership_benefits, normalize_claim
+from utils.visibility_manifest import membership_fee_claim
 
 
 def _markdown_quote(value: str) -> str:
@@ -29,6 +30,11 @@ def _visible_named_fee(name: str, amount: str, evidence: str, quote: str,
 
     if not isinstance(rendered_visibility, Mapping) or rendered_visibility.get("status") != "page_accessible":
         return False
+    # 可见性清单按名称规则核验过「名称 $费用」（费用在渲染文本中紧随方案名称）
+    fee_claim = membership_fee_claim(name, amount.replace("\\", ""))
+    if any(result.get("claim") == fee_claim and result.get("status") == "visible_match"
+           for result in rendered_visibility.get("claimResults") or []):
+        return True
     nodes = [node for node in (rendered_visibility.get("capture") or {}).get("nodes", [])
              if isinstance(node, Mapping) and node.get("visible") is True]
     heading_tags = {"H1", "H2", "H3", "H4", "H5", "H6"}

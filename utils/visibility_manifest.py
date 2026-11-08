@@ -25,10 +25,12 @@ def membership_fee_claim(name: str, price: Any) -> str:
 
 def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str, bool]]]:
     """每个源页面的 (recordType, 内容行, 是否方案名称)；促销取 content，会员取名称、名称加费用与权益。
-    被拒绝的条目不写入，不核验。"""
+    被拒绝的条目不写入，不核验；会员费用只能由渲染布局证实的方案（费用不在名称所在行）除外。"""
     pages: dict[str, list[tuple[str, str, bool]]] = {}
     for entry in plan["entries"]:
-        if entry["action"] == "rejected":
+        if entry["action"] == "rejected" and not (
+                entry["reason"] == "membership_fee_not_supported_by_named_evidence"
+                and entry.get("membership_price") is not None):
             continue
         if entry["kind"] == "promotion" and entry.get("content"):
             lines = [("promotion", line, False) for line in entry["content"]]

@@ -101,7 +101,8 @@ class GmapsClient:
     def download(self, job_id: str) -> str:
         response = self.session.get(f"{self.base_url}/jobs/{job_id}/download", timeout=120)
         response.raise_for_status()
-        return response.text
+        # CSV 是 UTF-8，但响应头不带 charset，requests 的 .text 会按 ISO-8859-1 解码成乱码（Aère → AÃ¨re）
+        return response.content.decode("utf-8")
 
     def discover(self, name: str, keywords: Sequence[str], **job_options: Any) -> List[Dict[str, Any]]:
         poll = job_options.pop("poll", 20)

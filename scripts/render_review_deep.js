@@ -14,7 +14,16 @@ const results = [];
 for (const item of shard.items) {
   const rec = { url: item.url, business_id: item.business_id, checked_at: new Date().toISOString() };
   try {
-    await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: gotoTimeout });
+    // 只按 PC 屏幕宽度渲染核验（与 monitor 的 desktop 断点相同）
+    await page.cdp("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1600, deviceScaleFactor: 1, mobile: false });
+    try {
+      await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: gotoTimeout });
+    } catch (error) {
+      // 连接被断开、重置这类网络瞬时故障重试一次；其余导航失败是该页面的结果
+      if (!/net::ERR_CONNECTION_(CLOSED|RESET)/.test(String(error))) throw error;
+      await page.waitForTimeout(5000);
+      await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: gotoTimeout });
+    }
     try { await page.waitForLoadState("load", { timeout: 20000 }); } catch (_) {}
     await page.waitForTimeout(2000);
     rec.final_url = await page.url();

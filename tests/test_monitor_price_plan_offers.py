@@ -75,7 +75,8 @@ def test_blanket_scope_change_is_a_new_offer_not_price_only_rewrite():
     assert plan["status"] == "ready", plan
     assert any(op["table"] == "promo_offer_master" and op["action"] == "insert" for op in plan["operations"])
     assert _operation(plan, "promo_offer_master", 4)["values"] == {"is_active": False}
-    assert _operation(plan, "clinic_promotions", 3)["values"]["is_offer_extracted"] is False
+    assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
+               if op["table"] == "clinic_promotions")
 
 
 def test_others_placeholder_resolves_exact_non_injectable_service():

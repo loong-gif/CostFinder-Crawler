@@ -137,9 +137,11 @@ def render_source(action):
     return render_apply({"sources": [source]})
 
 
-def test_unlinked_per_unit_offer_is_inserted_inactive_and_not_expected_active():
+def test_unlinked_per_unit_offer_is_activated_and_verified():
     sql = render_source(insert_action("per_unit", None))
-    assert "set is_active=true" not in sql and "v_new := v_new || v_offer" not in sql
+    assert "set is_active=true, updated_at=now() where id=v_offer" in sql
+    assert "v_new := v_new || v_offer;" in sql
+    assert "offer_activation_changed_by_database: clinic_promotions 7" in sql
 
 
 def test_linked_per_unit_offer_and_total_offer_are_activated():

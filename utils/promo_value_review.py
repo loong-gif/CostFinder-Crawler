@@ -142,7 +142,10 @@ def decide(pages: List[Dict[str, Any]], businesses: Mapping[int, BusinessContext
         }
         key = (page["url"], biz.business_id)
         previous = out.get(key)
-        if previous is None or record["score"] > previous["score"]:
+        # 重试抓到的结果（哪怕被排除）取代同分的抓取失败记录，跳过原因才如实
+        if (previous is None or record["score"] > previous["score"]
+                or (record["score"] == previous["score"] and previous["status"] == "scrape_failed"
+                    and record["status"] != "scrape_failed")):
             out[key] = record
     records = sorted(out.values(), key=lambda r: (-r["score"], r["url"]))
     per_business: Dict[int, int] = {}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlparse, urlunparse
@@ -24,7 +25,8 @@ def canonical_scrape_url(url: str) -> str:
     host = (parsed.netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
-    path = parsed.path or "/"
+    # 站点内链接里的重复斜杠（https://oubeauty.com//specials）指向同一页面
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
     if path != "/":
         path = path.rstrip("/")
     return urlunparse((parsed.scheme.lower() or "https", host, path, "", "", ""))

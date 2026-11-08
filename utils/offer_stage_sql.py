@@ -94,9 +94,6 @@ def _source_statements(source: dict[str, Any]) -> list[str]:
             statements.append(f"insert into public.promo_offer_master ({columns}, is_active) values ({values}, false) "
                               f"returning id into v_offer;")
             statements.extend(_item_statements("v_offer", action["items"]))
-            # 数据库守卫要求 per_unit offer 的每个 item 已关联本店 service；未关联时保持 inactive，等 link-services 关联
-            if master["price_model"] == "per_unit" and any(item["service_id"] is None for item in action["items"]):
-                continue
             statements.append("v_new := v_new || v_offer;")
             statements.append("update public.promo_offer_master set is_active=true, updated_at=now() where id=v_offer;")
         elif action["action"] == "update":
@@ -175,9 +172,6 @@ def _branch_source_statements(sources: list[Mapping[str, Any]]) -> list[str]:
         statements.append(f"insert into public.promo_offer_master ({columns}, is_active) values ({values}, false) "
                           f"returning id into v_offer;")
         statements.extend(_item_statements("v_offer", action["items"]))
-        # 与逐源写入相同：per_unit offer 的 item 未关联 service 时保持 inactive，等 link-services 关联
-        if master["price_model"] == "per_unit" and any(item["service_id"] is None for item in action["items"]):
-            continue
         statements.append("v_new := v_new || v_offer;")
         statements.append("update public.promo_offer_master set is_active=true, updated_at=now() where id=v_offer;")
     statements.append(

@@ -370,13 +370,12 @@ def test_blanket_offers_and_concrete_null_service_items_are_not_rejected_by_serv
     assert "i.service_id is null and btrim" in missing
 
 
-def test_is_offer_extracted_live_field_is_writable():
+def test_derived_is_offer_extracted_plan_field_requires_regeneration():
     plan = plan_for()
     plan["operations"].append({"table": "clinic_promotions", "id": 10, "action": "update",
                                "values": {"is_offer_extracted": True}})
-    sql = sql_of(plan)
-    assert "update public.clinic_promotions set is_offer_extracted = true where promotion_id = 10;" in sql
-    assert "(to_jsonb(t) -> 'is_offer_extracted') = 'true'::jsonb" in sql
+    with pytest.raises(writer.WriterError, match="derived_is_offer_extracted: regenerate plan"):
+        sql_of(plan)
 
 
 def test_promotion_content_is_written_and_checked_as_jsonb():

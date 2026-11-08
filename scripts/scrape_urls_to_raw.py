@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 
 from utils.firecrawl_client import self_hosted_firecrawl
 from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_fingerprint
-from utils.browser_scrape import (BrowserScrapeFailed, ego_scrape, lightpanda_scrape, scrapling_browser_scrape,
-                                  scrapling_scrape)
+from utils.browser_scrape import BrowserScrapeFailed, ego_scrape, scrapling_browser_scrape, scrapling_scrape
 from utils.linked_terms import collect_linked_terms
 from utils.raw_file_store import RawFileStore
 from utils.scrape_markdown import banner_offer_line, prepare_scrape_markdown, site_banner_blocks
@@ -27,9 +26,9 @@ def main() -> int:
     parser.add_argument("--decisions", type=Path, default=PROJECT_ROOT / "state/discovery/monitor_decisions_final.json")
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--engine", choices=["firecrawl", "lightpanda", "ego", "scrapling", "scrapling-browser"],
+    parser.add_argument("--engine", choices=["firecrawl", "ego", "scrapling", "scrapling-browser"],
                         default="firecrawl",
-                        help="自托管 Firecrawl 抓取失败的页面改由 Lightpanda 或本机 ego-browser 渲染后转 markdown；"
+                        help="firecrawl 为 fastMode 抓取、失败时改由 ego-lite 渲染；ego 直接由本机 ego-browser 渲染；"
                              "scrapling 为 HTTP 抓取，scrapling-browser 为隐身浏览器渲染")
     parser.add_argument("--url", action="append", help="只抓取决定文件中的这些 URL，可重复")
     args = parser.parse_args()
@@ -52,8 +51,6 @@ def main() -> int:
     urls = urls[: args.limit]
 
     def fetch(url: str) -> dict:
-        if args.engine == "lightpanda":
-            return lightpanda_scrape(url)
         if args.engine == "ego":
             return ego_scrape(url)
         if args.engine == "scrapling":

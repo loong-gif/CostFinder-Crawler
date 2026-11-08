@@ -18,7 +18,7 @@ MEMBERSHIP_TOKENS = frozenset({"club", "vip"})
 PRICING_TOKENS = frozenset({"price", "prices", "pricing", "rate", "rates", "cost", "costs", "menu", "fees", "fee"})
 EXCLUDED_PATH_RE = re.compile(
     r"/(tag|category|author|feed|wp-content|wp-json|cart|checkout|account|login|privacy|terms|careers?|jobs?|"
-    r"sitemap|cdn-cgi|rsvp|registration|terms[a-z-]*|conditions|policy|policies)(/|$)|"
+    r"sitemap|cdn-cgi|rsvp|registration|[a-z-]*terms[a-z-]*|conditions|policy|policies)(/|$)|"
     r"(?:rsvp|registration|terms-and-conditions)[a-z-]*$|\.(pdf|jpe?g|png|gif|webp|svg|css|js|xml|zip|mp4)$", re.I)
 BLOG_PATH_RE = re.compile(r"/(blog|news|articles?|press|journal|post|posts)(/|$)", re.I)
 
@@ -291,7 +291,7 @@ import datetime as _dt  # noqa: E402
 AGGREGATOR_HOSTS = frozenset({
     "groupon.com", "yelp.com", "facebook.com", "instagram.com", "tiktok.com", "twitter.com", "x.com",
     "youtube.com", "pinterest.com", "google.com", "maps.google.com", "linkedin.com", "reddit.com",
-    "realself.com", "healthgrades.com", "yellowpages.com", "mapquest.com", "bbb.org", "nextdoor.com",
+    "realself.com", "healthgrades.com", "zocdoc.com", "yellowpages.com", "mapquest.com", "bbb.org", "nextdoor.com",
     "trustpilot.com", "wellnessliving.com", "mindbodyonline.com", "booksy.com", "vagaro.com",
     "fresha.com", "styleseat.com", "podium.com", "weebly.com", "wixsite.com",
 })

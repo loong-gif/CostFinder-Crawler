@@ -62,7 +62,7 @@ def deploy(host: str, include_credentials: bool):
         "scripts/process_discovery_results.py","scripts/select_next_city.py","scripts/crawl_report.py",
         "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
         "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",
-        "scripts/monitor_rendered_page.js","requirements_monitor_price_sync.txt",
+        "scripts/monitor_rendered_page.js","scripts/monitor_ego_bridge.js","requirements_monitor_price_sync.txt",
         "service_name_dict.json")]
     payload = {str(path.relative_to(ROOT)):path.read_bytes() for path in files}
     if include_credentials:
@@ -128,12 +128,48 @@ print(json.dumps({"files_deployed":count,"backup":str(backup),"write_enabled":Fa
     print(remote_python(code,stdin=base64.b64encode(stream.getvalue()),host=host))
 
 
+def remote_powershell(script: str, *, timeout: int = 120, host: str = "firecrawl") -> str:
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode()
+    result = subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",host,
+                             "powershell -NoProfile -NonInteractive -EncodedCommand " + encoded],
+                            capture_output=True,timeout=timeout)
+    if result.returncode:
+        raise RuntimeError("remote_operation_failed:" + result.stderr.decode(errors="replace")[-300:])
+    return result.stdout.decode(errors="replace")
+
+
+CONSOLE_SESSION_TASK = "CostFinderKeepConsoleSession"
+# 断开远程桌面后 Windows 不再绘制该会话的桌面：ego-lite 不出帧，同一页面只能截第一张图，requestAnimationFrame 不触发。
+# loong 的会话一断开（TerminalServices-LocalSessionManager 事件 24）就由 SYSTEM 用 tscon 转到控制台，会话保持登录且持续绘制。
+KEEP_CONSOLE_COMMAND = ('$line = query session loong | Select-Object -Skip 1 -First 1; '
+                        'if ($line -match "\\s(\\d+)\\s+Disc") { tscon $Matches[1] /dest:console; exit $LASTEXITCODE }; '
+                        'exit 0')
+
+
+def ensure_console_session_task(host: str) -> str:
+    command = base64.b64encode(KEEP_CONSOLE_COMMAND.encode("utf-16-le")).decode()
+    script = (
+        "$ProgressPreference = 'SilentlyContinue'\n"
+        "$class = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler\n"
+        "$trigger = New-CimInstance -CimClass $class -ClientOnly\n"
+        "$trigger.Enabled = $true\n"
+        "$trigger.Subscription = '<QueryList><Query Id=\"0\" Path=\"Microsoft-Windows-TerminalServices-LocalSessionManager/Operational\">"
+        "<Select Path=\"Microsoft-Windows-TerminalServices-LocalSessionManager/Operational\">*[System[EventID=24]]</Select>"
+        "</Query></QueryList>'\n"
+        f"$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -EncodedCommand {command}'\n"
+        "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest\n"
+        f"Register-ScheduledTask -TaskName '{CONSOLE_SESSION_TASK}' -Trigger $trigger -Action $action -Principal $principal -Force | Out-Null\n"
+        f"(Get-ScheduledTask -TaskName '{CONSOLE_SESSION_TASK}').State\n")
+    return remote_powershell(script, host=host)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host",default="firecrawl")
     parser.add_argument("--include-credentials",action="store_true")
     args=parser.parse_args()
     deploy(args.host,args.include_credentials)
+    print(json.dumps({"console_session_task": ensure_console_session_task(args.host).strip().splitlines()[-1]}))
 
 
 if __name__ == "__main__":

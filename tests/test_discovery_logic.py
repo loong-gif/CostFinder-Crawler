@@ -55,6 +55,14 @@ def test_unique_host_links_instead_of_inserting() -> None:
     assert actions["link"][0]["fields"] == {"review_count": 217, "score": 4.5}
 
 
+def test_same_site_in_another_city_is_not_linked_to_that_branch() -> None:
+    masters = [_master(765, "New Look Skin Center", "Irvine", "newlookskincenter.com")]
+    place = _place("ENC", 120, site="https://newlookskincenter.com/", name="New Look Skin Center Encino", city="Encino")
+    _, actions = classify_places([place], {}, {}, NOW, unlinked_masters=masters)
+    assert not actions["link"] and not actions["insert"]
+    assert [a["google_place_id"] for a in actions["ambiguous"]] == ["ENC"]
+
+
 def test_shared_host_chain_is_ambiguous_not_inserted() -> None:
     masters = [_master(7, "Simplicity Laser", "Henderson", "https://simplicitylaser.com/")]
     places = [_place("A", 90, site="https://simplicitylaser.com/pages/a", city="Reno"),

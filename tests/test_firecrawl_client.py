@@ -82,6 +82,36 @@ def test_pages_fast_mode_cannot_fetch_are_rendered_by_ego_without_the_firecrawl_
         server.shutdown()
 
 
+def test_a_dropped_connection_is_retried_instead_of_failing_the_page() -> None:
+    # Firecrawl 关闭空闲的 keep-alive 连接时，复用到它的请求得不到响应（RemoteDisconnected）
+    calls: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(body["url"])
+            if len(calls) == 1:
+                self.close_connection = True
+                return
+            raw = json.dumps(_page("# Specials\n\nBotox $10")[1]).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    rendered: list[str] = []
+    try:
+        assert _client(server, rendered).scrape("https://spa.example/specials")["markdown"] == "# Specials\n\nBotox $10"
+        assert calls == ["https://spa.example/specials"] * 2 and rendered == []
+    finally:
+        server.shutdown()
+
+
 def test_a_page_that_no_longer_exists_is_that_page_result() -> None:
     server, _ = _firecrawl_server({
         "https://gone.example/specials": _page("# Page not found", status=404),

@@ -77,8 +77,10 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
                 source_claims=source_claims,
                 ocr_complete=image_ocr_complete)
             if not decision["accepted"]:
+                # 费用与名称不在同一行时只能由渲染布局证实：保留名称、费用与来源清单，可见性分片据此核验
                 entries.append(_rejection("membership", page["business_id"], page["url"], decision["reason"],
-                                          membership_name=name, source_review=review, ocr_meta=ocr_meta))
+                                          membership_name=name, membership_price=decision.get("membership_price"),
+                                          source_claims=source_claims, source_review=review, ocr_meta=ocr_meta))
                 continue
             if manifest is not None and not _name_and_fee_visible(
                     _visibility_for(manifest, page["url"]), name, decision["membership_price"]):
