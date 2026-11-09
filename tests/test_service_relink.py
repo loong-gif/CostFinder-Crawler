@@ -1,6 +1,7 @@
 import json
-import shutil
 from datetime import datetime, timezone
+
+import pytest
 
 from scripts import link_services
 from utils import offer_extraction_llm, service_mapping_confirmations
@@ -52,12 +53,19 @@ def link_snapshot(g):
     return {name: {"count": len(rows), "rows": rows} for name, rows in tables.items()}
 
 
+@pytest.fixture(autouse=True)
+def confirmations(tmp_path, monkeypatch):
+    """quality 与 link-services 读写确认文件的临时副本，测试不读写仓库中的真实文件。"""
+    path = tmp_path / "service_mapping_confirmations.json"
+    path.write_text(json.dumps({"confirmations": []}))
+    monkeypatch.setattr(service_mapping_confirmations, "CONFIRMATIONS_PATH", path)
+    return path
+
+
 def run_link_services_plan(tmp_path, monkeypatch, g, report):
     """按调用方方式运行 link-services plan：快照文件、quality 状态目录、替换后的 LLM 客户端。
     返回计划、LLM 客户端与写入后的确认文件。"""
-    confirmations = tmp_path / "service_mapping_confirmations.json"
-    shutil.copy(service_mapping_confirmations.CONFIRMATIONS_PATH, confirmations)
-    monkeypatch.setattr(service_mapping_confirmations, "CONFIRMATIONS_PATH", confirmations)
+    confirmations = service_mapping_confirmations.CONFIRMATIONS_PATH
     client = FakeClient()
     monkeypatch.setattr(link_services, "build_client_from_env", lambda: client)
     state = tmp_path / "state"
