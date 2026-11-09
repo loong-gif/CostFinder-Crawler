@@ -64,6 +64,33 @@ def test_plan_reads_the_catalogue_with_read_snapshot(tmp_path, monkeypatch):
     assert "public.master_business_info" in queries[0] and "public.clinic_memberships" in queries[0]
 
 
+class PagedRest:
+    """Supabase REST 的分页读取：按 limit/offset 返回内存中的表。"""
+    def __init__(self, tables):
+        self.tables, self.calls = tables, []
+
+    def fetch_rows(self, table, select, *, limit, offset, order):
+        self.calls.append((table, select, offset, order))
+        return self.tables[table][offset:offset + limit]
+
+
+def test_plan_on_the_monitor_host_reads_the_catalogue_over_rest(tmp_path, monkeypatch):
+    businesses = [{"business_id": i, "website": f"b{i}.test", "city": "Reno",
+                   "address": f"{i} Main St, Reno, NV 89501"} for i in range(1, 702)]
+    rest = PagedRest({"master_business_info": businesses, "clinic_promotions": [], "clinic_services": [],
+                      "clinic_memberships": []})
+    monkeypatch.setattr("utils.monitor_database_snapshot.rest_client", lambda: rest)
+    monkeypatch.setattr("utils.pipeline_db.read_snapshot", lambda read_sql: pytest.fail("Supabase CLI used"))
+    assert run(monkeypatch, crawl_scheduler, "plan", "--rest", "--apply") == 0
+    assert len(load_state("schedule")) == 701
+    assert ("master_business_info", "business_id,website,city,address", 500, "business_id.asc") in rest.calls
+
+
+def test_scheduled_crawl_on_the_monitor_host_plans_with_the_rest_read():
+    launcher = (Path(__file__).resolve().parents[1] / "scripts" / "run_crawl_due.sh").read_text()
+    assert "crawl-schedule plan --rest --apply" in launcher
+
+
 def test_register_renders_every_action_and_repeated_places_are_skipped_in_sql():
     places = [{"google_place_id": "P1", "name": "Spa", "city": "Reno", "review_count": 90, "score": 4.8,
                "website": "https://spa.test"}]
