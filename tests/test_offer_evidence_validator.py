@@ -362,4 +362,5 @@ def test_route_stats_count_evidence_rejections_as_quarantined() -> None:
 
     assert stats["quarantined"] == 1
     assert stats["skipped"] == 0
-    assert stats["quarantine"][0]["reason"] == "offer_raw_text_not_supported"
+    assert stats["promo_writes"][0]["reason"] == "offer_raw_text_not_supported"
+    assert "quarantine" not in stats
