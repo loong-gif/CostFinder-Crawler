@@ -1,4 +1,4 @@
-"""File policy checked at the pending-SQL rendering boundary (the control file lives next to pending_sql/)."""
+"""File policy checked at the pending-SQL rendering boundary (the image control file lives next to pending_sql/)."""
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -20,11 +20,13 @@ def capture_is_current(browser):
         return False
 
 
+def image_writes_enabled(state_dir) -> bool:
+    """图片 offer 经 OCR 双读核验后照常写入；只有 price_sync_control.json 显式写 image_write_enabled=false 才停用。"""
+    return read_json(Path(state_dir) / "price_sync_control.json", {}).get("image_write_enabled", True) is not False
+
+
 def image_write_block(plan, journal_dir):
     policy = plan.get("image_policy")
-    control = read_json(Path(journal_dir).parent / "price_sync_control.json", {})
-    if control.get("write_enabled") is False:
-        return "writes_disabled"
     evidence_path = plan.get("evidence_path")
     evidence = read_json(Path(evidence_path), {}) if evidence_path else {}
     browser = read_json(Path(evidence_path).parent / "browser.json", {}) if evidence_path else {}
@@ -60,7 +62,7 @@ def image_write_block(plan, journal_dir):
     if policy is not None:
         if not policy.get("depends_on_images"):
             return None
-        if control.get("image_write_enabled") is not True:
+        if not image_writes_enabled(Path(journal_dir).parent):
             return "image_writes_disabled"
         if policy.get("dual_read_verified") is not True:
             return "image_dual_read_required"

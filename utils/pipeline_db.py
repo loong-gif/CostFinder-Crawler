@@ -75,6 +75,12 @@ def read_snapshot(read_sql: Path) -> Path:
     return write_text(Path(read_sql).parent / "snapshot.json", json.dumps(rows[0]["snapshot"], ensure_ascii=False))
 
 
+def read_tables(run_dir: Path, tables: Mapping[str, tuple[str, str, str]]) -> dict[str, list[dict[str, Any]]]:
+    """生成只读快照查询 run_dir/read.sql，用 read_snapshot 自动执行，逐表核对行数后返回各表的行。"""
+    read_sql = write_text(Path(run_dir) / "read.sql", snapshot_query(tables))
+    return load_snapshot(read_snapshot(read_sql), tables)
+
+
 def _typed(row: dict[str, Any]) -> dict[str, Any]:
     for column in DATE_COLUMNS & row.keys():
         if row[column] is not None:

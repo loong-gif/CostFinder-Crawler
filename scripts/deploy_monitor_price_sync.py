@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Deploy the existing monitor task with pending-SQL generation disabled by default.
+"""Deploy the existing monitor task.
 
 File payloads (including explicitly selected credentials) travel over SSH stdin,
 never command arguments or output. This tool performs no database operations; the
 deployed jobs never write the database, they only produce SQL files under
-``$BASE/state/pending_sql/`` that a session pulls back, reviews and runs through the Supabase MCP.
+``$BASE/state/pending_sql/`` that ``pending-sql --pull`` brings back and the session runs through the Supabase MCP.
 """
 from __future__ import annotations
 
@@ -13,23 +13,16 @@ import base64
 import io
 import json
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "/home/loong/costfinder_monitor"
+sys.path.insert(0, str(ROOT))
 
-
-def remote_python(code: str, *, stdin: bytes = b"", timeout: int = 60, host: str = "firecrawl"):
-    encoded = base64.b64encode(code.encode()).decode()
-    command = 'wsl -e python3 -c "import base64;exec(base64.b64decode(\'' + encoded + '\'))"'
-    result = subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",host,command],
-                            input=stdin,capture_output=True,timeout=timeout)
-    if result.returncode:
-        raise RuntimeError("remote_operation_failed:" + result.stderr.decode(errors="replace")[-300:])
-    return result.stdout.decode()
+from utils.monitor_host import BASE, remote_python  # noqa: E402
 
 
 def monitor_launcher(log: str, run_type: str, extra_args: str, *, yield_to_running: bool = False) -> bytes:
@@ -58,7 +51,7 @@ def deploy(host: str, include_credentials: bool):
         "scripts/firecrawl_self_hosted_monitor.py","scripts/run_monitor_price_sync.py","scripts/monitor_schedule.py",
         "scripts/notify_monitor_run.py",
         "scripts/run_data_quality_audit.py",
-        "scripts/crawl_scheduler.py","scripts/seed_crawl_schedule.py",
+        "scripts/crawl_scheduler.py","scripts/read_snapshot.py",
         "scripts/process_discovery_results.py","scripts/select_next_city.py","scripts/crawl_report.py",
         "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
         "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",
@@ -104,10 +97,6 @@ lock=open(state/".monitor.lock","a+")
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 backup.mkdir(parents=True,exist_ok=True)
-control=state/"price_sync_control.json"
-if control.exists(): shutil.copy2(control,backup/"price_sync_control.json")
-# Pause writes before replacing files, while holding the task's shared lock.
-control.write_text(json.dumps({"schema_version":1,"write_enabled":False,"reason":"awaiting_pending_sql_validation"})+"\\n")
 archive=tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.buffer.read())),mode="r:gz")
 count=0
 for member in archive.getmembers():
@@ -123,7 +112,7 @@ for member in archive.getmembers():
 (base/"run_data_quality_daily.sh").chmod(0o755)
 (base/"run_crawl_due.sh").chmod(0o755)
 (base/"run_ocr_service.sh").chmod(0o755)
-print(json.dumps({"files_deployed":count,"backup":str(backup),"write_enabled":False}))
+print(json.dumps({"files_deployed":count,"backup":str(backup)}))
 '''
     print(remote_python(code,stdin=base64.b64encode(stream.getvalue()),host=host))
 

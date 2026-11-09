@@ -1,6 +1,6 @@
 #!/bin/sh
-# Daily scheduled crawl: plan due businesses, run the monitor in observation mode (no database
-# writes, separate state dir and control file), then record the results into the schedule.
+# Daily scheduled crawl: plan due businesses, capture them with the monitor in capture-only mode
+# (separate state dir, no plans and no pending SQL), then record the results into the schedule.
 set -eu
 BASE="${COSTFINDER_BASE:-/home/loong/costfinder_monitor}"
 CAP="${CRAWL_DUE_CAP:-30}"
@@ -20,13 +20,12 @@ if [ -z "$NAMES" ]; then
   exit 0
 fi
 
-echo '{"schema_version":1,"write_enabled":false,"reason":"observation_only"}' > state/due_monitor/control.json
 ARGS=""
 for n in $(echo "$NAMES" | tr ',' ' '); do ARGS="$ARGS --monitor $n"; done
 # Exit code 2 only means some pages failed to capture; the bridge records those per business.
 # shellcheck disable=SC2086
 "$PY" scripts/promo_pipeline.py monitor --config state/crawl_schedule/due_monitor.json \
-  --state-dir state/due_monitor --control state/due_monitor/control.json $ARGS || true
+  --state-dir state/due_monitor --capture-only $ARGS || true
 "$PY" scripts/promo_pipeline.py crawl-record --state-dir state/due_monitor --due state/crawl_schedule/due.json \
   --monitors "$NAMES" --since "$SINCE" --out state/crawl_schedule/results.json
 "$PY" scripts/promo_pipeline.py crawl-schedule record --results state/crawl_schedule/results.json --apply

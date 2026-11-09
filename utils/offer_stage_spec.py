@@ -45,7 +45,7 @@ NUMERIC_COLUMNS = {"regular_price", "discount_price", "discount_percent", "disco
 BENIGN_REASONS = {"gift_only", "no_price_fact", "no_supported_promo_fact", "consultation", "membership_plan",
                   "skincare_product", "generic_offer_scope", "fragment_offer_text", "membership_term_offer",
                   "gift_card_offer", "non_service_target", "item_name_invalid", "multiple_services_in_offer",
-                  "regular_price_not_promotion", "duplicate_in_source"}
+                  "regular_price_not_promotion", "duplicate_in_source", "no_supported_discount_field"}
 
 # 卡片条款写明价格就是常规（批量）价格时，所谓节省是相对单次价格的比较，不是促销
 _REGULAR_PRICE_CARD = re.compile(r"\b(?:reflects?|is|are)\s+(?:our\s+)?regular\s+(?:volume\s+)?pric(?:e|es|ing)\b",

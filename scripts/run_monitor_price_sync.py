@@ -5,14 +5,11 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import os
-import re
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -20,301 +17,29 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 from requests import HTTPError
 from scripts.firecrawl_self_hosted_monitor import load_config, run_monitor
+from utils.monitor_capture import capture, capture_urls
+from utils.monitor_database_snapshot import database_snapshot
 from utils.monitor_price_extract import extract_evidence, render_page
 from utils.monitor_price_plan import build_plan
 from utils.monitor_price_store import atomic_json, digest, manual_protections, now, read_json, run_lock
-from utils.monitor_price_writer_plan import SERVICE_COLUMNS, _protect, normalize_source_url, source_graph
+from utils.monitor_price_writer_plan import normalize_source_url, source_graph
 from utils.monitor_pending_sql import plan_write_block, render_pending, settle
-from utils.monitor_image_gate import capture_is_current
+from utils.monitor_image_gate import capture_is_current, image_writes_enabled
 from utils.monitor_rendered_checks import confirmed_not_found
-from utils.monitor_frequency import due_urls, load_schedule, record_reports
-from utils.monitor_queue import build_config, config_kinds, config_urls
+from utils.monitor_queue import build_config, config_urls
 from utils.monitor_price_retry import RetryLimits
-from utils.monitor_price_visual_receipts import reviewed_browser
+from utils.monitor_review_policy import NETWORK_ERRORS, event_status, gate_status, needs_review
+from utils.monitor_price_visual_receipts import stored_browser
+from utils.monitor_event_queue import (
+    data_quality_recheck_urls, enqueue_data_quality_rechecks, enqueue_expired_campaign_checks,
+    expired_active_promotion_urls, verified_batch_results,
+)
+from utils.monitor_source_binding import (
+    bind_source, check_promotion_source, combine_branch_plans, not_found_plan, redirect_stays_with_business,
+    snapshot_business_graph,
+)
 from utils.pending_sql import pending_dir
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 
-PROJECT_ID = "kdlpkjzcnbkjcvwsvlwn"
-
-
-def database_snapshot() -> dict:
-    base = os.getenv("SUPABASE_URL", "")
-    if urlsplit(base).hostname != PROJECT_ID + ".supabase.co":
-        raise RuntimeError("database_project_mismatch")
-    client = SupabaseRestClient(base, get_supabase_secret_key())
-    def all_rows(table, columns="*"):
-        values, offset = [], 0
-        pk = {"clinic_promotions":"promotion_id", "promo_offer_items":"offer_item_id",
-              "master_business_info":"business_id", "clinic_services":"service_id",
-              "promo_offer_terms":"offer_id", "clinic_memberships":"plan_id"}.get(table, "id")
-        while True:
-            rows = client.fetch_rows(table, columns, limit=500, offset=offset, order=f"{pk}.asc")
-            values.extend(rows)
-            if len(rows) < 500:
-                return values
-            offset += len(rows)
-    snapshot = {name:all_rows(table) for name,table in {
-        "promotions":"clinic_promotions", "offers":"promo_offer_master", "items":"promo_offer_items",
-        "businesses":"master_business_info"}.items()}
-    snapshot["services"] = all_rows("clinic_services", SERVICE_COLUMNS)
-    snapshot["terms"] = all_rows("promo_offer_terms")
-    # Read only source ownership, never membership fees or benefits.
-    snapshot["memberships"] = all_rows("clinic_memberships", "plan_id,business_id,source_url")
-    names = client.rpc_read("fn_clinic_service_names")
-    if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
-        raise RuntimeError("service_names_unavailable")
-    snapshot["service_names"] = names
-    return snapshot
-
-
-def check_promotion_source(url: str, snapshot: dict) -> None:
-    canonical = normalize_source_url(url)
-    if re.search(r"(?:^|[-_/])memberships?(?:[-_/]|$)", urlsplit(url).path, re.I):
-        raise RuntimeError("membership_source_requires_review")
-    for row in snapshot.get("memberships", []):
-        source = row.get("source_url")
-        if source:
-            try:
-                matches = normalize_source_url(source) == canonical
-            except ValueError:
-                continue
-            if matches:
-                raise RuntimeError("membership_source_requires_review")
-
-
-def _address_key(address) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", str(address or "").casefold()))
-
-
-def bind_source(url: str, snapshot: dict) -> list[dict]:
-    """来源页面对应的商家，按 business_id 排序。
-
-    多家商家共用同一来源页面（连锁品牌的统一促销页）时，地址各不相同的是不同分店，每家各写一份；
-    地址相同或缺失时无法区分是分店还是重复登记，交人工审查。
-    """
-    check_promotion_source(url, snapshot)
-    canonical = normalize_source_url(url)
-    matches = set()
-    for key in ("promotions", "services"):
-        for row in snapshot[key]:
-            source = row.get("source_url")
-            if source:
-                try:
-                    if normalize_source_url(source) == canonical:
-                        matches.add(row["business_id"])
-                except ValueError:
-                    pass
-    if not matches:
-        domain = urlsplit(url).hostname.lower().removeprefix("www.")
-        for row in snapshot["businesses"]:
-            website = str(row.get("website") or "")
-            host = urlsplit(website if "://" in website else "https://"+website).hostname
-            if host and host.lower().removeprefix("www.") == domain:
-                matches.add(row["business_id"])
-    if not matches:
-        raise RuntimeError("source_business_missing")
-    if len(matches) > 1:
-        addresses = {row["business_id"]: _address_key(row.get("address")) for row in snapshot["businesses"]
-                     if row["business_id"] in matches}
-        keys = [addresses.get(business_id, "") for business_id in matches]
-        if not all(keys) or len(set(keys)) != len(keys):
-            raise RuntimeError("source_business_ambiguous")
-    return [{"business_id":business_id, "url":url} for business_id in sorted(matches)]
-
-
-def not_found_plan(source: dict, graph: dict, protections: dict) -> dict:
-    """页面确认 404：停用该商家在这个来源上唯一的有效促销及其 offer。"""
-    active = [p for p in graph["promotions"] if p.get("is_active") is True]
-    if len(active) != 1:
-        raise RuntimeError("not_found_source_match_requires_review")
-    parent_id = active[0]["promotion_id"]
-    operations = [{"table":"promo_offer_master","action":"update","id":o["id"],
-                   "values":{"is_active":False}} for o in graph["offers"]
-                  if o.get("is_active") is True and o["promotion_id"] == parent_id]
-    operations.append({"table":"clinic_promotions","action":"update","id":parent_id,
-                       "values":{"is_active":False}})
-    _protect(graph,operations,protections)
-    return {"schema_version":1,"status":"ready","source":source,"before":graph,
-            "operations":operations,"review":[],"evidence_summary":{"confirmed_http_and_visible_404":True},
-            "image_policy":{"version":1,"depends_on_images":False,"image_write_enabled":False}}
-
-
-def combine_branch_plans(url: str, plans: list[dict]) -> dict:
-    """连锁分店共用同一来源页面：每家一份计划，全部就绪才写入；审查原因注明分店。"""
-    combined = {"schema_version":1, "status":"ready" if all(p["status"] == "ready" for p in plans) else "review",
-                "source":{"url":url, "business_ids":[p["source"]["business_id"] for p in plans]},
-                "branches":plans, "operations":[op for p in plans for op in p["operations"]],
-                "review":[{**item, "business_id":p["source"]["business_id"]} for p in plans for item in p.get("review", [])],
-                "event_id":plans[0]["event_id"], "evidence_path":plans[0]["evidence_path"],
-                "prepared_at":plans[0]["prepared_at"]}
-    image_retry = [p["image_retry_reason"] for p in plans if p.get("image_retry_reason")]
-    if image_retry:
-        combined["image_retry_reason"] = image_retry[0]
-    return combined
-
-
-def snapshot_business_graph(snapshot: dict, business_id: int) -> dict:
-    promotions = [r for r in snapshot["promotions"] if r["business_id"] == business_id]
-    promotion_ids = {r["promotion_id"] for r in promotions}
-    offers = [r for r in snapshot["offers"] if r["business_id"] == business_id or r.get("promotion_id") in promotion_ids]
-    offer_ids = {r["id"] for r in offers}
-    return {"promotions":promotions, "offers":offers,
-            "items":[r for r in snapshot["items"] if r["offer_id"] in offer_ids],
-            "services":[r for r in snapshot["services"] if r["business_id"] == business_id],
-            "terms":[r for r in snapshot.get("terms", []) if r.get("offer_id") in offer_ids]}
-
-
-def verified_batch_results(root: Path, snapshot: dict) -> list[dict]:
-    """Acknowledge applied fields against today's DB without replaying old DML.
-
-    Receipts cover specific records. Unresolved offers on the same page still
-    require review; a prior partial batch does not prove page completeness.
-    """
-    results = []
-    for receipt in read_json(root / "verified_batch_receipts.json", []):
-        matches, differences = [], []
-        for expected in receipt["records"]:
-            actual = next((row for row in snapshot.get(expected["group"], [])
-                           if row[expected["pk"]] == expected["id"]), None)
-            changed = [field for field, value in expected["values"].items()
-                       if actual is None or actual.get(field) != value]
-            ref = {"group":expected["group"], "id":expected["id"]}
-            if changed:
-                differences.append({**ref, "fields":changed})
-            else:
-                matches.append(ref)
-        results.append({"batch_id":receipt["batch_id"],"url":receipt["url"],
-                        "verified_at":receipt["verified_at"],"database_read_at":now(),
-                        "status":"already_synchronized" if not differences else "changed_since_verification",
-                        "confirmed_records":matches,"changed_records":differences,
-                        "evidence_paths":receipt.get("evidence_paths",[])})
-    return results
-
-
-def retry_failed_scrape_urls(root: Path, config: dict) -> set[str]:
-    """Select failed pages below the per-source hourly retry limit."""
-    configured = {url for monitor in config["monitors"].values()
-                  for group in monitor.get("targets", []) for url in group.get("urls", [])}
-    limits = RetryLimits(root)
-    limits.refresh_scrapes(configured)
-    needed = {value["url"] for value in limits.state["scrape"].values()
-              if not limits.paused("scrape", value["url"])}
-    for path in (root / "events").glob("*.json"):
-        event = read_json(path)
-        if (event.get("status") == "retryable" and event.get("retry_reason") == "fresh_scrape_required"
-                and event.get("url") in configured
-                and not limits.paused("scrape", event["url"])
-                and not limits.paused("processing", event["url"])):
-            needed.add(event["url"])
-    return needed
-
-
-def expired_active_promotion_urls(snapshot: dict) -> set[str]:
-    """Source URLs for promotions that are still active but past campaign_end_date."""
-    today = date.today()
-    urls: set[str] = set()
-    for promotion in snapshot.get("promotions", []):
-        if promotion.get("is_active") is not True or not promotion.get("source_url"):
-            continue
-        end_date = str(promotion.get("campaign_end_date") or "")[:10]
-        try:
-            if end_date and date.fromisoformat(end_date) < today:
-                urls.add(promotion["source_url"])
-        except ValueError:
-            continue
-    return urls
-
-
-def enqueue_expired_campaign_checks(root: Path, snapshot: dict, config: dict) -> int:
-    """Queue one fresh evidence check for each active, dated campaign that expired."""
-    today = datetime.now().astimezone().date()
-    newest: dict[str, tuple[datetime, Path, str]] = {}
-    for path in (root / "evidence").glob("*.json"):
-        try:
-            artifact = read_json(path)
-            captured = datetime.fromisoformat(str(artifact["captured_at"]).replace("Z", "+00:00"))
-            if captured.astimezone().date() != today:
-                continue
-            url = artifact["url"]
-            key = normalize_source_url(url)
-            if key not in newest or captured > newest[key][0]:
-                newest[key] = (captured, path, url)
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    events_dir = root / "events"
-    existing_ids = {path.stem for path in events_dir.glob("*.json")}
-    queued = 0
-    for promotion in snapshot.get("promotions", []):
-        if promotion.get("is_active") is not True:
-            continue
-        end_date = str(promotion.get("campaign_end_date") or "")[:10]
-        try:
-            if not end_date or date.fromisoformat(end_date) >= today:
-                continue
-        except ValueError:
-            continue
-        url = promotion.get("source_url")
-        try:
-            key = normalize_source_url(url)
-        except ValueError:
-            continue
-        if key not in newest:
-            continue
-        event_id = digest(["campaign-expiry", promotion["promotion_id"], end_date, newest[key][1].stem])
-        if event_id in existing_ids:
-            continue
-        artifact_path = newest[key][1]
-        event = {"event_id":event_id,"url":url,"promotion_id":promotion["promotion_id"],
-                 "artifact_id":artifact_path.stem,"artifact_path":str(artifact_path),
-                 "status":"pending","change_type":"campaign_expiry_check",
-                 "created_at":now(),"expired_campaign_end_date":end_date}
-        atomic_json(events_dir / (event_id+".json"),event)
-        queued += 1
-    return queued
-
-
-
-def data_quality_recheck_urls(root: Path) -> set[str]:
-    queue = read_json(root / "data_quality" / "recheck_queue.json", {})
-    entries = queue.get("entries", []) if isinstance(queue, dict) else queue
-    return {row["source_url"] for row in entries if row.get("source_kind") == "promotion"
-            and row.get("status") in {"pending", "review"} and row.get("source_url")}
-
-
-def enqueue_data_quality_rechecks(root: Path) -> int:
-    """The shared queue owns status; Monitor adds durable evidence events only."""
-    queue = read_json(root / "data_quality" / "recheck_queue.json", {})
-    entries = queue.get("entries", []) if isinstance(queue, dict) else queue
-    newest = {}
-    for path in (root / "evidence").glob("*.json"):
-        artifact = read_json(path)
-        try:
-            captured = datetime.fromisoformat(artifact["captured_at"].replace("Z", "+00:00"))
-            if captured.astimezone().date() != datetime.now().astimezone().date():
-                continue
-            canonical = normalize_source_url(artifact["url"])
-            if canonical not in newest or captured > newest[canonical][0]:
-                newest[canonical] = (captured, path)
-        except (KeyError, TypeError, ValueError):
-            continue
-    queued = 0
-    for row in entries:
-        if row.get("source_kind") != "promotion" or row.get("status") not in {"pending", "review"}:
-            continue
-        key = normalize_source_url(row["source_url"])
-        if key not in newest:
-            continue
-        artifact_path = newest[key][1]
-        event_id = digest(["data-quality-recheck", key, row.get("requested_at"), artifact_path.stem])
-        event_path = root / "events" / (event_id + ".json")
-        if event_path.exists():
-            continue
-        atomic_json(event_path, {"event_id":event_id,"url":row["source_url"],"status":"pending",
-                    "change_type":"data_quality_recheck","created_at":now(),
-                    "artifact_id":artifact_path.stem,"artifact_path":str(artifact_path),
-                    "quality_reasons":row.get("reasons", []),"quality_requested_at":row.get("requested_at")})
-        queued += 1
-    return queued
 
 def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> dict:
     event = read_json(path)
@@ -351,12 +76,8 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
             stale = stale or not capture_is_current(cached_browser)
             legacy_image = plan_write_block(cached,pending_dir(root)) in {"legacy_image_evidence_requires_refresh", "breakpoint_coverage_incomplete", "variant_capture_proof_mismatch"}
             policy_changed = (cached.get("image_policy") is not None and
-                cached["image_policy"].get("image_write_enabled") !=
-                (read_json(root / "price_sync_control.json",{}).get("image_write_enabled") is True))
+                cached["image_policy"].get("image_write_enabled") != image_writes_enabled(root))
             if not stale and not legacy_image and not policy_changed and event.get("status") != "retryable":
-                cached_browser = read_json(directory / "browser.json", {})
-                if cached_browser.get("final_url"):
-                    check_promotion_source(cached_browser["final_url"], snapshot)
                 return cached
             attempt = int(event.get("attempt", 0)) + 1
             atomic_json(directory / f"plan_attempt_{attempt}.json", cached)
@@ -366,20 +87,7 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
         graphs = [source_graph(snapshot_business_graph(snapshot, source["business_id"]), source) for source in sources]
         # business_id 只用于同一页面内规格截图的去重键，各分店共用同一次渲染
         render_business = sources[0]["business_id"]
-        rendered_path = artifact.get("rendered",{}).get("browser_path")
-        browser = read_json(Path(rendered_path),{}) if rendered_path else None
-        if not browser:
-            verified = reviewed_browser(root, artifact, directory)
-            if verified:
-                receipt = next(r for r in read_json(root / "visual_verifications.json", [])
-                               if r.get("url") == artifact.get("url") and r.get("artifact_captured_at") == artifact.get("captured_at")
-                               and r.get("artifact_markdown") == artifact.get("markdown"))
-                if all(Path(f).is_file() for f in receipt.get("screenshots_viewed", [])):
-                    browser = {**verified, "captured_at":artifact["captured_at"], "verified_capture":True,
-                               "url":artifact["url"], "visual_receipt_path":str(root / "visual_verifications.json"),
-                               "verified_artifact_path":event["artifact_path"], "breakpoint_coverage":receipt.get("breakpoint_coverage"),
-                               "complete":bool(receipt.get("breakpoint_coverage") and
-                                      all(v.get("complete") for v in receipt["breakpoint_coverage"].values()))}
+        browser = stored_browser(root, artifact, event["artifact_path"], directory)
         if (not browser or (not capture_is_current(browser) and not browser.get("verified_capture")) or not browser.get("accessible") or
                 event.get("retry_reason") in {"image_capture_incomplete","image_stage_timeout","image_tiles_missing"}):
             browser = render_page(event["url"], directory, business_id=render_business)
@@ -388,13 +96,13 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
             browser = render_page(event["url"], directory, force_ocr=True, business_id=render_business)
         browser["ocr_forced"] = ocr_forced
         browser["dual_cache_path"] = str(root / "visual_cache" / (digest(normalize_source_url(event["url"]))+".json"))
-        browser["image_write_enabled"] = read_json(root / "price_sync_control.json",{}).get("image_write_enabled") is True
+        browser["image_write_enabled"] = image_writes_enabled(root)
         atomic_json(directory / "browser.json",browser)
         not_found = confirmed_not_found(browser)
         if not browser.get("accessible") and not not_found:
             raise RuntimeError("page_not_accessible")
-        # Redirects across a clinic boundary cannot silently rebind an offer.
-        if urlsplit(browser["final_url"]).hostname.lower().removeprefix("www.") != urlsplit(event["url"]).hostname.lower().removeprefix("www."):
+        # 跳到商家自己登记的网站是网站迁移；跳到第三方网站不能把 offer 改绑过去
+        if not redirect_stays_with_business(browser["final_url"], event["url"], sources, snapshot):
             raise RuntimeError("source_redirect_requires_review")
         check_promotion_source(browser["final_url"], snapshot)
         if not_found:
@@ -422,27 +130,24 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
         if isinstance(exc, HTTPError) and exc.response is not None:
             category = {402:"extraction_quota_exhausted",429:"extraction_rate_limited",
                         401:"extraction_credentials_rejected",403:"extraction_credentials_rejected"}.get(exc.response.status_code,category)
+        item = {"reason":category, **({"transient":True} if isinstance(exc, NETWORK_ERRORS) else {})}
         plan = {"schema_version":1,"status":"review", "source":{"url":event["url"]},
-                "operations":[],"review":[{"reason":category}],"event_id":event["event_id"],"prepared_at":now()}
+                "operations":[],"review":[item],"event_id":event["event_id"],"prepared_at":now()}
     if plan_path.exists() and not archived:
         attempt = int(event.get("attempt", 0)) + 1
         atomic_json(directory / f"plan_attempt_{attempt}.json", read_json(plan_path))
         event["attempt"] = attempt
     atomic_json(plan_path, plan)
-    transient = {"rendered_page_failed","page_not_accessible","rendered_page_timeout","rendered_browser_unavailable",
-                 "TimeoutExpired","TimeoutError","HTTPError","ConnectionError",
-                 "extraction_credentials_missing","extraction_rate_limited","extraction_quota_exhausted","JSONDecodeError",
-                 "fresh_scrape_required","image_stage_timeout","image_tiles_missing","image_capture_incomplete"}
-    reason = (plan.get("review") or [{}])[-1].get("reason")
-    # 会员页只进 clinic_memberships，促销监控不处理，也不进入审查清单。
-    status = ("planned" if plan["status"] == "ready" else "retryable" if reason in transient
-              else "excluded" if reason == "membership_source_requires_review" else "review")
+    status, recapture = event_status(plan)
     event.update(status=status, plan_path=str(plan_path))
+    if recapture:
+        # 证据不足以判定：现有记录不动，等新的抓取（含 ego-lite 渲染）后重新处理
+        event.update(retry_reason="fresh_scrape_required", fresh_evidence_after=now())
     atomic_json(path, event)
     return plan
 
 
-def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_limit: int | None = None,
+def process_events(root: Path, snapshot: dict, *, event_limit: int | None = None,
                    retryable_only: bool = False, retry_probe_urls: set[str] | None = None) -> dict:
     limits = RetryLimits(root)
     probes = {normalize_source_url(url) for url in (retry_probe_urls or set())}
@@ -483,9 +188,10 @@ def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_lim
             event = read_json(path)
             canonical = normalize_source_url(event["url"])
             if limits.paused("processing", event["url"]) and canonical not in probes:
-                event.update(status="review")
+                # 暂停小时重试：每日任务抓到新正文后续跑，事件保持待重试
+                event.update(status="retryable")
                 atomic_json(path, event)
-                plans.append((path, {"status": "review", "review": [{"reason": "retry_limit_reached", "blocking": True}]}))
+                plans.append((path, {"status": "retryable", "review": [], "hourly_retry_paused": True}))
             else:
                 if limits.paused("processing", event["url"]):
                     # A weekly success permits a fresh evidence probe, never a
@@ -500,9 +206,6 @@ def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_lim
             event = read_json(path)
             if event.get("status") == "retryable":
                 limits.failed("processing", event["url"], (plan.get("review") or [{}])[-1].get("reason"))
-                if limits.paused("processing", event["url"]):
-                    event.update(status="review")
-                    atomic_json(path, event)
             elif not plan.get("image_retry_reason"):
                 limits.succeeded("processing", event["url"])
             plans.append((path,plan))
@@ -515,18 +218,20 @@ def process_events(root: Path, snapshot: dict, *, write_enabled: bool, event_lim
         if plan["status"] != "ready":
             results.append({"url":event["url"],"status":event.get("status","review"), "review":plan.get("review",[])})
             continue
-        if not write_enabled:
-            results.append({"url":event["url"],"status":"writes_disabled", "operations":len(plan["operations"]),"review":plan.get("review",[])})
-            continue
         receipt = render_pending(plan, protections, root)
         event.update(status=receipt["status"], receipt=receipt)
+        if receipt["status"] == "review":
+            status, recapture = gate_status(receipt["category"])
+            event["status"] = status
+            if recapture:
+                event.update(retry_reason="fresh_scrape_required", fresh_evidence_after=now())
+                limits.failed("processing", event["url"], receipt["category"])
         if receipt["status"] == "pending_sql" and plan.get("image_retry_reason"):
             event.update(status="retryable",retry_reason=plan["image_retry_reason"],text_receipt=receipt)
             limits.failed("processing",event["url"],plan["image_retry_reason"])
-            if limits.paused("processing",event["url"]):event["status"]="review"
         atomic_json(path,event)
         results.append({"url":event["url"],**receipt,"status":event["status"]})
-    return {"generated_at":now(),"write_enabled":write_enabled,"sources":results,
+    return {"generated_at":now(),"sources":results,
             "source_status_counts":dict(Counter(row["status"] for row in results)),
             "previously_verified":verified_batch_results(root, snapshot),
             "protection_count":len(protections["entries"]), "queued_events":len(pending),
@@ -538,28 +243,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config",type=Path,help="Monitor config file; without it the queue is built from the clinic_promotions and clinic_memberships source URLs")
     parser.add_argument("--state-dir",type=Path,default=ROOT / "output/self_hosted_monitor_state")
-    parser.add_argument("--control",type=Path)
     parser.add_argument("--database-snapshot",type=Path)
     parser.add_argument("--skip-scrape",action="store_true")
+    parser.add_argument("--capture-only",action="store_true",help="Capture pages and record changes; plan nothing and render no SQL (scheduled crawl observation)")
     parser.add_argument("--event-limit",type=int)
     parser.add_argument("--limit",type=int)
     parser.add_argument("--monitor",action="append")
-    parser.add_argument("--retry-reviews",action="store_true",help="Re-extract reviewed pages, preserving every prior plan")
     parser.add_argument("--recheck-data-quality-only",action="store_true",help="Capture queued promotion sources; leave membership and service entries to their writers")
     parser.add_argument("--retry-transient-only",action="store_true",help="Process retryable events only; never reopen business reviews")
     parser.add_argument("--all-pages",action="store_true",help="Capture every configured page, ignoring the poll schedule")
     args = parser.parse_args()
     root = args.state_dir
     with run_lock(root):
-        control = read_json(args.control or root / "price_sync_control.json", {"write_enabled":False})
-        if args.retry_reviews:
-            for path in (root / "events").glob("*.json"):
-                event = read_json(path)
-                if event.get("status") == "review" and not event.get("receipt", {}).get("resume_required"):
-                    event["status"] = "retryable"
-                    atomic_json(path,event)
         reports = []
-        browser_cache = {}
         if not args.skip_scrape:
             snapshot_for_scrape = (
                 read_json(args.database_snapshot) if args.database_snapshot else database_snapshot()
@@ -569,40 +265,21 @@ def main() -> int:
             quality_urls.update(expired_active_promotion_urls(snapshot_for_scrape))
             if getattr(args, "recheck_data_quality_only", False):
                 config = {"monitors":{"data_quality":{"targets":[{"urls":sorted(quality_urls)}]}}}
-            elif quality_urls:
+            elif quality_urls and not args.capture_only:
                 configured_urls = {url for definition in config["monitors"].values()
                                    for target in definition.get("targets", []) for url in target.get("urls", [])}
                 extra = quality_urls - configured_urls
                 if extra:
                     config["monitors"]["data_quality"] = {"targets":[{"urls":sorted(extra)}]}
-            names = args.monitor or list(config["monitors"])
-            run_started = datetime.now(timezone.utc)
-            if args.retry_transient_only:
-                selected_urls = retry_failed_scrape_urls(root, config)
-            elif args.recheck_data_quality_only or args.all_pages:
-                selected_urls = None
-            else:
-                # 每天运行：只抓轮询到期的页面，加上到期活动与数据质量复查要求的页面
-                configured_urls = {url for definition in config["monitors"].values()
-                                   for target in definition.get("targets", []) for url in target.get("urls", [])}
-                schedule = load_schedule(root, configured_urls, run_started, config_kinds(config))
-                selected_urls = due_urls(schedule, configured_urls, run_started) | quality_urls
-            for name in names:
-                target_urls = {url for target in config["monitors"][name].get("targets", [])
-                               for url in target.get("urls", [])}
-                filtered = ({url for url in selected_urls if url in target_urls}
-                            if selected_urls is not None else None)
-                if filtered is not None and not filtered:
-                    continue
-                reports.append(run_monitor(config,name,api_url=os.getenv("FIRECRAWL_SELF_HOSTED_API_URL","http://127.0.0.1:3002"),
-                    api_key=os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY",""),state_dir=root,
-                    timeout=float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS","120")),limit=args.limit,
-                    workers=int(os.getenv("FIRECRAWL_MONITOR_WORKERS","3")),send_notifications=False,
-                    catchup=not args.retry_transient_only,urls_filter=filtered,
-                    scan_images=config["monitors"][name].get("scan_images", True),browser_cache=browser_cache))
-                atomic_json(root / "monitor_run_report.json", {"generated_at":now(),"reports":reports})
-            if reports:
-                record_reports(root, reports, run_started, config_kinds(config))
+            started = datetime.now(timezone.utc)
+            selected_urls = capture_urls(root, config, quality_urls, retry_only=args.retry_transient_only,
+                                         capture_all=args.recheck_data_quality_only or args.all_pages or args.capture_only,
+                                         started=started)
+            reports = capture(root, config, args.monitor or list(config["monitors"]), selected_urls, limit=args.limit,
+                              catchup=not args.retry_transient_only, started=started, run_monitor=run_monitor)
+        if args.capture_only:
+            # 到期抓取闭环只观察页面变化，计划与待执行 SQL 归每日监控
+            return 2 if any(row["error"] for row in reports) else 0
         snapshot = read_json(args.database_snapshot) if args.database_snapshot else database_snapshot()
         atomic_json(root / "database_snapshot.json",snapshot)
         if reports and not args.retry_transient_only:
@@ -611,27 +288,28 @@ def main() -> int:
         else:
             expiry_checks = 0
             quality_checks = 0
-        enabled = control.get("write_enabled") is True
         queue = load_config(args.config) if args.config else build_config(snapshot, root)
         RetryLimits(root).refresh_scrapes(set(config_urls(queue)))
         weekly_probe = bool(reports) and not args.retry_transient_only
         probe_urls = {url for report in reports for url in report.get("successful_urls", [])} if weekly_probe else set()
-        report = process_events(root,snapshot,write_enabled=enabled,event_limit=args.event_limit,
+        report = process_events(root,snapshot,event_limit=args.event_limit,
                                 retryable_only=args.retry_transient_only, retry_probe_urls=probe_urls)
         report["monitors"] = reports
         report["expiry_checks_enqueued"] = expiry_checks
         report["quality_checks_enqueued"] = quality_checks
         report["scrape_failed_pages"] = sum(row["error"] for row in reports)
         report["failure_scope"] = "page_or_source_only"
-        report["paused_retries"] = RetryLimits(root).paused_reviews()
+        report["paused_retries"] = RetryLimits(root).paused_sources()
         report["run_type"] = ("event_processing" if args.skip_scrape else
                               "failure_retry" if args.retry_transient_only else "full_monitor")
         # Hourly retry reports must not erase the evidence of the weekly run.
         stamp = datetime.fromisoformat(report["generated_at"]).strftime("%Y%m%d_%H%M%S_%f")
         atomic_json(root / "runs" / f"{stamp}_{report['run_type']}.json", report)
         atomic_json(root / "sync_report.json",report)
-        atomic_json(root / "review_queue.json",[row for row in report["sources"] if row.get("review") or row["status"] in {"review","retryable"}] + report["paused_retries"])
-        print(json.dumps({"report_path":str(root / "sync_report.json"), "write_enabled":enabled,
+        # 审查清单只收证据无法判定的来源；待重试与暂停小时重试的来源由任务自己续跑
+        atomic_json(root / "review_queue.json",[row for row in report["sources"]
+                    if row["status"] == "review" or any(needs_review(item) for item in row.get("review", []))])
+        print(json.dumps({"report_path":str(root / "sync_report.json"),
                           "selected_events":report["selected_events"], "protection_count":report["protection_count"]}))
     return 2 if any(row["error"] for row in reports) or any(row["status"] == "retryable" for row in report["sources"]) else 0
 

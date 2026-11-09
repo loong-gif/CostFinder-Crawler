@@ -26,8 +26,8 @@ def test_duplicate_new_evidence_offer_is_not_inserted_twice():
     graph = _graph()
     graph.update(promotions=[], offers=[], items=[])
     plan = build_plan(SOURCE, graph, _evidence([_offer(), _offer()], promotion_end_date="2026-10-31"), {})
-    assert plan["status"] == "review" and not plan["operations"]
-    assert plan["review"][-1]["reason"] == "duplicate_evidence_offer"
+    assert plan["status"] == "ready" and plan["review"] == []
+    assert sum(op["table"] == "promo_offer_master" for op in plan["operations"]) == 1
 
 
 def test_http_www_alias_preserves_existing_source_url_on_update():

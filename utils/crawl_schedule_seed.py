@@ -1,33 +1,21 @@
-#!/usr/bin/env python3
-"""Seed ``state/crawl_schedule`` files from existing catalogue data (read-only against the DB).
-
-Dry run by default; ``--apply`` writes ``cities.json`` and ``schedule.json``. Existing entries
-are preserved (a re-run only adds new businesses and cities).
-"""
+"""抓取调度补种：目录里还没有调度条目的商家和城市，按已有数据生成 schedule.json / cities.json 条目（已有条目不动）。"""
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from utils.crawl_schedule_state import (  # noqa: E402
-    TIER_INTERVAL_DAYS,
-    city_key,
-    discovery_interval_days,
-    load_state,
-    save_state,
-)
-from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
+from utils.crawl_schedule_state import TIER_INTERVAL_DAYS, city_key, discovery_interval_days
 
 _STATE_ZIP = re.compile(r",\s*([A-Z]{2})\s+\d{5}")
+
+SEED_TABLES = {
+    "businesses": ("master_business_info", "business_id, website, city, address", "true"),
+    "promotions": ("clinic_promotions", "promotion_id, business_id, source_url, updated_at, is_active", "true"),
+    "services": ("clinic_services", "service_id, business_id, source_url, updated_at", "true"),
+    "memberships": ("clinic_memberships", "plan_id, business_id, source_url, updated_at", "true"),
+}
 
 
 def parse_state(address: str | None) -> str:
@@ -36,6 +24,8 @@ def parse_state(address: str | None) -> str:
 
 
 def _parse_ts(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     raw = str(value or "").strip()
     if not raw:
         return None
@@ -127,45 +117,12 @@ def build_cities(businesses: list[dict[str, Any]], existing: dict[str, Any], now
     return cities
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="write state files (default: dry run)")
-    args = parser.parse_args()
-
-    client = load_supabase_client(PROJECT_ROOT, role="service")
-    businesses = fetch_all_rows(
-        client, "master_business_info", "business_id,city,address", order="business_id.asc"
-    )
-    promotions = fetch_all_rows(
-        client, "clinic_promotions", "promotion_id,business_id,updated_at,is_active", order="promotion_id.asc"
-    )
-    services = fetch_all_rows(
-        client, "clinic_services", "service_id,business_id,updated_at", order="service_id.asc"
-    )
-    memberships = fetch_all_rows(
-        client, "clinic_memberships", "plan_id,business_id,updated_at", order="plan_id.asc"
-    )
-
-    last_crawled = latest_by_business(promotions + services + memberships)
-    tier_a_ids = {int(row["business_id"]) for row in promotions if row.get("is_active") and row.get("business_id")}
-    tier_a_ids |= {int(row["business_id"]) for row in memberships if row.get("business_id")}
-
-    now = datetime.now(timezone.utc)
-    schedule = build_schedule(
-        businesses, last_crawled=last_crawled, tier_a_ids=tier_a_ids, now=now, existing=load_state("schedule")
-    )
-    cities = build_cities(businesses, load_state("cities"), now)
-
-    tiers = Counter(entry["tier"] for entry in schedule.values())
-    print(f"businesses={len(businesses)} schedule={len(schedule)} tiers={dict(tiers)} cities={len(cities)}")
-    print(f"with_last_crawled={sum(1 for e in schedule.values() if e['last_crawled_at'])}")
-    if args.apply:
-        print(f"wrote {save_state('schedule', schedule)}")
-        print(f"wrote {save_state('cities', cities)}")
-    else:
-        print("dry run: pass --apply to write state files")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+def seed(snapshot: dict[str, list[dict[str, Any]]], schedule: dict[str, Any], cities: dict[str, Any],
+         now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
+    """新登记的商家与城市补进调度；返回 (schedule, cities)。"""
+    promotions, services, memberships = snapshot["promotions"], snapshot["services"], snapshot["memberships"]
+    tier_a = {int(r["business_id"]) for r in promotions if r.get("is_active") and r.get("business_id")}
+    tier_a |= {int(r["business_id"]) for r in memberships if r.get("business_id")}
+    return (build_schedule(snapshot["businesses"], last_crawled=latest_by_business(promotions + services + memberships),
+                           tier_a_ids=tier_a, now=now, existing=schedule),
+            build_cities(snapshot["businesses"], cities, now))

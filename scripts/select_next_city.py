@@ -2,8 +2,11 @@
 """Manage the new-city queue in ``state/crawl_schedule/cities.json``.
 
   add CITY STATE [--supply N]   add a candidate city
-  pick [--apply]                choose the next city (weekly slot) and mark it onboarding
-  pilot CITY STATE N [--apply]  record the pilot result (N qualifying businesses with a website)
+  pick                          choose the next city (weekly slot) and mark it onboarding
+  pilot CITY STATE              record the pilot result; the qualifying count (places that passed the filter and
+                                have a website) comes from candidates.json written by register-businesses
+
+Demand (signups per city) is read with read-sql + read-snapshot, or from ``--snapshot``.
 """
 from __future__ import annotations
 
@@ -17,20 +20,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.city_selection import evaluate_pilot, pick_next_city, score_city  # noqa: E402
+from utils.city_selection import evaluate_pilot, pick_next_city, pilot_qualifying, score_city  # noqa: E402
 from utils.crawl_schedule_state import city_key, load_state, save_state  # noqa: E402
-from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
+from utils.pipeline_db import load_snapshot, read_tables  # noqa: E402
+
+DEMAND_TABLES = {"profiles": ("profiles", "id, location_city", "location_city is not null")}
+OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "select_city"
 
 
-def load_demand() -> dict[str, int]:
-    """Signups per lower-cased city (read-only); unreachable demand data counts as zero."""
-    try:
-        client = load_supabase_client(PROJECT_ROOT, role="service")
-        rows = fetch_all_rows(client, "profiles", "id,location_city", order="id.asc")
-    except Exception as exc:  # demand is advisory, never a blocker
-        print(f"demand unavailable: {exc}", file=sys.stderr)
-        return {}
-    return dict(Counter(str(r.get("location_city") or "").strip().lower() for r in rows if r.get("location_city")))
+def load_demand(snapshot: Path | None, now: datetime) -> dict[str, int]:
+    """Signups per lower-cased city."""
+    rows = (load_snapshot(snapshot, DEMAND_TABLES) if snapshot
+            else read_tables(OUTPUT_DIR / now.strftime("%Y%m%dT%H%M%SZ"), DEMAND_TABLES))["profiles"]
+    return dict(Counter(str(r["location_city"]).strip().lower() for r in rows if str(r["location_city"]).strip()))
 
 
 def main() -> int:
@@ -41,12 +43,10 @@ def main() -> int:
     add.add_argument("state")
     add.add_argument("--supply", type=float, default=0)
     pick = sub.add_parser("pick")
-    pick.add_argument("--apply", action="store_true")
+    pick.add_argument("--snapshot", type=Path, help="snapshot.json of the demand query; default: read it now")
     pilot = sub.add_parser("pilot")
     pilot.add_argument("city")
     pilot.add_argument("state")
-    pilot.add_argument("qualifying", type=int)
-    pilot.add_argument("--apply", action="store_true")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -67,27 +67,26 @@ def main() -> int:
         return 0
 
     if args.command == "pick":
-        demand = load_demand()
+        demand = load_demand(args.snapshot, now)
         key = pick_next_city(cities, demand, now)
         if key is None:
             print("no eligible candidate (or onboarding slots are full)")
             return 0
-        print(f"next city: {key} score={score_city(cities[key], cities, demand)}")
-        if args.apply:
-            cities[key]["status"] = "onboarding"
-            save_state("cities", cities)
-            print("marked onboarding")
+        cities[key]["status"] = "onboarding"
+        save_state("cities", cities)
+        print(f"next city: {key} score={score_city(cities[key], cities, demand)}; marked onboarding")
         return 0
 
     key = city_key(args.city, args.state)
     if key not in cities:
         print(f"unknown city {key}", file=sys.stderr)
         return 2
-    result = evaluate_pilot(cities[key], args.qualifying, now)
-    print(f"{key}: {cities[key].get('status')} -> {result['status']} parked_until={result['parked_until']}")
-    if args.apply:
-        cities[key] = result
-        save_state("cities", cities)
+    qualifying = pilot_qualifying(load_state("candidates"), args.city)
+    result = evaluate_pilot(cities[key], qualifying, now)
+    print(f"{key}: qualifying={qualifying} {cities[key].get('status')} -> {result['status']} "
+          f"parked_until={result['parked_until']}")
+    cities[key] = result
+    save_state("cities", cities)
     return 0
 
 

@@ -29,10 +29,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # command -> (module, one-line purpose, writes the database?)
 COMMANDS: Dict[str, Tuple[str, str, str]] = {
-    "select-city": ("scripts.select_next_city", "pick the next city to scan", "no"),
-    "discover-businesses": ("scripts.gmaps_discovery", "1: Google Maps scraper places for a city", "no"),
+    "select-city": ("scripts.select_next_city", "pick the next city to scan; pilot result from candidates", "state files"),
+    "discover-businesses": ("scripts.gmaps_discovery",
+                            "1: Google Maps scraper places for a city; --due re-discovers and registers due cities",
+                            "apply.sql via MCP (--due)"),
     "register-businesses": ("scripts.process_discovery_results",
-                            "1: link / insert discovered places into master_business_info", "--apply"),
+                            "1: link / insert discovered places into master_business_info", "apply.sql via MCP"),
     "topic-search": ("scripts.topic_search",
                      "2: topic search in a city -> clinics to register and seed pages for discover-pages", "no"),
     "discover-pages": ("scripts.discover_new_promo_pages",
@@ -78,12 +80,14 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "quality": ("scripts.run_data_quality_audit",
                 "data-quality audit and rendered recheck", "--apply (with an approved plan)"),
     "batch-gate": ("scripts.run_batch_gate_checks", "batch gate checks A-J (read-only)", "no"),
-    "crawl-schedule": ("scripts.crawl_scheduler", "plan due businesses for the scheduled crawl", "state files"),
+    "crawl-schedule": ("scripts.crawl_scheduler",
+                       "seed new businesses / cities and plan due businesses for the scheduled crawl", "state files"),
     "crawl-record": ("scripts.crawl_record_from_monitor", "record scheduled crawl results", "state files"),
     "read-snapshot": ("scripts.read_snapshot",
                       "run a command's read.sql with the Supabase CLI and save snapshot.json", "no (read only)"),
     "pending-sql": ("scripts.pending_sql",
-                    "list pending SQL files from the monitor host; --mark-applied FILE after MCP execution",
+                    "--pull pending SQL files from the monitor host; --mark-applied FILE after MCP execution "
+                    "(locally and on the monitor host)",
                     "no (moves files)"),
 }
 

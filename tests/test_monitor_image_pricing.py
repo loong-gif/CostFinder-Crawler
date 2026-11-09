@@ -160,14 +160,15 @@ def test_regular_abbreviation_and_thousands_are_not_sale_unit_rates():
     assert infer_explicit_per_unit_price('Sculptra $1,950/vial (reg. price: $2,400/vial)')==1950
 
 
-def test_source_savings_contradiction_is_reviewed_before_trigger_can_overwrite_it():
+def test_source_savings_contradiction_keeps_the_stated_prices_and_drops_the_savings_amount():
     offer=_offer(offer_raw_text='SAVE $250 Face + Neck Now $1,400 (Reg. $1,750)',
         discount_price=1400,regular_price=1750,discount_amount=250,
         items=[{'item_name':'CO2 laser','quantity':None,'unit_price':None}])
     graph=_graph();graph.update(promotions=[],offers=[],items=[],services=[])
     plan=build_plan(SOURCE,graph,_evidence([offer]),{})
-    assert not plan['operations']
-    assert any(r['reason']=='contradictory_discount_evidence' for r in plan['review'])
+    assert plan['status']=='ready' and plan['review']==[]
+    master=next(op for op in plan['operations'] if op['table']=='promo_offer_master')['values']
+    assert master['discount_price']==1400 and master['regular_price']==1750 and master['discount_amount'] is None
 
 
 def test_explicit_quantity_bonus_retains_null_prices_and_real_delivered_count():

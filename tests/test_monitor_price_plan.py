@@ -91,18 +91,17 @@ def test_different_pricing_basis_preserves_existing_offer():
     assert not any(op["table"]=="promo_offer_master" and op["action"]=="insert" for op in plan["operations"])
 
 
-def test_inactive_offer_is_not_restored_and_clear_sibling_can_update():
+def test_visible_inactive_offer_is_reactivated_next_to_an_updated_sibling():
     graph=_with_extra_offer(_graph())
     graph["offers"][0]["is_active"] = False
     sibling=_offer(offer_raw_text="Dysport Special $240", regular_price=None, discount_price=240,
                    items=[{"service_id":13,"item_name":"Dysport","delivered_units":None,"unit_price":240}])
     plan=build_plan(SOURCE,graph,_evidence([_offer(),sibling]),{})
-    assert plan["status"] == "ready",plan
-    assert not any(op["table"] == "promo_offer_master" and op["id"] == 4 for op in plan["operations"])
+    assert plan["status"] == "ready" and plan["review"] == [],plan
+    assert _operation(plan,"promo_offer_master",4)["values"] == {"is_active": True}
     assert _operation(plan,"promo_offer_master",6)["values"]["discount_price"] == 240
     assert all("is_offer_extracted" not in op["values"] for op in plan["operations"]
                if op["table"] == "clinic_promotions")
-    assert any(row["reason"] == "historical_offer_requires_review" for row in plan["review"])
 
 
 def test_fixed_unit_prices_and_regular_prices_are_converted_to_totals():
@@ -211,7 +210,8 @@ def test_existing_service_dictionary_alias_resolves_only_unique_catalog_match():
 
 def test_ambiguous_existing_offer_match_keeps_source_in_review_without_writes():
     graph = _graph()
-    graph["offers"] += [{**graph["offers"][0], "id": 6}]
+    # 两条候选价格不同，无法判定页面对应哪一条
+    graph["offers"] += [{**graph["offers"][0], "id": 6, "discount_price": 330}]
     graph["items"] += [{**graph["items"][0], "offer_item_id": 8, "offer_id": 6}]
     plan = build_plan(SOURCE, graph, _evidence(), {})
     assert plan["status"] == "review" and not plan["operations"]

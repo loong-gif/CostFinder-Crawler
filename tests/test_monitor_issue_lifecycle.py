@@ -2,7 +2,7 @@
 from copy import deepcopy
 from datetime import date, timedelta
 
-from scripts.run_monitor_price_sync import (
+from utils.monitor_event_queue import (
     data_quality_recheck_urls,
     enqueue_data_quality_rechecks,
     enqueue_expired_campaign_checks,

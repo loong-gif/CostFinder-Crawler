@@ -47,13 +47,13 @@ def report_message(report: Mapping[str, Any], *, started_at: str, exit_code: int
     lines.append(f"事件：处理 {report.get('selected_events', 0)} 个（{status_text}）；"
                  f"到期活动核验 {report.get('expiry_checks_enqueued', 0)}，数据质量复查 {report.get('quality_checks_enqueued', 0)}")
     pending = [row for row in report.get("sources", []) if row.get("status") == "pending_sql"]
-    lines.append(f"写入开关：{'开' if report.get('write_enabled') else '关'}；待执行 SQL {len(pending)} 个"
+    lines.append(f"待执行 SQL {len(pending)} 个"
                  + ("，需经 Supabase MCP 执行" if pending else ""))
     for row in pending[:MAX_LISTED]:
         lines.append(f"  · {row['url']}")
     paused = report.get("paused_retries", [])
     if paused:
-        lines.append(f"暂停重试并待审查：{len(paused)} 个来源")
+        lines.append(f"暂停小时重试：{len(paused)} 个来源（每日任务继续重试）")
     errors = [error for row in monitors for error in row.get("page_errors", [])]
     if errors:
         lines.append(f"抓取失败页面（列出 {min(len(errors), MAX_LISTED)}/{len(errors)}）：")

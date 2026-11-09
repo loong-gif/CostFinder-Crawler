@@ -113,12 +113,11 @@ def _validated_offer(raw: dict, markdown: str, items: list[dict]) -> tuple[dict 
     quantity_kind = raw.get("quantity_kind", "fixed")
     if model not in {"total", "per_unit", "from"} or quantity_kind not in {"fixed", "minimum", "variable"}:
         raise _Review("unsupported_price_or_quantity_model")
-    package = raw.get("is_package", len(items) > 1)
     for flag in ("is_package", "is_membership_required", "is_new_customer_required"):
         if flag in raw and not isinstance(raw[flag], bool):
             raise _Review(f"invalid_boolean:{flag}")
-    if len(items) > 1 and not package:
-        raise _Review("multiple_items_require_package")
+    # 一个 offer 含多个项目就是套餐
+    package = raw.get("is_package", False) or len(items) > 1
     qty = _number(items[0]["delivered_units"], "delivered_units") if len(items) == 1 else None
     if model == "per_unit" and len(items) > 1:
         raise _Review("ambiguous_package_unit_price")
@@ -150,15 +149,17 @@ def _validated_offer(raw: dict, markdown: str, items: list[dict]) -> tuple[dict 
             prices["discount_amount"] = _rounded(_number(prices["discount_amount"], "discount_amount") * qty)
     regular = _number(prices["regular_price"], "regular_price")
     discount = _number(prices["discount_price"], "discount_price")
+    # 金额互相矛盾时按页面明示的折后价更新：高于折后价的原价不成立，与原价、折后价对不上的节省金额或百分比置空
     if regular is not None and discount is not None and discount > regular:
-        return None, "discount_exceeds_regular_price"
+        regular = None
+        prices.update(regular_price=None, discount_amount=None, discount_percent=None)
     if regular is not None and discount is not None:
         amount = _number(prices["discount_amount"], "discount_amount")
         percent = _number(prices["discount_percent"], "discount_percent")
         if (amount is not None and abs(regular-discount-amount) > Decimal(".011")
                 or percent is not None and regular > 0 and
                 abs((regular-discount)*100/regular-percent) >= Decimal("1")):
-            return None, "contradictory_discount_evidence"
+            prices.update(discount_amount=None, discount_percent=None)
     bonus = stated_paid_and_delivered(rate_text)
     evidenced_bonus = bonus is not None and len(items) == 1 and qty == bonus[1]
     if not evidenced_bonus and not any(_number(prices[k], k) is not None and _number(prices[k], k) > 0 for k in _PRICE_FIELDS[1:]):

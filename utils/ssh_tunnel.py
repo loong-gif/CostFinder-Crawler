@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 
 import requests
 
-# ~/.ssh/config 中监控服务器的别名，与 deploy-monitor 的默认主机相同
-MONITOR_HOST = "firecrawl"
+from utils.monitor_host import HOST as MONITOR_HOST
+
 READY_TIMEOUT_S = 30.0
 
 
