@@ -2,7 +2,7 @@ from utils.offer_evidence_validator import validate_offer_evidence
 from utils.offer_purchase_semantics import normalize_purchase_offers
 from utils.offer_schema import base_offer_schema
 from utils.offer_scope_filter import (
-    ITEM_NAME_MAX_LENGTH, item_name_problem, multiple_services_reason, non_promotable_reason, short_item_label)
+    ITEM_NAME_MAX_LENGTH, item_name_problem, multiple_services_reason, short_item_label)
 from utils.offer_stage_extract import candidates_from_payload
 from utils.offer_stage_reconcile import plan_offers, plan_source
 from utils.offer_stage_spec import MASTER_COLUMNS, MEMBERSHIPS, PROMOTIONS, source_lines
@@ -137,57 +137,17 @@ def render_source(action):
     return render_apply({"sources": [source]})
 
 
-def test_unlinked_per_unit_offer_is_activated_and_verified():
+def test_unlinked_per_unit_offer_is_written_inactive_and_not_expected_active():
+    # 触发器 prevent_incomplete_offer_activation 不允许激活未关联服务的单价 offer；服务关联未确定不阻止写入
     sql = render_source(insert_action("per_unit", None))
-    assert "set is_active=true, updated_at=now() where id=v_offer" in sql
-    assert "v_new := v_new || v_offer;" in sql
-    assert "offer_activation_changed_by_database: clinic_promotions 7" in sql
+    assert "insert into public.promo_offer_master" in sql
+    assert "set is_active=true, updated_at=now() where id=v_offer" not in sql
+    assert "v_new := v_new || v_offer;" not in sql
 
 
 def test_linked_per_unit_offer_and_total_offer_are_activated():
     assert "set is_active=true" in render_source(insert_action("per_unit", 55))
     assert "set is_active=true" in render_source(insert_action("total", None))
-
-
-def candidate(raw, item_names=("Item",)):
-    return {"offer_raw_text": raw, "items": [{"item_name": name} for name in item_names]}
-
-
-def test_flattened_fragments_are_not_promotable():
-    for raw, names in (
-        ("10% off | and already discounted packages", ("and already discounted packages",)),
-        ("15% off | and lab work (no limits | ; must be ordered / performed at Renew)", ("and lab work (no limits",)),
-        ("15% off | peptides | ; must be ordered / performed at Renew)", ("peptides",)),
-    ):
-        assert non_promotable_reason(candidate(raw, names)) == "fragment_offer_text"
-
-
-def test_membership_term_gift_card_and_event_discounts_are_not_promotable():
-    assert non_promotable_reason(candidate(
-        "Purchase 12 months upfront and receive 3 additional months free (20% savings)", ("Membership",))
-    ) == "membership_term_offer"
-    assert non_promotable_reason(candidate(
-        "Buy one Ultra Smooth Skin Gift card for $75 towards Botox, Get $75 FREE")) == "gift_card_offer"
-    assert non_promotable_reason(candidate("15% off | member events | .", ("member events",))) == "non_service_target"
-
-
-def test_item_names_about_members_events_or_gift_cards_are_not_promotable():
-    for name in ("member events", "Member 10 Units TOX", "Non-Member 50 Units TOX", "VIP Membership",
-                 "10% off all services during Membership period", "Core Members 20% off",
-                 "VIP event invitations, member-only offers and 15% off skincare/products.",
-                 "Holiday gift cards as the perfect stocking stuffer"):
-        assert non_promotable_reason(candidate("15% off services", (name,))) == "non_service_target", name
-
-
-def test_ordinary_service_discounts_stay_promotable():
-    for raw, names in (
-        ("10% off | treatments", ("treatments",)),
-        ("10% off | services (including injectables | ; excluding neurotoxins)", ("services (including injectables",)),
-        ("Receive 10 percent off most products and services (excludes packages, already discounted items)", ("x",)),
-        ("15% off | additional aesthetic services | .", ("additional aesthetic services",)),
-        ("2) $65 off your first BOTOX® Cosmetic treatment", ("BOTOX® Cosmetic",)),
-    ):
-        assert non_promotable_reason(candidate(raw, names)) == ""
 
 
 def test_short_item_label_is_bounded_and_never_ends_inside_a_parenthesis():

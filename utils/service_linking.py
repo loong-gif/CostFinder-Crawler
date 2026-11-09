@@ -5,25 +5,23 @@
 from __future__ import annotations
 
 import json
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
-from functools import lru_cache
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping
 
-from utils.clinic_service_extraction import _normalize_unit_type, infer_service_name_for_item
-from utils.clinic_service_taxonomy import (
-    _SERVICE_NAME_ENUMS,
-    SERVICE_NAME_ENUM_VALUES,
-    _normalized_name,
-    live_clinic_service_payload,
-    service_name_enum_hint,
-)
-from utils.offer_extraction_llm import _service_dictionary_indexes
+from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES, _normalized_name, live_clinic_service_payload
 from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, plan_digest, render
 from utils.promo_offer_items_db import _BLANKET_OFFER_RE, AGENTS_BLANKET_PATTERN, is_blanket_offer_text
 from utils.service_price_guard import normalize_source_url
+from utils.service_recognition import (
+    LLM_MULTIPLE,
+    LLM_NONE,
+    LlmServiceResolver,
+    StructuredClient,
+    item_unit_type,
+    recognize_deterministic,
+)
 
 def snapshot_tables(business_ids: list[int] | None = None) -> dict[str, tuple[str, str, str]]:
     """快照表定义；给出 business_ids 时只读取这些商家的 offer、item、service 与来源（只处理这些商家）。"""
@@ -47,29 +45,6 @@ SNAPSHOT_TABLES = snapshot_tables()
 # is_blanket_offer_text 的 SQL 等价形式：AGENTS.md 的正则原文，加上 promo_offer_items_db 中的其余 blanket 词（\b 对应 \y）
 BLANKET_SQL_PATTERN = f"({AGENTS_BLANKET_PATTERN})|" + _BLANKET_OFFER_RE.pattern.replace(r"\b", r"\y")
 
-LLM_BATCH_SIZE = 25
-LLM_NONE = "NONE"
-LLM_MULTIPLE = "MULTIPLE"
-
-# 通用服务名被同族具体名称覆盖时，只保留具体名称
-SUBSUMED_BY = {
-    "Neurotoxin": {"Botox", "Dysport", "Xeomin", "Jeuveau", "Daxxify", "Letybo", "Myobloc"},
-    "Dermal Filler": {"Juvéderm", "Restylane", "Radiesse", "Belotero", "RHA Filler", "Skinvive", "Versa",
-                      "Evolysse", "EZ Gel", "Sculptra"},
-    "Microneedling": {"Morpheus8", "RF Microneedling", "SkinPen Microneedling", "Sylfirm X", "Microchanneling"},
-    # Clear + Brilliant 常以「laser facial」宣传
-    "Facial": {"Hydrafacial", "DiamondGlow", "Glo2 Facial", "Customized Facial", "Dermaplaning", "Clear + Brilliant"},
-    "Chemical Peel": {"VI Peel", "Lunchtime Peel", "PRX Skin Perfecting", "Perfect Derma Peel", "CoolPeel"},
-    "Laser Treatment": {"CO2 Laser", "Halo Laser", "Moxi Laser", "Picoway", "Vbeam", "ClearSilk", "Laser Genesis",
-                        "Fraxel", "Clear + Brilliant", "Pearl Fractional"},
-    "Skin Tightening": {"Ultherapy", "Thermage", "HIFU", "Sofwave", "Tixel", "Forma", "Morpheus8"},
-    "Body Contouring": {"CoolSculpting", "Emsculpt", "Lipo Dissolve"},
-}
-
-UNIT_TYPE_WORDS = {"unit": "unit", "units": "unit", "syringe": "syringe", "syringes": "syringe",
-                   "vial": "vial", "vials": "vial", "session": "session", "sessions": "session",
-                   "area": "area", "areas": "area", "shot": "shot", "shots": "shot"}
-
 # AGENTS.md 规定的批次检查原文；apply 时追加条件，只检查本批关联的 item（存量的有意保留行由 batch-gate 登记）
 BLANKET_CHECK_SQL = """
 select m.id, m.offer_raw_text, i.item_name
@@ -79,119 +54,6 @@ where m.is_active
   and i.service_id is not null
   and m.offer_raw_text ~* '(all services|any service|all products|all treatments|gift card|skin ?care products)'
 """
-
-
-class StructuredClient(Protocol):
-    def create_json_response(self, messages: list[dict[str, str]], *, json_schema: dict[str, Any] | None = None
-                             ) -> dict[str, Any]: ...
-
-
-@lru_cache(maxsize=1)
-def _scan_keys() -> list[tuple[str, str]]:
-    """别名与枚举名（规范化后）到枚举值的映射，按键长度降序。"""
-    keys: dict[str, str] = {key: value for key, value in _SERVICE_NAME_ENUMS.items() if key}
-    for alias, canonical in _service_dictionary_indexes()["alias_by_normalized"].items():
-        hint = service_name_enum_hint(canonical)
-        key = _normalized_name(alias)
-        if hint is not None and key:
-            keys.setdefault(key, hint)
-    return sorted(keys.items(), key=lambda pair: len(pair[0]), reverse=True)
-
-
-@lru_cache(maxsize=1)
-def _scan_patterns() -> list[tuple[re.Pattern[str], str]]:
-    return [(re.compile(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])"), value) for key, value in _scan_keys()]
-
-
-def scan_services(text: Any) -> set[str]:
-    """文本中出现的全部枚举服务名；长键优先，已匹配区间不再重复匹配，通用名被同族具体名覆盖。"""
-    normalized = _normalized_name(text)
-    if not normalized:
-        return set()
-    consumed = [False] * len(normalized)
-    found: set[str] = set()
-    for pattern, value in _scan_patterns():
-        for match in pattern.finditer(normalized):
-            if any(consumed[match.start():match.end()]):
-                continue
-            for index in range(match.start(), match.end()):
-                consumed[index] = True
-            found.add(value)
-    return {name for name in found if not (SUBSUMED_BY.get(name, set()) & found)}
-
-
-def item_unit_type(item_name: Any) -> str | None:
-    """item_name 中可确认的计量单位；出现多种不同单位时不确认。"""
-    words = re.findall(r"[a-z]+", str(item_name or "").casefold())
-    found = {UNIT_TYPE_WORDS[word] for word in words if word in UNIT_TYPE_WORDS}
-    return _normalize_unit_type(next(iter(found))) if len(found) == 1 else None
-
-
-def recognize_deterministic(*, item_name: Any, offer_raw_text: str, quantity: Any, sibling_count: int,
-                            is_package: bool) -> dict[str, Any]:
-    """确定性识别。返回 {service_name, basis, reason}；basis 为 deterministic / needs_llm / unresolved。"""
-    in_item = scan_services(item_name)
-    if len(in_item) == 1:
-        return {"service_name": next(iter(in_item)), "basis": "deterministic", "reason": "item_name"}
-    if len(in_item) > 1:
-        return {"service_name": None, "basis": "unresolved", "reason": "multiple_services_in_item",
-                "candidates": sorted(in_item)}
-    if sibling_count > 1 or is_package:
-        return {"service_name": None, "basis": "needs_llm", "reason": "no_match_in_multi_item_offer"}
-    in_text = scan_services(offer_raw_text)
-    if len(in_text) == 1:
-        return {"service_name": next(iter(in_text)), "basis": "deterministic", "reason": "offer_raw_text"}
-    if len(in_text) > 1:
-        return {"service_name": None, "basis": "unresolved", "reason": "multiple_services_in_offer_text",
-                "candidates": sorted(in_text)}
-    inferred = service_name_enum_hint(infer_service_name_for_item(
-        offer_raw_text=offer_raw_text, quantity=quantity, item_name=item_name,
-        sibling_count=sibling_count, is_package=is_package))
-    if inferred is not None and inferred != "Others":
-        return {"service_name": inferred, "basis": "deterministic", "reason": "quantity_heuristic"}
-    return {"service_name": None, "basis": "needs_llm", "reason": "no_match"}
-
-
-class LlmServiceResolver:
-    """用 LLM 在数据库枚举值内为单个 item 选择服务；多个服务或无法判定时返回 NONE / MULTIPLE。"""
-
-    def __init__(self, client: StructuredClient, enum_values: list[str]) -> None:
-        self.client = client
-        self.enum_values = list(enum_values)
-        self.schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["results"],
-            "properties": {"results": {"type": "array", "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["index", "service_name"],
-                "properties": {"index": {"type": "integer"},
-                               "service_name": {"type": "string", "enum": self.enum_values + [LLM_NONE, LLM_MULTIPLE]}},
-            }}},
-        }
-
-    def resolve(self, requests: list[dict[str, Any]]) -> dict[int, str]:
-        answers: dict[int, str] = {}
-        for start in range(0, len(requests), LLM_BATCH_SIZE):
-            batch = requests[start:start + LLM_BATCH_SIZE]
-            messages = [
-                {"role": "system", "content": (
-                    "You map medical-aesthetics promotion items to exactly one service_name from the allowed enum. "
-                    f"Answer {LLM_MULTIPLE} when the item bundles several different services, and {LLM_NONE} "
-                    "when no allowed service is clearly identified. Use only the given text.")},
-                {"role": "user", "content": json.dumps(batch, ensure_ascii=False)},
-            ]
-            payload = self.client.create_json_response(messages, json_schema=self.schema)
-            results = payload["results"]
-            returned = sorted(entry["index"] for entry in results)
-            if returned != sorted(request["index"] for request in batch):
-                raise RuntimeError(f"llm_index_mismatch: expected {[r['index'] for r in batch]}, got {returned}")
-            for entry in results:
-                if entry["service_name"] not in self.enum_values + [LLM_NONE, LLM_MULTIPLE]:
-                    raise RuntimeError(f"llm_invalid_service_name: {entry['service_name']}")
-                answers[entry["index"]] = entry["service_name"]
-        return answers
 
 
 def match_service_row(rows: list[dict[str, Any]], unit_type: str | None, text: Any) -> tuple[str, dict[str, Any] | None]:

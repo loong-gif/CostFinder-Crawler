@@ -4,17 +4,8 @@ import pytest
 
 from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES
 from utils.pipeline_db import snapshot_query
-from utils.service_linking import (
-    SNAPSHOT_TABLES,
-    LlmServiceResolver,
-    build_plan,
-    build_plan_from_rows,
-    dump_plan,
-    item_unit_type,
-    recognize_deterministic,
-    render_apply,
-    scan_services,
-)
+from utils.service_linking import SNAPSHOT_TABLES, build_plan, build_plan_from_rows, dump_plan, render_apply
+from utils.service_recognition import LlmServiceResolver, item_unit_type, recognize_deterministic, scan_services
 
 ENUMS = list(SERVICE_NAME_ENUM_VALUES)
 
@@ -58,9 +49,18 @@ def test_deterministic_recognition_from_item_name_and_alias():
     assert scan_services("20 units of Dysport") == {"Dysport"}
     assert scan_services("Juvederm lip filler") == {"Juvéderm"}
     assert scan_services("Semaglutide weekly") == {"Weight Loss"}
+    # Facial Balancing 是填充剂注射（"Includes three 1mL syringes"），不是面部护理
+    assert scan_services("Facial Balancing") == {"Dermal Filler"}
     result = recognize_deterministic(item_name="Hydrafacial", offer_raw_text="", quantity=None,
                                      sibling_count=1, is_package=False)
     assert result["service_name"] == "Hydrafacial" and result["basis"] == "deterministic"
+
+
+def test_device_without_an_enum_value_is_not_mapped_to_a_similar_one():
+    for name, text in (("EMSELLA", "Emsella is 50% off."), ("Leg Vein treatment", "Leg Vein treatment: $199 / area")):
+        result = recognize_deterministic(item_name=name, offer_raw_text=text, quantity=None,
+                                         sibling_count=1, is_package=False)
+        assert (result["service_name"], result["basis"]) == (None, "unresolved"), name
 
 
 def test_multiple_services_in_item_is_unresolved_without_llm():

@@ -101,7 +101,7 @@ def short_item_label(text: Any) -> str:
 
 def _services_in(text: Any) -> set[str]:
     """文本中出现的枚举服务名；延迟导入以避免与 service_linking 循环依赖。"""
-    from utils.service_linking import scan_services
+    from utils.service_recognition import scan_services
     return scan_services(text)
 
 
@@ -149,7 +149,16 @@ def item_name_problem(name: Any) -> str:
         return "fragment_start"
     if re.search(r"[\s,;:|.-]$", text):
         return "trailing_punctuation"
+    # 从条款句中截下的片段（"a package of 8"、"JEUVEAU is available"）是句子成分，不是名称
+    if _CLAUSE_FRAGMENT_RE.search(text.strip()):
+        return "clause_fragment"
     return ""
+
+
+# 脚注符号常紧贴在 Valid 前（"ǂValid"），ǂ 属于 Unicode 字母，所以只排除前面紧跟 ASCII 字母的情况
+_TERMS_PARAGRAPH_RE = re.compile(r"(?<![A-Za-z])Valid (?:on|for) (?:all )?purchases made\b", re.IGNORECASE)
+# 小写冠词开头的是句子成分（"a package of 8"）；大写的 "A E Skin" 是品牌名
+_CLAUSE_FRAGMENT_RE = re.compile(r"^(?:a|an)\s+[a-z]|\b(?:is|are)\s+(?:available|offered|included)\b")
 
 
 _CONJUNCTION_START_RE = re.compile(r"^(?:and|or|plus|including|excluding|except)\b", re.IGNORECASE)
@@ -173,6 +182,9 @@ def non_promotable_reason(offer: Dict[str, Any]) -> str:
         return "fragment_offer_text"
     if _MEMBERSHIP_TERM_RE.search(raw):
         return "membership_term_offer"
+    # 卡片后追加的条款段落是条件证据（决策第 4 条），offer 原文取自卡片正文
+    if _TERMS_PARAGRAPH_RE.search(raw):
+        return "terms_paragraph_offer_text"
     if _GIFT_CARD_RE.search(raw):
         return "gift_card_offer"
     names = [str(item.get("item_name") or "").strip() for item in offer.get("items") or []]

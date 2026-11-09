@@ -18,7 +18,7 @@ def snapshot_tables(business_ids: list[int]) -> dict[str, tuple[str, str, str]]:
     """涉及商家的名称与现有促销、会员行的快照定义。"""
     where = f"business_id = any({literal(sorted(set(business_ids)))}::bigint[])"
     return {
-        "businesses": ("master_business_info", "business_id, name", where),
+        "businesses": ("master_business_info", "business_id, name, city", where),
         "promotions": ("clinic_promotions", PROMOTION_SNAPSHOT_COLUMNS, where),
         "memberships": ("clinic_memberships", MEMBERSHIP_SNAPSHOT_COLUMNS, where),
     }
@@ -114,4 +114,5 @@ def database_state(snapshot: Mapping[str, list[dict[str, Any]]], business_ids: l
         if index in memberships:
             raise RuntimeError(f"duplicate_membership_identity: {index}")
         memberships[index] = row
-    return {"names": names, "promotions": promotions, "memberships": memberships}
+    cities = {r["business_id"]: r.get("city") for r in snapshot["businesses"]}
+    return {"names": names, "cities": cities, "promotions": promotions, "memberships": memberships}

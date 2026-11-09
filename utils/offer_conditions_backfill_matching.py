@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from utils.offer_evidence_validator import sanitize_conditions
+from utils.offer_conditions import sanitize_conditions
 
 _STOP_WORDS = {
     "a", "an", "and", "at", "for", "from", "get", "in", "of", "on", "or", "per",

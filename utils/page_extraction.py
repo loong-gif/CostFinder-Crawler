@@ -88,7 +88,7 @@ def build_plan(pages: list[dict[str, Any]], *, scrapes: Mapping[str, Mapping[str
         existing=state["promotions"], llm=llm, schema=promotion_schema, cache_dir=cache_dir, manifest=manifest,
         fetch_title=fetch_title)
     entries += _plan_memberships(
-        membership_pages, scrapes=scrapes, existing=state["memberships"],
+        membership_pages, scrapes=scrapes, existing=state["memberships"], cities=state.get("cities", {}),
         llm=llm, schema=membership_schema, cache_dir=cache_dir, manifest=manifest)
     counts: dict[str, int] = defaultdict(int)
     for entry in entries:

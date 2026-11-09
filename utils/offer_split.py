@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from utils.offer_scope_filter import item_name_problem
 from utils.pipeline_db import do_block, literal, plan_digest, render
 from utils.promo_offer_items_db import is_blanket_offer_text
-from utils.service_linking import scan_services
+from utils.service_recognition import scan_services
 
 OFFER_COLUMNS = ("id, business_id, promotion_id, membership_plan_id, offer_raw_text, price_model, regular_price, "
                  "discount_price, discount_percent, discount_amount, is_membership_required, is_new_customer_required, "

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,8 +27,25 @@ def _name_and_fee_visible(page: Mapping[str, Any], name: str, price: float) -> b
     return True
 
 
+_ONLY_ELSEWHERE_RE = re.compile(
+    r"\b(?:[Oo]ffered|[Aa]vailable)\s+(?:only\s+)?(?:in|at)\s+(?P<a>[A-Z][A-Za-z .'-]*?[A-Za-z])\s+only\b"
+    r"|\b[Oo]nly\s+(?:offered|available)\s+(?:in|at)\s+(?P<b>[A-Z][A-Za-z .'-]*[A-Za-z])")
+
+
+def _offered_only_elsewhere(claims: list[str], city: str | None) -> str | None:
+    """来源清单写明方案只在某个地点提供、且该地点不是本商家所在城市时，返回那个地点。"""
+    if not city:
+        return None
+    for claim in claims:
+        for match in _ONLY_ELSEWHERE_RE.finditer(claim):
+            place = (match.group("a") or match.group("b")).strip()
+            if place.casefold() != city.strip().casefold():
+                return place
+    return None
+
+
 def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, schema, cache_dir,
-                      manifest) -> list[dict[str, Any]]:
+                      manifest, cities: Mapping[int, str | None]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     accepted: dict[tuple[int, str, str], dict[str, Any]] = {}
     conflicted: set[tuple[int, str, str]] = set()
@@ -65,6 +83,13 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
                 continue
             source_plan = matches[0] if matches else None
             source_claims = source_plan["source_claims"] if source_plan else []
+            elsewhere = _offered_only_elsewhere(source_claims, cities.get(page["business_id"]))
+            if elsewhere is not None:
+                # 页面写明该方案只在其他地点提供（连锁品牌的会员页），不写给本地商家
+                entries.append(_rejection("membership", page["business_id"], page["url"],
+                                          "membership_offered_only_elsewhere", membership_name=name,
+                                          offered_in=elsewhere, source_review=review))
+                continue
             ocr_meta = row.get("ocr_meta") or []
             image_urls = row.get("images") or []
             image_ocr_complete = (not image_urls or

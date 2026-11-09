@@ -4,15 +4,16 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from utils.clinic_service_extraction import is_promo_offer
 from utils.extraction_persist_pricing import build_master_from_offer, route_offer
-from utils.offer_evidence_validator import _NEW_CUSTOMER_SIGNAL, card_conditions, validate_offer_evidence
+from utils.offer_conditions import card_conditions
+from utils.offer_evidence_validator import _NEW_CUSTOMER_SIGNAL, validate_offer_evidence
 from utils.offer_purchase_semantics import normalize_purchase_offers
 from utils.offer_scope_filter import (
-    clean_item_name, exclude_reason, item_name_problem, multiple_services_reason, non_promotable_reason,
-    short_item_label)
+    _TERMS_PARAGRAPH_RE, clean_item_name, exclude_reason, item_name_problem, multiple_services_reason,
+    non_promotable_reason, short_item_label)
 from utils.offer_stage_spec import (
     BENIGN_REASONS, MASTER_COLUMNS, MEMBERSHIPS, PROMOTIONS, SOURCE_SPEC, SYSTEM_PROMPT, TASK_PROMPTS,
     _GIFT_SIGNAL, _REGULAR_PRICE_CARD)
@@ -125,7 +126,28 @@ def candidates_from_payload(payload: dict[str, Any], table: str, row: dict[str, 
                             return " ".join(lines[start:priced[-1] + 1])
         return text
 
+    def headline_for_terms(offer: dict[str, Any]) -> dict[str, Any]:
+        # LLM 从卡片后的条款段落取了原文时（决策第 4 条：条款只是条件证据），改用同一张卡片中
+        # 条款之前、带有同一折扣数值的唯一标题行作为原文；item 名称由原文的短标签确定
+        text = offer.get("offer_raw_text")
+        if not isinstance(text, str) or not _TERMS_PARAGRAPH_RE.search(text):
+            return offer
+        anchors = set(claim_anchors(text))
+        prefix = " ".join(text.split()[:6]).casefold()
+        for card in cards:
+            lines = [line.strip() for line in card.splitlines() if line.strip()]
+            terms_at = next((i for i, line in enumerate(lines) if prefix and prefix in " ".join(line.split()).casefold()), None)
+            if terms_at is None:
+                continue
+            headlines = [line for line in lines[:terms_at] if set(claim_anchors(line)) & anchors]
+            if len(headlines) == 1:
+                items = offer.get("items") or [{}]
+                return {**offer, "offer_raw_text": headlines[0],
+                        "items": [{**items[0], "item_name": None, "quantity": None, "unit_price": None}]}
+        return offer
+
     for original in payload["offers"]:
+        original = headline_for_terms(original)
         original = {**original, "offer_raw_text": trimmed_raw_text(original.get("offer_raw_text"))}
         offers, reviews = normalize_purchase_offers([original], evidence)
         for review in reviews:
@@ -196,7 +218,32 @@ def candidates_from_payload(payload: dict[str, Any], table: str, row: dict[str, 
             seen.add(fingerprint)
             candidates.append({"fingerprint": fingerprint, "master": _plain(master),
                                "blanket": blanket, "items": plan_items})
-    return candidates, rejected
+    return _merge_restated_offers(candidates, reject), rejected
+
+
+_DEAL_FIELDS = ("price_model", "regular_price", "discount_price", "discount_percent", "discount_amount",
+                "is_package", "is_new_customer_required", "is_membership_required")
+
+
+def _merge_restated_offers(candidates: list[dict[str, Any]], reject: Callable[[Any, str], None]) -> list[dict[str, Any]]:
+    """同一来源中 item、价格字段与客户限制都相同的 offer 是页面对同一优惠的重复表述，只保留条件最多的一条。"""
+    def deal(candidate: Mapping[str, Any]) -> str:
+        master = candidate["master"]
+        items = sorted((" ".join(str(i["item_name"]).split()).casefold(), i["delivered_units"], i["unit_price"])
+                       for i in candidate["items"])
+        return json.dumps([[master.get(f) for f in _DEAL_FIELDS], items], default=str)
+
+    kept: dict[str, dict[str, Any]] = {}
+    for candidate in candidates:
+        key = deal(candidate)
+        other = kept.get(key)
+        if other is None:
+            kept[key] = candidate
+            continue
+        more, less = sorted((other, candidate), key=lambda c: len(c["master"].get("conditions") or []), reverse=True)
+        kept[key] = more
+        reject(less["master"]["offer_raw_text"], "duplicate_in_source")
+    return list(kept.values())
 
 
 def _fingerprint(master: dict[str, Any]) -> str:

@@ -36,7 +36,7 @@ select m.id, m.offer_raw_text, i.item_name, i.offer_item_id
 """,
     # D. Blanket offers stored more than once at one clinic.
     "D_blanket_duplicates": r"""
-select business_id, offer_raw_text, count(*) as n, string_agg(id::text, ',') as ids
+select business_id, offer_raw_text, count(*) as n, string_agg(id::text, ',' order by id) as ids
   from promo_offer_master
  where is_active
    and offer_raw_text ~* '(all services|all products|products (and|&) services|all purchases|all [a-z-]+ services)'

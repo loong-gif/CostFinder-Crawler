@@ -74,6 +74,23 @@ def _item_statements(offer_ref: str, items: list[dict[str, Any]]) -> list[str]:
     return statements
 
 
+def _activatable(action: Mapping[str, Any]) -> bool:
+    """单价 offer 要求每个 item 都关联到该商家的服务（触发器 prevent_incomplete_offer_activation）。
+    服务关联未确定不阻止写入（AGENTS.md）：这类 offer 以未激活状态写入，不在本批激活，也不核对为激活。"""
+    return not (action["master"]["price_model"] == "per_unit"
+                and any(item.get("service_id") is None for item in action["items"] if item["action"] != "delete"))
+
+
+def _insert_statements(action: Mapping[str, Any], values: str) -> list[str]:
+    statements = [f"insert into public.promo_offer_master ({', '.join(MASTER_COLUMNS)}, is_active) values ({values}, false) "
+                  f"returning id into v_offer;"]
+    statements.extend(_item_statements("v_offer", action["items"]))
+    if _activatable(action):
+        statements.append("v_new := v_new || v_offer;")
+        statements.append("update public.promo_offer_master set is_active=true, updated_at=now() where id=v_offer;")
+    return statements
+
+
 def _source_statements(source: dict[str, Any]) -> list[str]:
     label = f"{source['table']} {source['id']}"
     statements = _verify_fresh_statements(source)
@@ -88,14 +105,7 @@ def _source_statements(source: dict[str, Any]) -> list[str]:
             expected_false.append(action["offer_id"])
     for action in source["offers"]:
         if action["action"] == "insert":
-            master = action["master"]
-            columns = ", ".join(MASTER_COLUMNS)
-            values = ", ".join(literal(master[c]) for c in MASTER_COLUMNS)
-            statements.append(f"insert into public.promo_offer_master ({columns}, is_active) values ({values}, false) "
-                              f"returning id into v_offer;")
-            statements.extend(_item_statements("v_offer", action["items"]))
-            statements.append("v_new := v_new || v_offer;")
-            statements.append("update public.promo_offer_master set is_active=true, updated_at=now() where id=v_offer;")
+            statements.extend(_insert_statements(action, ", ".join(literal(action["master"][c]) for c in MASTER_COLUMNS)))
         elif action["action"] == "update":
             offer_id = literal(action["offer_id"])
             patch = action["patch"]
@@ -164,16 +174,11 @@ def _branch_source_statements(sources: list[Mapping[str, Any]]) -> list[str]:
         f"from jsonb_array_elements_text(v_row->'items') x), '{{}}'::text[]) then {stale}",
         "v_new := '{}'::bigint[];",
     ]
-    columns = ", ".join(MASTER_COLUMNS)
     for action in (a for a in sources[0]["offers"] if a["action"] == "insert"):
         master = action["master"]
-        values = ", ".join("v_business" if c == "business_id" else "v_source" if c == owner
-                           else literal(master[c]) for c in MASTER_COLUMNS)
-        statements.append(f"insert into public.promo_offer_master ({columns}, is_active) values ({values}, false) "
-                          f"returning id into v_offer;")
-        statements.extend(_item_statements("v_offer", action["items"]))
-        statements.append("v_new := v_new || v_offer;")
-        statements.append("update public.promo_offer_master set is_active=true, updated_at=now() where id=v_offer;")
+        statements.extend(_insert_statements(action, ", ".join(
+            "v_business" if c == "business_id" else "v_source" if c == owner else literal(master[c])
+            for c in MASTER_COLUMNS)))
     statements.append(
         "if (select count(*) from public.promo_offer_master where id = any(v_new) and is_active) <> cardinality(v_new) "
         f"then raise exception 'offer_activation_changed_by_database: % %', {literal(table)}, v_source; end if;")

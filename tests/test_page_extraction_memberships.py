@@ -31,6 +31,19 @@ def test_membership_identity_merges_case_variants_and_rejects_conflicts(tmp_path
     assert sorted(e["membership_price"] for e in conflicts) == [150, 175]
 
 
+def test_plan_offered_only_in_another_city_is_not_written_for_this_clinic(tmp_path):
+    from page_extraction_support import EMPTY_STATE
+    url = "https://glow.example/membership"
+    md = "GLOW CLUB\n$175 MONTH\nOffered in Denver only\nVIP\n$150 MONTH"
+    review = membership_review(("GLOW CLUB", ["$175 MONTH", "Offered in Denver only"]), ("VIP", ["$150 MONTH"]))
+    llm = membership_llm(url, [membership_item("GLOW CLUB", 175), membership_item("VIP", 150)], review)
+    state = {**EMPTY_STATE, "cities": {BUSINESS: "Los Angeles"}}
+    plan = plan_for([page(url, "membership")], [scrape(url, md, "Members")], llm, tmp_path, state=state)
+    rows = {e["membership_name"]: e for e in plan["entries"] if e["kind"] == "membership"}
+    assert (rows["GLOW CLUB"]["reason"], rows["GLOW CLUB"].get("offered_in")) == ("membership_offered_only_elsewhere", "Denver")
+    assert rows["VIP"]["reason"] != "membership_offered_only_elsewhere"
+
+
 def test_duplicate_plan_name_in_source_inventory_requires_review(tmp_path):
     url = "https://glow.example/membership"
     md = "VIP\n$99 per month\nVIP\n$999 per year"
