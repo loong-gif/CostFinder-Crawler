@@ -20,7 +20,7 @@ from utils.source_url import hub_url, source_url_key
 
 PROMOTION_COLUMNS = (
     "promotion_id, business_id, promotion_title, source_url, campaign_start_date, campaign_end_date, "
-    "is_active, promotion_content, is_offer_extracted, is_ocr_required, screenshot, "
+    "is_active, promotion_content, is_ocr_required, screenshot, "
     "requires_cf_verification, updated_at"
 )
 SNAPSHOT_TABLES = {
@@ -112,7 +112,6 @@ def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], fetch_title: Callab
                 "promotion_content": content,
                 "campaign_start_date": start.isoformat() if start else None,
                 "campaign_end_date": end.isoformat() if end else None,
-                "is_offer_extracted": all(bool(r["is_offer_extracted"]) for r in (active_rows or rows)),
                 "is_ocr_required": any(bool(r["is_ocr_required"]) for r in (active_rows or rows)),
                 "requires_cf_verification": any(bool(r["requires_cf_verification"]) for r in (active_rows or rows)),
                 "screenshot": keeper["screenshot"] if keeper else None,
@@ -136,7 +135,7 @@ def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], fetch_title: Callab
 
 
 _VALUE_COLUMNS = ("promotion_title", "is_active", "promotion_content", "campaign_start_date", "campaign_end_date",
-                  "is_offer_extracted", "is_ocr_required", "requires_cf_verification")
+                  "is_ocr_required", "requires_cf_verification")
 
 
 def _group_statements(group: Mapping[str, Any]) -> list[str]:
@@ -149,10 +148,10 @@ def _group_statements(group: Mapping[str, Any]) -> list[str]:
     if group["keeper_id"] is None:
         statements.append(render(
             "insert into public.clinic_promotions (promotion_id, business_id, source_url, promotion_title, is_active, "
-            "promotion_content, campaign_start_date, campaign_end_date, is_offer_extracted, is_ocr_required, "
+            "promotion_content, campaign_start_date, campaign_end_date, is_ocr_required, "
             f"requires_cf_verification) values ({NEXT_PROMOTION_ID}, {{business_id}}, {{source_url}}, "
             "{promotion_title}, {is_active}, "
-            "{promotion_content}, {campaign_start_date}, {campaign_end_date}, {is_offer_extracted}, "
+            "{promotion_content}, {campaign_start_date}, {campaign_end_date}, "
             "{is_ocr_required}, {requires_cf_verification}) returning promotion_id into v_keeper;",
             business_id=group["business_id"], source_url=group["target_url"], **values))
     else:
@@ -160,8 +159,7 @@ def _group_statements(group: Mapping[str, Any]) -> list[str]:
         statements.append(render(
             "update public.clinic_promotions set promotion_title={promotion_title}, is_active={is_active}, "
             "promotion_content={promotion_content}, campaign_start_date={campaign_start_date}, "
-            "campaign_end_date={campaign_end_date}, is_offer_extracted={is_offer_extracted}, "
-            "is_ocr_required={is_ocr_required}, requires_cf_verification={requires_cf_verification}, "
+            "campaign_end_date={campaign_end_date}, is_ocr_required={is_ocr_required}, requires_cf_verification={requires_cf_verification}, "
             "updated_at=now() where promotion_id=v_keeper;", **values))
     losers = literal(group["loser_ids"]) + "::bigint[]"
     expected_offers = literal(group["moved_offer_ids"]) + "::bigint[]"

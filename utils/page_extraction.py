@@ -22,8 +22,8 @@ from utils.source_url import source_url_key
 
 PROMOTION_UPSERT = """
 insert into public.clinic_promotions (promotion_id, business_id, source_url, promotion_title, promotion_content,
-    campaign_start_date, campaign_end_date, is_active, is_offer_extracted)
-values (""" + NEXT_PROMOTION_ID + """, {business_id}, {source_url}, {title}, {content}, {start}, {end}, true, false)
+    campaign_start_date, campaign_end_date, is_active)
+values (""" + NEXT_PROMOTION_ID + """, {business_id}, {source_url}, {title}, {content}, {start}, {end}, true)
 on conflict (business_id, public.fn_source_url_key(source_url)) do update set
     promotion_title = excluded.promotion_title,
     promotion_content = excluded.promotion_content,
@@ -36,8 +36,8 @@ returning (xmax = 0) into v_inserted;
 
 MEMBERSHIP_UPSERT = """
 insert into public.clinic_memberships (business_id, source_url, membership_name, membership_price,
-    billing_period, minimum_commitment_months, benefits, is_offer_extracted)
-values ({business_id}, {source_url}, {name}, {price}, {billing_period}, {months}, {benefits}, false)
+    billing_period, minimum_commitment_months, benefits)
+values ({business_id}, {source_url}, {name}, {price}, {billing_period}, {months}, {benefits})
 on conflict (business_id, public.fn_source_url_key(source_url), lower(btrim(membership_name))) do update set
     membership_price = excluded.membership_price,
     billing_period = excluded.billing_period,

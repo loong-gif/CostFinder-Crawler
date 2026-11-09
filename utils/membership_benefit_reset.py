@@ -8,7 +8,7 @@ from typing import Any, Iterable, Mapping
 
 from utils.pipeline_db import do_block, literal, plan_digest, render
 
-COLUMNS = "plan_id, business_id, source_url, membership_name, benefits, is_offer_extracted, updated_at"
+COLUMNS = "plan_id, business_id, source_url, membership_name, benefits, updated_at"
 
 
 def snapshot_tables(plan_ids: Iterable[int]) -> dict[str, tuple[str, str, str]]:
@@ -32,7 +32,7 @@ def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], reasons: Mapping[in
 
 
 def render_apply(plan: Mapping[str, Any]) -> str:
-    """每行先锁定并核对 updated_at 与计划一致，再置空 benefits 并重置 is_offer_extracted。"""
+    """每行先锁定并核对 updated_at 与计划一致，再置空 benefits。"""
     statements = []
     for entry in plan["entries"]:
         label = literal(f"stale_plan: clinic_memberships {entry['plan_id']}")
@@ -41,8 +41,8 @@ def render_apply(plan: Mapping[str, Any]) -> str:
                    pid=entry["plan_id"]),
             render("if not found or v_updated is distinct from {ts}::timestamptz then ",
                    ts=entry["expected_updated_at"]) + f"raise exception {label}; end if;",
-            render("update public.clinic_memberships set benefits = null, is_offer_extracted = false, "
-                   "updated_at = now() where plan_id = {pid};", pid=entry["plan_id"]),
+            render("update public.clinic_memberships set benefits = null, updated_at = now() where plan_id = {pid};",
+                   pid=entry["plan_id"]),
         ]
     header = f"clear-membership-benefits apply\nplan sha256 {plan_digest(plan)}\nrows {len(plan['entries'])}"
     return do_block(statements, declare=["v_updated timestamptz"], header=header)

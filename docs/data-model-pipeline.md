@@ -113,4 +113,4 @@ The pilot reads structured service, membership, and promotion records, then crea
 The current project accesses SAG through server-side database connectivity used by [`scripts/sag_persistent_pilot.py`](../scripts/sag_persistent_pilot.py). It is intentionally outside client access: as verified on 2026-07-30, the `anon`, `authenticated`, and `public` roles have no `USAGE` on the `sag` schema and no `SELECT` access to its tables. RLS is not currently enabled on these private tables, so documentation must not describe SAG as RLS-protected.
 ## Firecrawl Monitor sync
 
-Monitor-specific exceptions (NULL service/date, `is_offer_extracted=false` while mapping is incomplete) are defined in [`AGENTS.md`](../AGENTS.md) and [`monitor_price_sync.md`](monitor_price_sync.md).
+Monitor-specific exceptions (NULL service/date; `is_offer_extracted` derived by database triggers from offer existence) are defined in [`AGENTS.md`](../AGENTS.md) and [`monitor_price_sync.md`](monitor_price_sync.md).

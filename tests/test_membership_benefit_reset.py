@@ -31,6 +31,6 @@ def test_apply_checks_the_row_is_unchanged_before_clearing_benefits():
     assert text.count("do $pipeline$") == 1
     first = text.index("where plan_id = 7 for update")
     assert first < text.index("raise exception 'stale_plan: clinic_memberships 7'") < text.index(
-        "set benefits = null, is_offer_extracted = false, updated_at = now() where plan_id = 7")
+        "set benefits = null, updated_at = now() where plan_id = 7")
     # updated_at 为 NULL 的旧行按 NULL 比较
     assert "v_updated is distinct from NULL::timestamptz" in text

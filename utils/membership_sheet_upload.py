@@ -130,11 +130,11 @@ def render_apply(plan: Mapping[str, Any]) -> str:
     for e in entries:
         statements.append(
             "insert into public.clinic_memberships (business_id, source_url, membership_name, membership_price, "
-            "billing_period, minimum_commitment_months, benefits, is_offer_extracted, created_at, updated_at) values ("
+            "billing_period, minimum_commitment_months, benefits, created_at, updated_at) values ("
             f"{literal(e['business_id'])}, {literal(e['source_url'])}, {literal(e['membership_name'])}, "
             f"{literal(e['membership_price'])}, {literal(e['billing_period'])}, "
             f"{literal(e['minimum_commitment_months'])}, {literal(json.dumps(e['benefits'], ensure_ascii=False))}::jsonb, "
-            "false, now(), now()) on conflict (business_id, public.fn_source_url_key(source_url), "
+            "now(), now()) on conflict (business_id, public.fn_source_url_key(source_url), "
             "lower(btrim(membership_name))) do nothing;")
         statements.append("get diagnostics v_rows = row_count; v_inserted := v_inserted + v_rows;")
     statements.append(

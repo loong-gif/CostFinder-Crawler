@@ -195,7 +195,7 @@ def test_rest_writes_are_rejected_before_any_request(method, args):
 
 
 def test_stated_units_ignore_thresholds_and_neighbouring_prices():
-    from utils.data_quality_audit import _stated_fixed_units
+    from utils.data_quality_evidence import _stated_fixed_units
     assert _stated_fixed_units("BBL + MOXI combo 3 SESSIONS $3,000.00") == {3}
     assert _stated_fixed_units("get $40 off 20 units Jeuveau ; Minimum 20 units required.") == set()
     assert _stated_fixed_units("Special $1400 ; Treatment(s) within 6 months") == set()

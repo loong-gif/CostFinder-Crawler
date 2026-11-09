@@ -43,8 +43,7 @@ def main() -> int:
                                                                snapshot_tables(args.business_id))
         plan = build_plan(load_snapshot(snapshot, SNAPSHOT_TABLES), client)
         out = write_text(snapshot.parent / "plan.json", dump_plan(plan))
-        print(f"{out}\n{json.dumps(plan['counts'])} services_to_create={len(plan['services_to_create'])} "
-              f"promotions_to_mark={len(plan['promotions_to_mark'])} memberships_to_mark={len(plan['memberships_to_mark'])}")
+        print(f"{out}\n{json.dumps(plan['counts'])} services_to_create={len(plan['services_to_create'])}")
         return 0
     plan = json.loads(args.plan.read_text())
     if args.batch_size is None:
@@ -65,7 +64,6 @@ def main() -> int:
         size += len(entries)
     for number, businesses in enumerate(batches, start=1):
         batch = {**plan, "items": [e for b in businesses for e in by_business[b]],
-                 "services_to_create": [s for s in plan["services_to_create"] if s["business_id"] in businesses],
-                 "promotions_to_mark": [], "memberships_to_mark": []}
+                 "services_to_create": [s for s in plan["services_to_create"] if s["business_id"] in businesses]}
         print(write_text(args.plan.parent / f"apply_{number:02d}.sql", render_apply(batch)))
     return 0

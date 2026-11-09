@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from utils.data_quality_audit import TABLES, _protected
+from utils.data_quality_evidence import TABLES, _protected
 from utils.monitor_price_writer_plan import BLANKET_CHECK_SQL
 from utils.pending_sql import write_pending
 from utils.pipeline_db import do_block, literal, plan_digest
