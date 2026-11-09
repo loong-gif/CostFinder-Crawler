@@ -1,7 +1,7 @@
 """第 5 段：从 promotion_content / benefits 抽取 promo_offer_master + promo_offer_items：
 
-  plan [--promotion-id N] [--plan-id N] [--limit N] [--snapshot F]
-                                         读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），调用 LLM 生成 plan.json
+  plan [--limit N] [--snapshot F]       读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），调用 LLM 生成 plan.json；
+                                         来源自动选取：尚无 offer 的促销与会员、未激活 offer 已在写入后完成服务关联的来源
   apply-sql --plan F [--batch-size N]    把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行；--batch-size 拆成多个独立 DO 块
 """
 from __future__ import annotations
@@ -27,8 +27,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="step", required=True)
     plan_parser = sub.add_parser("plan")
-    plan_parser.add_argument("--promotion-id", type=int, action="append", help="只处理指定促销（可重复）；指定后不再按 is_offer_extracted 选取")
-    plan_parser.add_argument("--plan-id", type=int, action="append", help="只处理指定会员计划（可重复）")
     plan_parser.add_argument("--limit", type=int, help="最多处理的源数量")
     plan_parser.add_argument("--snapshot", type=Path)
     apply_parser = sub.add_parser("apply-sql")
@@ -42,19 +40,19 @@ def main(argv: list[str] | None = None) -> int:
         if client is None:
             raise RuntimeError("LLM client not configured (LLM_API_KEY / LLM_MODEL)")
         snapshot_path = args.snapshot or pipeline_db.fresh_snapshot(
-            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(args.promotion_id, args.plan_id, args.limit))
+            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(limit=args.limit))
         snapshot = load_snapshot(snapshot_path, snapshot_tables())
         schema = offer_schema(service_name_enum(snapshot["service_enum"]))
         plan = build_plan(snapshot, client, schema, OUTPUT_DIR / "llm_cache")
         out = write_text(snapshot_path.parent / "plan.json", dump_plan(plan))
-        ready = sum(s["status"] == "ready" for s in plan["sources"])
-        print(f"{out}\nsources={len(plan['sources'])} ready={ready} blocked={len(plan['sources']) - ready}")
+        writable = sum(bool(s["offers"]) for s in plan["sources"])
+        print(f"{out}\nsources={len(plan['sources'])} with_offer_actions={writable}")
         return 0
     plan = json.loads(args.plan.read_text())
     if args.batch_size is None:
         print(write_text(args.plan.parent / "apply.sql", render_apply(plan)))
         return 0
-    writable = [s for s in plan["sources"] if s["status"] == "ready" and s["offers"]]
+    writable = [s for s in plan["sources"] if s["offers"]]
     for start in range(0, len(writable), args.batch_size):
         batch = {**plan, "sources": writable[start:start + args.batch_size]}
         name = f"apply_{start // args.batch_size + 1:02d}.sql"

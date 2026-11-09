@@ -31,7 +31,7 @@
 
 ## offer 与服务关联规则
 
-- 单价 offer 在服务关联确定之前以未激活状态写入（触发器 `prevent_incomplete_offer_activation` 不允许激活），link-services 关联服务后由 extract-offers 重新激活。
+- 单价 offer 在服务关联确定之前以未激活状态写入（触发器 `prevent_incomplete_offer_activation` 不允许激活），link-services 关联服务后由 extract-offers 重新激活：extract-offers 自动选取"未激活 offer 的 item 已全部关联、且关联晚于 offer 最近一次写入"的来源（`utils.offer_stage.snapshot_tables`）。
 - LLM 从卡片后的条款段落取了 offer 原文时（gemini-2.5-flash-lite 与 gemini-2.5-flash 都会这样做），改用同一张卡片中条款之前、带有同一折扣数值的唯一标题行作为原文，条款作为条件，item 名称取原文的短标签；找不到唯一标题行时，含「Valid on purchases made」的条款段落不作为 offer 原文（`terms_paragraph_offer_text`）。
 - 小写冠词开头（「a package of 8」）或含「is available」的 item 名称是句子成分（`clause_fragment`）。
 - 同一来源中 item、价格字段与客户限制都相同的 offer 只保留条件最多的一条。

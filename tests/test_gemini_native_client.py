@@ -107,10 +107,13 @@ def test_openai_client_uses_json_schema_when_provided():
     fake_resp.json.return_value = {"choices": [{"message": {"content": '{"ok": true}'}}]}
     fake_resp.raise_for_status = MagicMock()
 
-    with patch("utils.offer_extraction_llm.requests.post", return_value=fake_resp) as post:
+    with patch.object(client.session, "post", return_value=fake_resp) as post:
         result = client.create_json_response([{"role": "user", "content": "x"}], json_schema=schema)
 
     assert result == {"ok": True}
+    # 瞬时故障（连接中断、429、5xx）由会话按指数退避重试，抽取命令不需要外部重试循环
+    retry = client.session.get_adapter("https://example.com").max_retries
+    assert retry.total == 5 and 429 in retry.status_forcelist and retry.backoff_factor == 2
     body = post.call_args.kwargs["json"]
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["schema"]["type"] == "object"

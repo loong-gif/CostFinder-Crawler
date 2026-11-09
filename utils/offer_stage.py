@@ -21,17 +21,28 @@ from utils.offer_stage_sql import _id_array
 from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT
 
 
-def snapshot_tables(promotion_ids: list[int] | None = None, plan_ids: list[int] | None = None,
+def _linked_after_write(fk: str) -> str:
+    """有未激活 offer 的来源：该 offer 有 item、全部 item 已关联服务、且关联晚于 offer 最近一次写入
+    （单价 offer 在服务关联确定前以未激活写入，link-services 之后需要再抽取一次才能激活）。"""
+    return (f"select m.{fk} from public.promo_offer_master m where not m.is_active and m.{fk} is not null "
+            f"and exists (select 1 from public.promo_offer_items i where i.offer_id = m.id) "
+            f"and not exists (select 1 from public.promo_offer_items i where i.offer_id = m.id and i.service_id is null) "
+            f"and m.updated_at < (select max(i.updated_at) from public.promo_offer_items i where i.offer_id = m.id)")
+
+
+def snapshot_tables(requeued: Mapping[str, list[int]] | None = None,
                     limit: int | None = None) -> dict[str, tuple[str, str, str]]:
-    """快照查询的表定义。未指定 id 时选取全部 is_offer_extracted 非 true 的 active 促销与会员；
-    指定 id 时只取这些行；limit 为促销与会员合计的最大源数量（促销在前）。"""
-    by_id = promotion_ids is not None or plan_ids is not None
-    if by_id:
-        promo_where = f"is_active and promotion_id = any({_id_array(promotion_ids)})" if promotion_ids else "false"
-        plan_where = f"plan_id = any({_id_array(plan_ids)})" if plan_ids else "false"
-    else:
-        promo_where = "is_active and is_offer_extracted is not true"
-        plan_where = "is_offer_extracted is not true"
+    """快照查询的表定义：is_offer_extracted 非 true 的 active 促销与会员、未激活 offer 已完成服务关联的来源，
+    以及 requeued（数据质量审计排入重新抽取的 {promotions, memberships} id）；
+    limit 为促销与会员合计的最大源数量（促销在前）。"""
+    requeued = requeued or {}
+    promo_extra = (f" or promotion_id = any({_id_array(requeued['promotions'])})"
+                   if requeued.get("promotions") else "")
+    plan_extra = f" or plan_id = any({_id_array(requeued['memberships'])})" if requeued.get("memberships") else ""
+    promo_where = (f"is_active and (is_offer_extracted is not true or promotion_id in "
+                   f"({_linked_after_write('promotion_id')}){promo_extra})")
+    plan_where = (f"(is_offer_extracted is not true or plan_id in ({_linked_after_write('membership_plan_id')})"
+                  f"{plan_extra})")
     if limit is not None:
         promo_pick = (f"select promotion_id from public.clinic_promotions where {promo_where} "
                       f"order by promotion_id limit {int(limit)}")
