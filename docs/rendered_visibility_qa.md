@@ -88,25 +88,25 @@ source_claim ⊆ DOM_text ∩ rendered_visible_text
 
 ## Acceptance states
 
-- `visible_match`: the claim has a matching text node and passes the layout/ancestor gate.
-- `dom_only_hidden`: the claim exists in DOM but fails the gate; it must not support a write or activation.
-- `not_found`: the claim is absent from the current DOM.
-- `page_unavailable`: the browser could not establish a usable page state.
-- `image_only`: the claim is supported by a rendered image and has persistent screenshot/OCR evidence; DOM text alone is insufficient.
-- `image_review_pending`: a rendered image or Canvas is present, but OCR/visual review is incomplete or failed; this is not a negative content finding.
-- `empty_benefits_pending`: the Membership has no stored benefits, so no claim was generated; the plan requires separate image and plan-identity review.
+`visibility-manifest --plan` (`utils/visibility_manifest.py`) records per page and per claim:
+
+- `page_accessible`: the render produced a usable page; its claims are judged below.
+- `page_not_accessible`: navigation failed, or the render stayed blank or showed a block page after `MAX_ATTEMPTS` renders in new task spaces (`utils/ego_render.py`). Its claims are not judged; this is not a negative content finding.
+- `visible_match`: the claim is traceable in the visible text after expanding panels and tabs (`claim_matches`).
+- `image_only`: the claim is traceable only in the OCR text of a visible image; the image URL, page URL, transcript and capture time are kept as `visibleEvidence`.
+- `not_visible`: the page rendered and neither its visible text nor its readable images carry the claim.
+
+`render-pages` (`utils/render_pages.py`) records per discovered page `verified`, `not_visible` or `page_unavailable` with the same meaning; a `page_unavailable` page keeps `add_with_review` and is rendered again on the next run.
 
 Existing browser QA reports that lack computed-style, ancestor and layout-rect data do not satisfy this gate retroactively. They remain historical evidence and must be rechecked before being used as current source support.
 
-## Manual and visual evidence path
+## Image evidence path
 
-When a claim is not found in the main document, the review proceeds in this order:
+When a claim is not in the visible text, the command proceeds automatically:
 
-1. Retry navigation with `domcontentloaded`/`commit` semantics and inspect `document.body.innerText` plus the accessibility snapshot. A navigation timeout is not treated as a visibility decision.
-2. Inspect visible iframe content and merge only exact snapshot matches.
-3. Inspect visible images/canvas elements. The image itself must have a layout box and visible ancestors; OCR is used only to match the exact claim text, with the image URL, page URL, screenshot, transcript and timestamp retained. Do not discard a rendered image only because its natural bitmap is smaller than an arbitrary pixel threshold.
-4. If OCR completes without an exact match, keep the claim as `not_found` for manual attribution; if the review cannot complete, keep it as `image_review_pending`. Neither state alone authorizes a Membership write.
-5. If no rendered evidence supports a confirmed source claim, remove it from active `promotion_content` or `benefits` only through a separately reviewed repair. Do not invent replacement wording, and do not automatically deactivate dependent Offers in the Membership visibility pass.
+1. Visible promotion images of the rendered page are downloaded and read by `utils.paddle_ocr_markdown.ocr_lines`. The command opens the SSH tunnel to the OCR service when it is unreachable and closes it afterwards.
+2. An image visitors cannot load (HTTP error status) or that is not a raster image gives no text. A failing OCR service is retried; when it keeps failing the command stops, so an OCR failure never becomes `not_visible`.
+3. A claim matched in the OCR text becomes `image_only`; otherwise it is `not_visible` and is excluded from the write by `utils.rendered_visibility_gate.filter_visible_source_content`. When the page content changes, the next monitor run verifies it again.
 
 The final gate is evaluated against the current database, not the original scrape report. The 2026-09-18 run produced `outputs/final_visibility_gate_audit_20260918.json`: 160 active Promotions, 1,444 active claims, 160 verified records, 0 unmatched claims, and 0 active Offers attached to inactive Promotions. Active Offers attached to empty active Promotions are also rejected; the final run deactivated 51 such Offers.
 

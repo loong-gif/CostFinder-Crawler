@@ -19,15 +19,15 @@ description: 当需要把新商家、新发现的促销页、会员页从发现�
 
 ### 1. 商家
 1. `select-city` 选城市，`discover-businesses --city ... --state ... --out <places.json>` 调用 Google Maps scraper。
-   - 按主题搜索发现诊所时：先 `topic-search --area ... --city ... --places <places.json> --out-dir <目录>`（自托管 `/v1/search`），命中只在网站域名对上目标城市诊所时保留，产出 `register_places.json`、`seeds.json` 与精度报告；没对上的诊所站点用 `discover-businesses --keyword "<域名主体> <城市>, <州>" --wait-timeout 150` 逐个补查后再用 `--hits` 重新匹配。
+   - 按主题搜索发现诊所时：`topic-search --area ... --city ... --state <州> --places <places.json> --out-dir <目录>`（自托管 `/v1/search`），命中只在网站域名对上目标城市诊所时保留，产出 `register_places.json`、`seeds.json` 与精度报告。没对上诊所的站点由命令按"<域名主体> <第一个 --city>, <州>"在 Google Maps 逐个补查（结果存 `lookups.json`）并重新匹配，直至没有未补查的站点；scraper 不可达时命令自动建立并关闭 SSH 隧道。同一 `--out-dir` 再次运行时复用 `hits.json` 与 `lookups.json`，不重复搜索与补查。
    - scraper 偶尔抓完后不写结果、任务停在 working 并阻塞后续任务：删除该任务（服务挂住时返回 500，重启服务后可删除），重启 `CostFinderGmapsScraper`（停止后等 10 秒再启动，首次启动常失败需再启动一次）。
 2. `register-businesses` 按三步写入 `master_business_info`。筛选线：review_count>=50、score>=4.0、有 website。同一网站在其他城市已有、还没有 Place ID 的商家时，按连锁分店不确定处理（ambiguous），不链接也不新建。
 
 ### 2. 页面发现与渲染核验
-1. `discover-pages` → `review-pages` → `retry-pages`，得到 `state/discovery/monitor_decisions_final.json`。站点链接来自 `/v2/map`；`--seeds <topic-search 的 seeds.json>` 把搜索命中的同站促销页放在候选最前。
-2. `render-shards` 生成分片；每个分片后台运行 `scripts/run_render_review_deep.sh shardN.json outN.json 90000`（展开折叠面板、标签页，滚动懒加载，收集可见文本与大图）。
-3. `render-verdicts` 对可见文本判定，未通过的页面对图片执行 PaddleOCR（监控服务器上的 OCR 服务，经 SSH 隧道调用）。
-4. `finalize-pages` 应用结论（验证通过为 add，其余为 skip），断言不再有待确认项。
+三个命令共用一个批次目录 `--batch-dir`（默认 `state/discovery`），文件位置由 `utils/discovery_batch.py` 确定，命令之间不传递文件。
+1. `discover-pages` 写 `discovered.json`。站点链接来自 `/v2/map`；`--seeds <topic-search 的 seeds.json>` 把搜索命中的同站促销页放在候选最前。出错或遇到搜索引擎不可用的商家在同一次运行内按递增间隔重跑，直到没有待重跑的商家或一轮没有任何商家恢复；抓取失败的页面退避重试后再用公开 HTTP 抓取；同一批次再次运行时跳过已完成的商家。数据库经只读快照自动读取（`snapshot/read.sql`，Supabase CLI）。
+2. `review-pages` 写 `decisions.json`（add / add_with_review / skip）。
+3. `render-pages` 把等待核验的页面切成分片，在 ego-lite 中并行深度渲染（展开折叠面板、标签页，滚动懒加载，收集可见文本与大图）；导航失败、空白页或拦截页在新任务空间中重新渲染。可见文本未能证实的页面对图片执行 PaddleOCR（监控服务器上的 OCR 服务，不可达时命令自动建立并关闭 SSH 隧道；识别服务故障重试后仍失败即终止命令，不记为不可见）。验证通过为 add，证据不可见为 skip，多次渲染仍不可用的页面保持 add_with_review，再次运行时重新渲染。
 
 ### 3. 抓取
 `COSTFINDER_RAW_DIR=output/discovery_raw/<批次> python scripts/promo_pipeline.py crawl` 抓取决定为 add 的页面。
@@ -35,7 +35,7 @@ description: 当需要把新商家、新发现的促销页、会员页从发现�
 ### 4. 促销与会员
 `extract-pages` 按三步执行（plan 需 `--raw-dir <批次> --visibility-manifest <清单>`）；检查计划中的 rejected 原因后再生成 apply.sql。代码强制：一页一行（hub 子页面并入 hub）、标题取页面 `<title>`、价目页无折扣证据不写、过期活动不写、同一句的 markdown 变体合并为一行。
 
-可见性清单由 `visibility-manifest` 生成：先不带清单运行 `extract-pages plan`，再 `visibility-manifest shard --plan <plan.json>`，后台运行 `scripts/run_render_review_deep.sh <目录>/visibility_shard.json <目录>/visibility_render.json 90000`，然后 `visibility-manifest build --plan <plan.json>`，最后带 `--visibility-manifest <目录>/visibility_manifest.json` 重新 plan 与 apply-sql。清单格式：
+可见性清单由 `visibility-manifest` 生成：先不带清单运行 `extract-pages plan`，再 `visibility-manifest --plan <plan.json>`（分片、ego-lite 渲染与重新渲染、OCR 与清单生成在一个命令内完成），最后带 `--visibility-manifest <目录>/visibility_manifest.json` 重新 plan 与 apply-sql。清单格式：
 
 ```json
 {"<url>": {"status": "page_accessible", "claimResults": [{"recordType": "promotion", "claim": "...", "status": "visible_match"}]}}

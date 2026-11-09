@@ -79,7 +79,7 @@ def main() -> int:
             # 卡片链接到的条款段落（条件、数量与活动日期常只写在条款页上）；条款页抓不到时页面证据不完整，按抓取失败处理
             linked_terms = collect_linked_terms(str(data.get("markdown") or ""), url, terms_html)
         except (requests.HTTPError, BrowserScrapeFailed) as exc:
-            # 页面抓取失败是该页面的结果，记录后由 retry-pages 处理
+            # 页面抓取失败是该页面的结果，记录在原始抓取结果中
             save_scrape_response(store, fingerprint, url, None, success=False, error_message=str(exc)[:300])
             return "failed"
         markdown = prepare_scrape_markdown(str(data.get("markdown") or ""))

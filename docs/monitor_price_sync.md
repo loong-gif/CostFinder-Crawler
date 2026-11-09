@@ -18,8 +18,9 @@ Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.
 `lib_root/`，不改系统；关闭 oneDNN 加速以避开 PaddlePaddle 3.x 的 `ConvertPirAttribute2RuntimeAttribute` 报错），
 只监听服务器本机 `127.0.0.1:8082`，由 Windows 任务 `CostFinderOcrService`（登录时启动，
 `wsl.exe -d Ubuntu -- /home/loong/costfinder_monitor/run_ocr_service.sh`，日志 `logs/ocr_service.log`）启动。
-本机流水线的唯一入口是 `utils.paddle_ocr_markdown.ocr_lines`，经 SSH 隧道
-`ssh -f -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl` 调用（地址用 `OCR_SERVICE_URL` 覆盖）。
+本机流水线的唯一入口是 `utils.paddle_ocr_markdown.ocr_lines`，经 `OCR_SERVICE_URL`（默认 `http://127.0.0.1:18082`）调用；
+`render-pages` 与 `visibility-manifest` 在服务不可达时用 `ocr_tunnel` 自动建立 `ssh -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl`
+子进程，命令结束时关闭。服务暂时不可用时 `ocr_lines` 按递增间隔重试，仍失败即终止命令。
 同一行的多个检测框按纵向位置合并为一行（`utils/ocr_rows.py`），服务名与价格因此保持在同一行。
 `tests/test_image_ocr.py` 里三个依赖真实识别的测试在服务不可达时跳过。
 

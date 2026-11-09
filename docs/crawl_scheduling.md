@@ -72,17 +72,17 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。
 - 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，只监听该机 `127.0.0.1:8081`，
   Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
-  不需要代理。本机先开隧道 `ssh -f -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl`，`discover-businesses`
-  默认地址 `GMAPS_SCRAPER_URL=http://127.0.0.1:18081`。
+  不需要代理。`discover-businesses` 与 `topic-search` 的默认地址是 `GMAPS_SCRAPER_URL=http://127.0.0.1:18081`，
+  不可达时命令自动建立 `ssh -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl` 隧道，命令结束时关闭。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 
 ```bash
-python scripts/discover_new_promo_pages.py --city "Newport Beach" --limit 15 --workers 3 \
-    --out state/discovery/new_promo_pages.json     # 或 --business-id N（可重复）
+python scripts/promo_pipeline.py discover-pages --city "Newport Beach" --limit 15 --workers 3 \
+    --batch-dir state/discovery/newport_beach     # 或 --business-id N（可重复）
 ```
 
-流程（`scripts/discover_new_promo_pages.py` + `utils/promo_page_discovery.py`，只读数据库）：
+流程（`utils/page_discovery_run.py` + `utils/promo_page_discovery.py`，经只读快照读取数据库，结果写入批次目录的 `discovered.json`）：
 
 1. `POST {FIRECRAWL_SELF_HOSTED_API_URL}/v1/map` 取站点链接；只返回首页时用首页渲染后的链接兜底。
 2. 路径按**整词**匹配（special/promo/offer/deal/discount/package/membership/vip/rewards/black-friday/
