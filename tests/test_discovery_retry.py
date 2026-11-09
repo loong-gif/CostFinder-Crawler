@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
-
-from scripts.retry_failed_pages import collect_failed, retry_one
+from utils.discovery_retry import collect_failed, retry_failed_pages, retry_one
 
 FILLER = "Our medspa offers a full range of aesthetic services for every patient in town. " * 6
 
@@ -11,34 +9,34 @@ def _html(body: str) -> str:
     return f"<html><body><main>{FILLER}{body}</main></body></html>"
 
 
-def _write(tmp_path, name, businesses):
-    path = tmp_path / name
-    path.write_text(json.dumps({"businesses": businesses}))
-    return path
-
-
-def test_collect_failed_dedupes_and_drops_urls_that_later_succeeded(tmp_path) -> None:
-    a = _write(tmp_path, "a.json", [{"business_id": 1, "name": "S", "city": "X", "website": "https://s.com", "pages": [
+def test_collect_failed_dedupes_and_drops_urls_that_succeeded_elsewhere() -> None:
+    results = [{"business_id": 1, "pages": [
         {"url": "https://s.com/a", "status": "scrape_failed", "sources": ["map"], "kind_hint": "promotion", "error": "500"},
-        {"url": "https://s.com/b", "status": "scrape_failed", "sources": ["map"], "kind_hint": "membership"}]}])
-    b = _write(tmp_path, "b.json", [{"business_id": 1, "name": "S", "city": "X", "website": "https://s.com", "pages": [
+        {"url": "https://s.com/b", "status": "scrape_failed", "sources": ["map"], "kind_hint": "membership"}]},
+               {"business_id": 1, "pages": [
         {"url": "https://s.com/a", "status": "scrape_failed", "sources": ["search"], "title": "A"},
-        {"url": "https://s.com/b", "status": "valid", "sources": ["search"]}]}])
-    got = collect_failed([a, b])
-    assert list(got) == ["https://s.com/a"]  # /b succeeded in the second run
+        {"url": "https://s.com/b", "status": "valid", "sources": ["search"]}]}]
+    got = collect_failed(results)
+    assert list(got) == ["https://s.com/a"]  # /b succeeded for the same business
     assert got["https://s.com/a"]["sources"] == ["map", "search"]
-    assert [b["business_id"] for b in got["https://s.com/a"]["businesses"]] == [1]
+    assert got["https://s.com/a"]["businesses"] == [1]
 
 
-def test_a_chain_page_is_retried_once_for_every_branch_that_failed(tmp_path) -> None:
-    page = {"url": "https://chain.com/specials", "status": "scrape_failed", "sources": ["map"], "kind_hint": "promotion"}
-    a = _write(tmp_path, "a.json", [
-        {"business_id": 1, "name": "Chain WeHo", "city": "West Hollywood", "website": "https://chain.com", "pages": [page]},
-        {"business_id": 2, "name": "Chain Santa Monica", "city": "Santa Monica", "website": "https://chain.com",
-         "pages": [page]}])
-    got = collect_failed([a])
-    assert list(got) == ["https://chain.com/specials"]
-    assert [b["business_id"] for b in got["https://chain.com/specials"]["businesses"]] == [1, 2]
+def test_a_chain_page_is_retried_once_and_the_result_replaces_every_branch_failure() -> None:
+    page = {"url": "https://chain.com/specials", "status": "scrape_failed", "sources": ["map"],
+            "kind_hint": "membership", "hop": 0, "via": None, "title": ""}
+    results = [{"business_id": 1, "pages": [dict(page)]}, {"business_id": 2, "pages": [dict(page)]},
+               {"business_id": 3, "pages": [{"url": "https://other.com/deals", "status": "rejected"}]}]
+    asked = []
+
+    def retry(url, record):
+        asked.append((url, record["kind_hint"], record["businesses"]))
+        return {"url": url, "status": "valid", "kind_hint": record["kind_hint"], "engine": "firecrawl", "retried": True}
+
+    counts = retry_failed_pages(results, retry)
+    assert asked == [("https://chain.com/specials", "membership", [1, 2])]
+    assert [r["pages"][0]["status"] for r in results] == ["valid", "valid", "rejected"]
+    assert counts == {"urls": 1, "valid": 1, "recovered_by_firecrawl": 1}
 
 
 class _Fc:
@@ -53,7 +51,7 @@ class _Fc:
         return outcome
 
 
-RECORD = {"business_id": 1, "kind_hint": "promotion", "sources": ["search"], "title": "T", "hop": 0, "via": None}
+RECORD = {"kind_hint": "promotion", "sources": ["search"], "title": "T", "hop": 0, "via": None}
 GOOD = {"markdown": "Botox $11 per unit this month", "rawHtml": _html("<p>Botox $11 per unit this month</p>")}
 
 
@@ -78,3 +76,4 @@ def test_retry_falls_back_to_direct_fetch_then_gives_up_cleanly() -> None:
 
     page = retry_one(fc, "https://s.com/a", RECORD, attempts=2, backoff=0, sleep=lambda s: None, fetch=broken)
     assert page["status"] == "scrape_failed" and "direct: ValueError" in page["error"]
+    assert page["kind_hint"] == "promotion"  # 仍失败的记录保留类别，下次运行按原类别重试

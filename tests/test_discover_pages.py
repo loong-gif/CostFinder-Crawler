@@ -31,7 +31,7 @@ class _FakeFirecrawl:
 def test_discover_business_follows_a_priceless_hub_one_hop() -> None:
     import argparse
 
-    from scripts.discover_new_promo_pages import discover_business
+    from utils.page_discovery_run import discover_business
 
     hub_html = ("<html><body><main>Our current deals. See each offer below.<a href='/products/duo-promo'>Duo</a>"
                 "<a href='/products/free-consult'>Consult</a></main></body></html>")
@@ -67,7 +67,7 @@ def test_discover_business_follows_a_priceless_hub_one_hop() -> None:
 def test_search_and_crawl_sources_add_candidates_without_a_second_scrape() -> None:
     import argparse
 
-    from scripts.discover_new_promo_pages import discover_business
+    from utils.page_discovery_run import discover_business
 
     class Fc(_FakeFirecrawl):
         def map(self, url, limit):
@@ -89,7 +89,7 @@ def test_search_and_crawl_sources_add_candidates_without_a_second_scrape() -> No
 
 
 def test_map_reads_v2_map_link_objects(monkeypatch) -> None:
-    from scripts.discover_new_promo_pages import Firecrawl
+    from utils.page_discovery_run import Firecrawl
 
     posted = []
 
@@ -107,7 +107,7 @@ def test_map_reads_v2_map_link_objects(monkeypatch) -> None:
 def test_topic_search_seeds_are_assessed_first_for_their_site() -> None:
     import argparse
 
-    from scripts.discover_new_promo_pages import discover_business
+    from utils.page_discovery_run import discover_business
 
     class Fc(_FakeFirecrawl):
         def map(self, url, limit):
@@ -134,7 +134,8 @@ def test_topic_search_seeds_are_assessed_first_for_their_site() -> None:
 def test_empty_search_is_retried_and_a_dead_backend_is_not_hammered() -> None:
     import argparse
 
-    from scripts.discover_new_promo_pages import SearchHealth, discover_business
+    from utils.discovery_search import SearchHealth
+    from utils.page_discovery_run import discover_business
 
     class Dead(_FakeFirecrawl):
         searches = 0
@@ -197,7 +198,7 @@ class _CloudSession:
 
 
 def test_cloud_search_parses_v2_and_enforces_the_budget() -> None:
-    from scripts.discover_new_promo_pages import BudgetExhausted, CloudSearch
+    from utils.discovery_search import BudgetExhausted, CloudSearch
 
     ok = _Resp(200, {"success": True, "creditsUsed": 2,
                      "data": {"web": [{"url": "https://spa.com/specials", "title": "Specials"}]}})
@@ -214,7 +215,7 @@ def test_cloud_search_parses_v2_and_enforces_the_budget() -> None:
 
 
 def test_cloud_budget_never_spends_into_the_reserve() -> None:
-    from scripts.discover_new_promo_pages import CloudSearch
+    from utils.discovery_search import CloudSearch
 
     search = CloudSearch("fc-x", budget=10_000, reserve=450, interval=0, session=_CloudSession([]))
     assert search.effective_budget() == 50  # 500 remaining - 450 reserve
@@ -223,7 +224,8 @@ def test_cloud_budget_never_spends_into_the_reserve() -> None:
 def test_out_of_credits_stops_spending_and_marks_businesses_skipped() -> None:
     import argparse
 
-    from scripts.discover_new_promo_pages import CloudSearch, SearchHealth, discover_business
+    from utils.discovery_search import CloudSearch, SearchHealth
+    from utils.page_discovery_run import discover_business
 
     class Fc(_FakeFirecrawl):
         def map(self, url, limit):
@@ -240,7 +242,7 @@ def test_out_of_credits_stops_spending_and_marks_businesses_skipped() -> None:
 
 
 def test_branches_sharing_a_website_are_discovered_once() -> None:
-    from scripts.discover_new_promo_pages import discover_per_site
+    from utils.page_discovery_run import discover_per_site
 
     rows = [{"business_id": 4385, "name": "LaserAway Morningside Heights", "city": "New York",
              "website": "https://www.laseraway.com/locations/ny/manhattan-morningside-heights/?utm_source=google"},
@@ -266,7 +268,7 @@ def test_branches_sharing_a_website_are_discovered_once() -> None:
 
 
 def test_naked_domain_businesses_use_their_real_site_roots_for_grouping() -> None:
-    from scripts.discover_new_promo_pages import discover_business, discover_per_site
+    from utils.page_discovery_run import discover_business, discover_per_site
 
     # 裸域名摘自 output/monitor_price_sync/expired_recheck_20261021/database_snapshot.json。
     rows = json.loads((Path(__file__).parent / "fixtures/discovery/naked_domain_businesses.json").read_text())
@@ -284,8 +286,47 @@ def test_naked_domain_businesses_use_their_real_site_roots_for_grouping() -> Non
     assert all("shared_site_with" not in row for row in results)
 
 
+def test_businesses_that_failed_or_hit_a_down_search_engine_are_rerun_until_stable() -> None:
+    from utils.page_discovery_run import discover_until_stable
+
+    rows = [{"business_id": i} for i in (1, 2, 3, 4)]
+    # 第 1 轮：2 出错、3 搜索引擎不可用、4 云端额度用尽；第 2 轮 2 恢复，3 仍不可用；第 3 轮 3 仍不可用，停止
+    outcomes = {1: [{}], 2: [{"error": "RemoteDisconnected"}, {}], 3: [{"search_status": "skipped_engines_down"}] * 3,
+                4: [{"search_status": "skipped_budget"}]}
+    rounds, waits, resets = [], [], []
+
+    def run_round(group):
+        rounds.append([row["business_id"] for row in group])
+        return [{"business_id": row["business_id"], "error": None, "search_status": "ok",
+                 **outcomes[row["business_id"]].pop(0)} for row in group]
+
+    results = discover_until_stable(rows, run_round, rounds=4, pause=60, sleep=waits.append,
+                                    reset=lambda: resets.append(1))
+    # 额度用尽在同一次运行内重试无益，只有出错与搜索引擎不可用的商家重跑；一轮没有任何商家恢复即为稳定
+    assert rounds == [[1, 2, 3, 4], [2, 3], [3]]
+    assert waits == [60, 120] and len(resets) == 2
+    assert [r["business_id"] for r in results] == [1, 2, 3, 4]
+    assert results[1]["error"] is None and results[2]["search_status"] == "skipped_engines_down"
+
+
+def test_rerunning_a_batch_skips_finished_businesses_and_keeps_their_results() -> None:
+    from utils.page_discovery_run import finished, merge_results
+
+    earlier = [{"business_id": 1, "error": None, "search_status": "ok", "pages": [{"url": "a"}]},
+               {"business_id": 2, "error": "Timeout", "pages": []},
+               {"business_id": 3, "error": None, "search_status": "skipped_budget", "pages": []},
+               {"business_id": 4, "error": None, "search_status": "no_results", "pages": []}]
+    assert [r["business_id"] for r in earlier if finished(r)] == [1, 4]
+    fresh = [{"business_id": 2, "error": None, "search_status": "ok", "pages": [{"url": "b"}]},
+             {"business_id": 3, "error": None, "search_status": "ok", "pages": []},
+             {"business_id": 9, "error": None, "search_status": "ok", "pages": []}]
+    merged = merge_results(earlier, fresh)
+    assert [(r["business_id"], r["search_status"]) for r in merged] == [(1, "ok"), (2, "ok"), (3, "ok"), (4, "no_results"),
+                                                                        (9, "ok")]
+
+
 def test_empty_topic_search_seeds_select_no_real_business_sites() -> None:
-    from scripts.discover_new_promo_pages import select_discovery_businesses
+    from utils.page_discovery_run import select_discovery_businesses
 
     fixture_dir = Path(__file__).parent / "fixtures"
     seed_path = fixture_dir / "topic_search/la_botox_search_seeds.json"

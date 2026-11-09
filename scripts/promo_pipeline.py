@@ -39,7 +39,6 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "discover-pages": ("scripts.discover_new_promo_pages",
                        "2: promotion / membership pages per business domain (Map + price evidence)", "no"),
     "review-pages": ("scripts.review_promo_candidates", "2: add / skip decisions for discovered pages", "no"),
-    "retry-pages": ("scripts.retry_failed_pages", "2: retry pages that failed review", "no"),
     "render-shards": ("scripts.build_deep_review_shards", "2: queue unverified pages for the ego render review", "no"),
     "render-verdicts": ("scripts.deep_review_verdicts", "2: render-review verdicts (expanded text + OCR)", "no"),
     "finalize-pages": ("scripts.finalize_discovery_decisions", "2: final page list for crawling", "no"),

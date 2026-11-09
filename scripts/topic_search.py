@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.discover_new_promo_pages import Firecrawl  # noqa: E402
+from utils.page_discovery_run import Firecrawl  # noqa: E402
 from utils.topic_search import (DEFAULT_QUERY_TEMPLATES, expand_queries, match_hits, run_topic_search,  # noqa: E402
                                 search_report)
 

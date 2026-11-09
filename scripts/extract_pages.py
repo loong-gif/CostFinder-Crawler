@@ -16,6 +16,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from utils.discovery_batch import DECISIONS
 from utils.offer_extraction_llm import build_client_from_env
 from utils.page_extraction import build_plan, render_apply
 from utils.page_extraction_snapshot import (
@@ -48,8 +49,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="step", required=True)
 
     def add_selection(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--decisions", type=Path,
-                       default=PROJECT_ROOT / "state/discovery/monitor_decisions_final.json")
+        p.add_argument("--decisions", type=Path, default=DECISIONS)
         p.add_argument("--limit", type=int, help="按 URL 排序后只处理前 N 个页面")
         p.add_argument("--business-id", type=int, action="append", help="只处理指定商家，可重复")
 

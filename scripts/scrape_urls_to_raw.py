@@ -9,6 +9,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from utils.discovery_batch import DECISIONS
 from utils.firecrawl_client import self_hosted_firecrawl
 from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_fingerprint
 from utils.browser_scrape import BrowserScrapeFailed, ego_scrape, scrapling_browser_scrape, scrapling_scrape
@@ -23,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--decisions", type=Path, default=PROJECT_ROOT / "state/discovery/monitor_decisions_final.json")
+    parser.add_argument("--decisions", type=Path, default=DECISIONS)
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--engine", choices=["firecrawl", "ego", "scrapling", "scrapling-browser"],
