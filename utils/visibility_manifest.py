@@ -4,18 +4,16 @@
 """
 from __future__ import annotations
 
-import subprocess
+import contextlib
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import requests
-
-from utils.paddle_ocr_markdown import filter_promo_image_urls
-from utils.page_title import is_block_page
+from utils.ego_render import ShardRunner, render_failure, render_pages, run_shard
+from utils.paddle_ocr_markdown import filter_promo_image_urls, ocr_tunnel
+from utils.pipeline_db import write_text
 from utils.render_review import claim_anchors, claim_matches, claim_matches_sources, corpus_text, item_id, ocr_image
 from utils.rendered_visibility_gate import IMAGE_OCR_PROOF, image_claim_verified
-
-MIN_RENDERED_CHARS = 300
 
 
 def membership_fee_claim(name: str, price: Any) -> str:
@@ -72,15 +70,32 @@ def build_shard(plan: Mapping[str, Any], name: str) -> dict[str, Any]:
     return {"name": name, "items": items}
 
 
+def _promo_images(record: Mapping[str, Any] | None) -> list[str]:
+    if render_failure(record):
+        return []
+    return filter_promo_image_urls([str(image.get("url") or "") for image in record["result"].get("images") or []
+                                    if isinstance(image, Mapping)])
+
+
+def run_manifest(plan_path: Path, *, shards: int = 4, run: ShardRunner = run_shard) -> Path:
+    """计划同目录写分片 visibility_shard.json，在 ego-lite 中渲染（未得到可用页面的重新渲染），
+    有促销图片时经 OCR 隧道识别，写 visibility_manifest.json 并返回其路径。"""
+    run_dir = plan_path.parent
+    shard = build_shard(json.loads(plan_path.read_text()), run_dir.name)
+    write_text(run_dir / "visibility_shard.json", json.dumps(shard, ensure_ascii=False, indent=1))
+    records = render_pages(shard["items"], run_dir / "visibility_render", name=f"visibility-{run_dir.name}",
+                           shards=shards, run=run)
+    needs_ocr = any(_promo_images(records.get(item["url"])) for item in shard["items"] if item["claims"])
+    with ocr_tunnel() if needs_ocr else contextlib.nullcontext():
+        manifest = build_manifest(shard, {"results": list(records.values())})
+    return write_text(run_dir / "visibility_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
+
+
 def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> dict[str, Any]:
     records = {r["url"]: r for r in render_out["results"]}
 
     def rendered_texts(url: str) -> list[str]:
-        record = records.get(url)
-        if record is None or record.get("error"):
-            return []
-        texts = record["result"]["texts"]
-        return [] if sum(len(t) for t in texts) < MIN_RENDERED_CHARS or is_block_page("\n".join(texts)) else texts
+        return [] if render_failure(records.get(url)) else records[url]["result"]["texts"]
 
     manifest: dict[str, Any] = {}
     for item in shard["items"]:
@@ -88,26 +103,16 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
             # 只作为条款来源渲染的页面，本身没有待核验的内容
             continue
         record = records.get(item["url"])
-        if record is None or record.get("error"):
-            manifest[item["url"]] = {"status": "page_not_accessible",
-                                     "reason": (record or {}).get("error", "not_rendered"), "claimResults": []}
+        failure = render_failure(record)
+        if failure:
+            # 导航失败、空白页或拦截页说明页面没有正常渲染，声明无从判定
+            manifest[item["url"]] = {"status": "page_not_accessible", "reason": failure, "claimResults": []}
             continue
         texts = record["result"]["texts"]
-        if sum(len(t) for t in texts) < MIN_RENDERED_CHARS or is_block_page("\n".join(texts)):
-            # 空白页或拦截页说明页面没有正常渲染，声明无从判定
-            manifest[item["url"]] = {"status": "page_not_accessible", "reason": "blank_or_blocked_render",
-                                     "claimResults": []}
-            continue
         image_dir = Path(__file__).resolve().parents[1] / "state" / "visibility_ocr_images"
         image_dir.mkdir(parents=True, exist_ok=True)
-        images = filter_promo_image_urls([str(image.get("url") or "") for image in
-                                          record["result"].get("images") or [] if isinstance(image, Mapping)])
-        image_evidence = []
-        for url in images:
-            try:
-                image_evidence.append({"url": url, "text": ocr_image(url, image_dir)})
-            except (requests.RequestException, subprocess.CalledProcessError, FileNotFoundError) as exc:
-                image_evidence.append({"url": url, "error": str(exc)})
+        images = _promo_images(record)
+        image_evidence = [ocr_image(url, image_dir) for url in images]
         # 卡片链接到的条款页（渲染成功的）与源页面同为该卡片内容的可见来源
         linked = {url: t for url in item.get("linked_pages") or [] if (t := rendered_texts(url))}
         claim_results = []

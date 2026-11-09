@@ -131,3 +131,31 @@ def test_quantity_missing_from_the_page_is_not_visible():
     lines = ["Glow Club", "75 Botox units every four months", "100 Botox units every four months",
              "Banked credits expire 24 months after issue and remain available after cancellation"]
     assert _statuses(lines, texts) == ["visible_match", "not_visible", "visible_match", "not_visible"]
+
+
+def test_one_command_shards_renders_and_writes_the_manifest_next_to_the_plan(tmp_path):
+    import json
+
+    from utils.visibility_manifest import run_manifest
+
+    plan_path = tmp_path / "run1" / "plan.json"
+    plan_path.parent.mkdir()
+    plan_path.write_text(json.dumps(PLAN))
+    rendered = []
+
+    def ego(shard_path, out_path, timeout_ms):
+        # ego-lite 渲染脚本的替身：a.com 第一次被拦截，重新渲染后正常；b.com 正常
+        shard = json.loads(shard_path.read_text())
+        rendered.append([item["url"] for item in shard["items"]])
+        results = [{"url": item["url"], "checked_at": "t",
+                    "result": {"images": [], "texts": ["Access denied"] if len(rendered) == 1 and "a.com" in item["url"]
+                               else [*PAGE_CHROME, "Botox $10/unit this month", "Lip filler $650"]}}
+                   for item in shard["items"]]
+        out_path.write_text(json.dumps({"results": results}))
+
+    manifest_path = run_manifest(plan_path, shards=1, run=ego)
+    assert manifest_path == tmp_path / "run1" / "visibility_manifest.json"
+    assert rendered == [["https://a.com/specials", "https://b.com/specials"], ["https://a.com/specials"]]
+    manifest = json.loads(manifest_path.read_text())
+    assert [c["status"] for c in manifest["https://a.com/specials"]["claimResults"]] == ["visible_match", "not_visible"]
+    assert manifest["https://b.com/specials"]["complete"] is True

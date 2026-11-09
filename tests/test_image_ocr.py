@@ -52,7 +52,7 @@ def _ocr_service_reachable() -> bool:
 
 requires_ocr_service = pytest.mark.skipif(
     not _ocr_service_reachable(),
-    reason="PaddleOCR service unreachable: ssh -f -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl")
+    reason="PaddleOCR service unreachable; commands open the tunnel with utils.paddle_ocr_markdown.ocr_tunnel")
 
 
 def test_image_ocr_has_a_single_entry_point():
@@ -92,7 +92,7 @@ def test_benefit_only_in_an_image_passes_the_membership_gate(tmp_path):
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     image_url = f"http://127.0.0.1:{server.server_address[1]}/membership.png"
-    cached = PROJECT_ROOT / "state" / "visibility_ocr_images" / (hashlib.sha1(image_url.encode()).hexdigest()[:16] + ".img")
+    cached = PROJECT_ROOT / "state" / "visibility_ocr_images" / (hashlib.sha1(image_url.encode()).hexdigest()[:16] + ".png")
     page_url = "https://a.example/membership"
     plan = {"entries": [{"kind": "membership", "action": "insert", "source_url": page_url, "membership_name": "VIP Membership",
                          "benefits": ["One facial per month $99"]}]}

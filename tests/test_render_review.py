@@ -17,19 +17,23 @@ def test_shards_are_balanced() -> None:
     assert len(shard([], 3)) == 0
 
 
-def test_unreviewed_and_unverified_pages_are_queued_for_the_deep_review_once() -> None:
+def test_pages_waiting_for_the_render_are_queued_once_per_url() -> None:
     from utils.render_review import build_deep_items
 
     decisions = [
         {"url": "https://laseraway.com/promotions", "business_id": 4385, "status": "needs_review",
-         "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
+         "decision": "add_with_review", "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
         {"url": "https://laseraway.com/promotions", "business_id": 4386, "status": "needs_review",
-         "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
-        {"url": "https://spa.com/specials", "business_id": 1, "status": "needs_review",
-         "render_review": {"verdict": "not_visible"}, "evidence": ["Botox $11 per unit"]},
-        {"url": "https://spa.com/deals", "business_id": 1, "status": "needs_review",
-         "render_review": {"verdict": "verified"}, "evidence": ["Filler $499"]},
-        {"url": "https://spa.com/offers", "business_id": 1, "status": "valid", "evidence": ["Peel $99"]},
+         "decision": "add_with_review", "evidence": ["Your First Botox Treatment Is $10 Per Unit"]},
+        # 上次渲染被拦截、仍在等待的页面再次进入队列
+        {"url": "https://spa.com/specials", "business_id": 1, "status": "needs_review", "decision": "add_with_review",
+         "render_review_deep": {"verdict": "page_unavailable"}, "evidence": ["Botox $11 per unit"]},
+        {"url": "https://spa.com/deals", "business_id": 1, "status": "needs_review", "decision": "add",
+         "render_review_deep": {"verdict": "verified"}, "evidence": ["Filler $499"]},
+        {"url": "https://spa.com/hidden", "business_id": 1, "status": "needs_review", "decision": "skip",
+         "evidence": ["Filler $399"]},
+        {"url": "https://spa.com/offers", "business_id": 1, "status": "valid", "decision": "add_with_review",
+         "evidence": ["Peel $99"]},
     ]
     assert [i["url"] for i in build_deep_items(decisions)] == ["https://laseraway.com/promotions",
                                                                "https://spa.com/specials"]

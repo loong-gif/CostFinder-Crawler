@@ -6,12 +6,15 @@ rendered text. A page is confirmed only when its price or discount tokens appear
 from __future__ import annotations
 
 import hashlib
+import io
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
 import requests
 import snowballstemmer
+from PIL import Image
 
 from utils.paddle_ocr_markdown import ocr_lines
 
@@ -181,22 +184,48 @@ def deep_verdict(claims: List[Mapping[str, Any]], visible_texts: Iterable[str], 
     return {"verdict": "not_visible", "reason": f"only_{matched}_of_{len(judged)}_claims_visible_after_expanding"}
 
 
-def ocr_image(url: str, image_dir: Path) -> str:
-    target = image_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".img")
+RASTER_CONTENT_TYPES = ("application/octet-stream", "binary/octet-stream")
+
+
+def _get_image(url: str) -> requests.Response:
+    """下载图片；连接故障与 5xx 按递增间隔重试，重试用尽时连接故障终止命令，HTTP 错误状态交给调用方判定。"""
+    for attempt in range(1, MAX_ATTEMPTS):
+        try:
+            response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+            if response.status_code < 500:
+                return response
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+        time.sleep(5 * attempt)
+    return requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+
+
+def ocr_image(url: str, image_dir: Path) -> Dict[str, str]:
+    """渲染页面上一张可见图片的 OCR 文字 {"url", "text"}。访问者同样加载不到的图片（HTTP 错误状态）与非位图
+    （SVG、网页）记为 {"url", "unavailable": 原因}，不提供可见性证据；识别服务故障由 ocr_lines 重试，仍失败即终止命令。"""
+    target = image_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".png")
     if not target.exists():
-        response = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        target.write_bytes(response.content)
-    return "\n".join(ocr_lines(target.read_bytes()))
+        response = _get_image(url)
+        if response.status_code >= 400:
+            return {"url": url, "unavailable": f"http_{response.status_code}"}
+        content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if content_type == "image/svg+xml" or not (content_type.startswith("image/")
+                                                   or content_type in RASTER_CONTENT_TYPES):
+            return {"url": url, "unavailable": f"not_raster_image:{content_type}"}
+        # OCR 服务只解码常见位图格式：GIF 等先转成 PNG
+        png = io.BytesIO()
+        Image.open(io.BytesIO(response.content)).convert("RGB").save(png, "PNG")
+        target.write_bytes(png.getvalue())
+    return {"url": url, "text": "\n".join(ocr_lines(target.read_bytes()))}
 
 
 def build_deep_items(decisions: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    """needs_review 页面中尚未核验通过的：未做过渲染核验的新页面，以及折叠面板、图片促销、加载被拦截的页面。"""
+    """等待渲染核验的页面（needs_review 且决策为 add_with_review，含上次渲染未得到可用页面的），每个网址一次。"""
     items: List[Dict[str, Any]] = []
     seen = set()
     for record in decisions:
-        review = record.get("render_review") or {}
-        if record.get("status") != "needs_review" or review.get("verdict") == "verified" or record["url"] in seen:
+        if (record.get("status") != "needs_review" or record.get("decision") != "add_with_review"
+                or record["url"] in seen):
             continue
         seen.add(record["url"])
         claims = [{"id": i, "line": line[:240], "anchors": claim_anchors(line)}

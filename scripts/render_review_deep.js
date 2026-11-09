@@ -1,5 +1,5 @@
 // Deep render review for ego-browser: expands collapsed panels and tabs, then collects the visible text and
-// the visible images of each page. Paths are injected as the first line by scripts/run_render_review_deep.sh:
+// the visible images of each page. Paths are injected as the first line by utils/ego_render.py:
 //   globalThis.RR = {"shard": "...", "out": "...", "timeout": 90000};
 const fs = await import("node:fs/promises");
 const RR = globalThis.RR;

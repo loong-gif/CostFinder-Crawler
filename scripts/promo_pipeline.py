@@ -5,8 +5,7 @@
 
 Stages, in order:
   1 discover-businesses -> register-businesses   Google Maps scraper finds businesses
-  2 discover-pages -> review-pages -> retry-pages -> render-shards -> (scripts/run_render_review_deep.sh)
-    -> render-verdicts -> finalize-pages           promotion / membership URLs per business domain
+  2 discover-pages -> review-pages -> render-pages promotion / membership URLs per business domain
   3 crawl                                          self-hosted Firecrawl into the local raw store
   4 extract-pages                                  raw -> clinic_promotions / clinic_memberships
   5 extract-offers                                 promotion_content / benefits -> offers + items
@@ -39,9 +38,8 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "discover-pages": ("scripts.discover_new_promo_pages",
                        "2: promotion / membership pages per business domain (Map + price evidence)", "no"),
     "review-pages": ("scripts.review_promo_candidates", "2: add / skip decisions for discovered pages", "no"),
-    "render-shards": ("scripts.build_deep_review_shards", "2: queue unverified pages for the ego render review", "no"),
-    "render-verdicts": ("scripts.deep_review_verdicts", "2: render-review verdicts (expanded text + OCR)", "no"),
-    "finalize-pages": ("scripts.finalize_discovery_decisions", "2: final page list for crawling", "no"),
+    "render-pages": ("scripts.render_pages",
+                     "2: ego render review of waiting pages (all shards, re-render, OCR) -> final add / skip", "no"),
     "crawl": ("scripts.scrape_urls_to_raw", "3: self-hosted Firecrawl into the raw file store", "no (raw files)"),
     "recrawl-sources": ("scripts.recrawl_sources", "decisions file to re-crawl existing promotions / memberships",
                         "no"),

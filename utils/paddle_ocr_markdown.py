@@ -5,10 +5,12 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import ContextManager, Sequence
 from urllib.parse import urlparse
 
 import requests
+
+from utils.ssh_tunnel import ssh_tunnel
 
 SKIP_IMG_KEYWORDS = ("icon", "logo", "svg", "widget", "spin", "avatar", "favicon", "emoji")
 PROMO_IMG_KEYWORDS = ("special", "promo", "offer", "deal", "discount", "sale", "banner", "flyer", "monthly", "fill", "membership", "benefit", "plan")
@@ -89,15 +91,33 @@ def _download_image(url: str, *, session: requests.Session | None = None) -> byt
 
 
 OCR_SERVICE_URL = os.environ.get("OCR_SERVICE_URL", "http://127.0.0.1:18082")
+# PaddleOCR 服务（utils/ocr_service.py）在监控服务器上只监听本机 8082 端口
+OCR_REMOTE_PORT = 8082
+OCR_ATTEMPTS = 4
+OCR_BACKOFF_S = 10.0
 
 
-def ocr_lines(image_bytes: bytes) -> list[str]:
+def ocr_tunnel(service_url: str | None = None, command: Sequence[str] | None = None) -> ContextManager[None]:
+    """OCR 服务不可达时由命令建立 SSH 隧道，命令结束时关闭。"""
+    return ssh_tunnel(service_url or OCR_SERVICE_URL, OCR_REMOTE_PORT, "/health", command)
+
+
+def ocr_lines(image_bytes: bytes, *, attempts: int = OCR_ATTEMPTS, backoff: float = OCR_BACKOFF_S) -> list[str]:
     """图片 OCR 的唯一入口：抽取流水线的 markdown_ocr 与可见性清单的图片转写都用它。
 
-    调用监控服务器上的 PaddleOCR 服务（utils/ocr_service.py，经 SSH 隧道
-    ``ssh -f -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl``）。同一行的服务名与价格由服务合并在同一行，
-    图片中逐字出现的声明能作为连续原文匹配。
+    调用监控服务器上的 PaddleOCR 服务（utils/ocr_service.py，命令用 ocr_tunnel 经 SSH 隧道访问）。
+    同一行的服务名与价格由服务合并在同一行，图片中逐字出现的声明能作为连续原文匹配。
+    服务暂时不可用时按递增间隔重试，重试用尽仍失败即终止命令，不把识别失败当作图片没有文字。
     """
+    for attempt in range(1, attempts):
+        try:
+            return _ocr_request(image_bytes)
+        except requests.RequestException:
+            time.sleep(backoff * attempt)
+    return _ocr_request(image_bytes)
+
+
+def _ocr_request(image_bytes: bytes) -> list[str]:
     response = requests.post(f"{OCR_SERVICE_URL}/ocr", data=image_bytes, timeout=300,
                              headers={"Content-Type": "application/octet-stream"},
                              proxies={"http": None, "https": None})
