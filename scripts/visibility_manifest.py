@@ -2,7 +2,9 @@
 
   shard --plan P        把计划中各页的内容行写成深度渲染核验分片 visibility_shard.json
   （运行 scripts/run_render_review_deep.sh visibility_shard.json visibility_render.json 90000，ego-lite 渲染）
-  build --plan P        读取分片与渲染结果，写 visibility_manifest.json，供 extract-pages plan/apply-sql 使用
+  build --plan P        读取分片与渲染结果，写 visibility_manifest.json
+
+数据质量核验单独使用本命令；extract-pages plan 自动完成同一链条（utils.extract_pages_run.plan_with_visibility）。
 """
 from __future__ import annotations
 
