@@ -190,12 +190,12 @@ DO 块是一条语句，执行失败整体回滚，不存在部分写入：
 
 会话中的执行步骤：
 
-1. 把服务器 `$BASE/state/pending_sql/` 拉回本地（例如 `output/self_hosted_monitor_state/pending_sql/`）。
-2. `python scripts/promo_pipeline.py pending-sql --dir <目录>` 列出待执行文件及头部摘要。
-3. 审阅后用 Supabase MCP `execute_sql` 执行整个文件。
-4. 成功后 `pending-sql --mark-applied <文件>` 移到 `applied/`；下次 monitor 运行时事件变为 `completed`。
-   文件丢失时事件回到 `retryable` 并重新渲染。
-5. 执行后运行批次闸门（`batch-gate`）。
+1. `python scripts/promo_pipeline.py pending-sql` 自动把服务器 `$BASE/state/pending_sql/` 拉到
+   `output/self_hosted_monitor_state/pending_sql/`，列出待执行文件及头部摘要（Firecrawl 故障期间的文件不列出）。
+2. 用 Supabase MCP `execute_sql` 执行整个文件；文件中的 DO 块自行核对计划生成后数据未变化。
+3. 成功后 `pending-sql --mark-applied <文件>` 在本地与服务器上同时移到 `applied/`；下次 monitor 运行时事件变为
+   `completed`。文件丢失时事件回到 `retryable` 并重新渲染。
+4. 执行后运行批次闸门（`batch-gate`）。
 
 小时入口 `run_monitor_retry.sh` 运行 `promo_pipeline.py monitor --retry-transient-only`：
 只回抓最近失败的页面，并且只处理每个 URL 最新的 retryable 事件。

@@ -78,6 +78,7 @@
 28. monitor 中的连锁分店：多家商家共用同一来源页面、且地址各不相同时，是同一品牌的不同分店，每家各生成一份计划，页面只渲染、抽取一次；各家的 DO 块写进同一个 pending SQL 文件，任一分店被写入策略拦下时整页都不写入。地址相同或缺失时无法区分分店与重复登记，仍交人工审查（`source_business_ambiguous`）。
 29. 发现阶段的站点链接来自 Firecrawl `/v2/map`（只读站点地图与页面链接，不经过浏览器引擎）；map 只拿到 3 条以内链接时，抓取首页取其中的链接（规则 13 的 fastMode 加 ego-lite）。不再使用 `/v1/crawl`。
 30. monitor 主机上 ego-lite 由普通权限、运行在已登录桌面会话中的计划任务调用（ego-lite 拒绝管理员权限的连接）；WSL 中经 Windows 互操作调用 PATH 上的 `ego-browser.exe`。loong 账号断开远程桌面不影响，注销或服务器重启后需要重新登录一次。
+31. 自托管 Firecrawl 串页期间（2026-11-06 15:45 至 2026-11-07 03:31 UTC）生成的 pending SQL 不执行：`pending-sql` 按文件名中的 UTC 时间戳排除（`utils.pending_sql.FIRECRAWL_OUTAGES`）。
 
 ## 验收结果（2026-11-07）
 
@@ -97,6 +98,4 @@
 
 ## 待定问题
 
-- monitor 主机 `state/pending_sql/` 中 2026-11-07 生成的 170 个文件来自 Firecrawl 串页期间的抓取，不能执行；是否移入隔离目录待定。
 - simplicitylaser（商家 3100）与 smoothmd 的促销来源是整店商品目录，是否按标准流程重新抽取待定。
-- 套餐名里不写服务名的 item（例如「3-Area Starter Package」）关联不上服务，是否处理待定。
