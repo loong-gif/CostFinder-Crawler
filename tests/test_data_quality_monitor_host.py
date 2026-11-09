@@ -50,3 +50,15 @@ def test_rest_and_a_saved_snapshot_cannot_be_combined(tmp_path, monkeypatch):
 def test_daily_quality_on_the_monitor_host_reads_over_rest():
     launcher = data_quality_launcher().decode()
     assert "promo_pipeline.py\" quality --state-dir \"$BASE/state\" --rest --recheck" in launcher
+
+
+def test_rest_reads_take_the_project_from_the_deployed_env_file(tmp_path, monkeypatch):
+    # 排期任务的启动脚本不导出 SUPABASE_URL：REST 读取自己加载部署目录的 .env
+    from utils import monitor_database_snapshot
+    env = tmp_path / ".env"
+    env.write_text("SUPABASE_URL=https://kdlpkjzcnbkjcvwsvlwn.supabase.co\nSUPABASE_SECRET_KEY=k\n")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+    monkeypatch.setattr(monitor_database_snapshot, "ENV_FILE", env)
+    client = monitor_database_snapshot.rest_client()
+    assert client.base_url == "https://kdlpkjzcnbkjcvwsvlwn.supabase.co/rest/v1"

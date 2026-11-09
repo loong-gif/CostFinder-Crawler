@@ -7,11 +7,14 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
+from dotenv import load_dotenv
+
 from utils.monitor_price_writer_plan import SERVICE_COLUMNS
 from utils.pipeline_db import write_text
 from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 
 PROJECT_ID = "kdlpkjzcnbkjcvwsvlwn"
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 PAGE_SIZE = 500
 PRIMARY_KEYS = {"clinic_promotions": "promotion_id", "promo_offer_items": "offer_item_id",
                 "master_business_info": "business_id", "clinic_services": "service_id",
@@ -19,6 +22,8 @@ PRIMARY_KEYS = {"clinic_promotions": "promotion_id", "promo_offer_items": "offer
 
 
 def rest_client() -> SupabaseRestClient:
+    # 主机上的启动脚本不导出数据库地址与密钥，从部署目录的 .env 读取
+    load_dotenv(ENV_FILE)
     base = os.getenv("SUPABASE_URL", "")
     if urlsplit(base).hostname != PROJECT_ID + ".supabase.co":
         raise RuntimeError("database_project_mismatch")
