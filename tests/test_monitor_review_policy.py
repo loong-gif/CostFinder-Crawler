@@ -76,10 +76,11 @@ def test_paused_source_stays_retryable_and_is_not_queued_for_review(tmp_path, mo
     assert paused[0]["url"] == URL and "review" not in paused[0]
 
 
-def test_gate_evidence_problems_are_recaptured_not_reviewed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("category", ["evidence_expired", "derived_is_offer_extracted: regenerate plan"])
+def test_gate_evidence_problems_are_recaptured_not_reviewed(tmp_path, monkeypatch, category):
     path = event(tmp_path)
     monkeypatch.setattr(runner, "prepare_event", lambda *a: {"status": "ready", "operations": [], "review": []})
-    monkeypatch.setattr(runner, "render_pending", lambda *a: {"status": "review", "category": "evidence_expired"})
+    monkeypatch.setattr(runner, "render_pending", lambda *a: {"status": "review", "category": category})
     report = runner.process_events(tmp_path, SNAPSHOT)
     saved = json.loads(path.read_text())
     assert saved["status"] == "retryable" and saved["retry_reason"] == "fresh_scrape_required"

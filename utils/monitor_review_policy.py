@@ -25,7 +25,9 @@ RECAPTURE_GATES = {"evidence_expired", "breakpoint_coverage_incomplete", "legacy
                    "human_capture_proof_mismatch", "image_capture_expired_requires_refresh",
                    "variant_capture_proof_mismatch", "image_dual_read_required", "image_capture_proof_mismatch",
                    "image_obscured", "image_parent_facts_missing", "image_coverage_incomplete", "image_region_missing",
-                   "image_fact_proof_mismatch"}
+                   "image_fact_proof_mismatch",
+                   # 旧代码生成、仍写 is_offer_extracted 的计划：重新抓取后由现行代码重新生成
+                   "derived_is_offer_extracted: regenerate plan"}
 NETWORK_ERRORS = (requests.RequestException, ssl.SSLError, ConnectionError, TimeoutError,
                   http.client.HTTPException, urllib3.exceptions.HTTPError)
 
