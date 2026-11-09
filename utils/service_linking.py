@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES, _normalized_name, live_clinic_service_payload
+from utils.offer_purchase_semantics import service_supported_by_source
 from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, plan_digest
 from utils.promo_offer_items_db import is_blanket_offer_text
 from utils.service_mapping_confirmations import confirmed_mappings
@@ -18,6 +19,7 @@ from utils.service_price_guard import normalize_source_url
 from utils.service_recognition import (
     LLM_MULTIPLE,
     LLM_NONE,
+    SUBSUMED_BY,
     LlmServiceResolver,
     StructuredClient,
     item_unit_type,
@@ -128,6 +130,14 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
                 decisions[index] = {"service_name": None, "basis": "unresolved", "reason": "llm_multiple_services"}
             else:
                 decisions[index] = {"service_name": answer, "basis": "llm", "reason": "llm"}
+        for item in pending:
+            current_name = service_names.get(item["service_id"])
+            answer = decisions[item["offer_item_id"]]["service_name"]
+            # 已有通用服务映射只在页面写出品牌时改为该品牌（Neurotoxin → Botox 需要原文出现 Botox）
+            if (answer in SUBSUMED_BY.get(current_name, ())
+                    and not service_supported_by_source(answer, offer_by_id[item["offer_id"]]["offer_raw_text"])):
+                decisions[item["offer_item_id"]] = {"service_name": current_name, "basis": "llm",
+                                                    "reason": "brand_not_named"}
 
     to_create: dict[tuple[int, str, str | None], dict[str, Any]] = {}
     # 重新判定中的 item 不占用其当前服务

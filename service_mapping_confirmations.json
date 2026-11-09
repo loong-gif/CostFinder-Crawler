@@ -132,6 +132,11 @@
     },
     {
       "offer_raw_text": "15% off Moxi and BBL Single Price Treatment (every 4–6 weeks)",
+      "item_name": "BBL",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "15% off Moxi and BBL Single Price Treatment (every 4–6 weeks)",
       "item_name": "Moxi",
       "service_name": "Moxi Laser"
     },
@@ -341,6 +346,16 @@
       "service_name": "Neurotoxin"
     },
     {
+      "offer_raw_text": "Bunny Lines\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Bunny Lines",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Bunny Lines $99 (regular $135)",
+      "item_name": "Bunny Lines",
+      "service_name": "Neurotoxin"
+    },
+    {
       "offer_raw_text": "Buy 3 IV Drips, get the 4th FREE — $750",
       "item_name": "IV Drips",
       "service_name": "IV Therapy"
@@ -354,6 +369,16 @@
       "offer_raw_text": "Chest and Abdomen: ~$2500,~ $1750",
       "item_name": "Chest",
       "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Chin Dimpling\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Chin Dimpling",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Chin Dimpling $99 (regular $135)",
+      "item_name": "Chin Dimpling",
+      "service_name": "Neurotoxin"
     },
     {
       "offer_raw_text": "Chin Dimpling for $99 (26% off, was $135)",
@@ -386,6 +411,26 @@
       "service_name": "Vitamin Injection"
     },
     {
+      "offer_raw_text": "CoolTone™ 5 pack just $995",
+      "item_name": "CoolTone™",
+      "service_name": "Emsculpt"
+    },
+    {
+      "offer_raw_text": "Cooltone™ 5 pack just $995 thru November 30, 2026!",
+      "item_name": "Cooltone",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "Crows Feet\n$158.00\n-20%\n~~$199.00~~",
+      "item_name": "Crows Feet",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Crows Feet $158 (regular $199)",
+      "item_name": "Crows Feet",
+      "service_name": "Neurotoxin"
+    },
+    {
       "offer_raw_text": "Dermaplane | for $35.",
       "item_name": "Dermaplane",
       "service_name": "Dermaplaning"
@@ -394,6 +439,11 @@
       "offer_raw_text": "Diamond GLO Deluxe $300 / $270",
       "item_name": "Diamond GLO Deluxe",
       "service_name": "DiamondGlow"
+    },
+    {
+      "offer_raw_text": "Elevens 11s $158 (regular $199)",
+      "item_name": "Elevens 11s",
+      "service_name": "Neurotoxin"
     },
     {
       "offer_raw_text": "Evolve Tone 1 Area: 6 sessions $900 (reg. $1,500)",
@@ -436,6 +486,16 @@
       "service_name": "Neurotoxin"
     },
     {
+      "offer_raw_text": "Gummy Smile\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Gummy Smile",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Gummy Smile $99 (regular $135)",
+      "item_name": "Gummy Smile",
+      "service_name": "Neurotoxin"
+    },
+    {
       "offer_raw_text": "Half Syringe LIPS $250 and up",
       "item_name": "Half Syringe LIPS",
       "service_name": "Dermal Filler"
@@ -459,6 +519,16 @@
       "offer_raw_text": "IPL Face Treatment : $40 OFF| Helps with pigmentation, sun damage and broken capillaries",
       "item_name": "IPL Face Treatment",
       "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "Jelly Roll\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Jelly Roll",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Jelly Roll $99 (regular $135)",
+      "item_name": "Jelly Roll",
+      "service_name": "Neurotoxin"
     },
     {
       "offer_raw_text": "Jelly Roll for $99 (26% off, was $135)",
@@ -501,6 +571,11 @@
       "service_name": "Exosome Therapy"
     },
     {
+      "offer_raw_text": "Mid-Lower Face Correction: Buy 2, Get 1 Free\nThe mid-lower face correction (buy 2, get 1 free) includes three syringes for $1,400, all used during the same appointment.",
+      "item_name": "Mid-Lower Face Correction",
+      "service_name": "Dermal Filler"
+    },
+    {
       "offer_raw_text": "Monthly Treatment: SkinMedica Illuminizing Peel",
       "item_name": "SkinMedica Illuminizing Peel",
       "service_name": "Chemical Peel"
@@ -536,8 +611,28 @@
       "service_name": "Dermal Filler"
     },
     {
+      "offer_raw_text": "Nefertiti Lift $199",
+      "item_name": "Nefertiti Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
       "offer_raw_text": "Nefertiti Lift starting from $179 (10% off, was $199)",
       "item_name": "Nefertiti Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Non-Surgical Brow Lift\n$79.00\n-41%\n~~$135.00~~",
+      "item_name": "Non-Surgical Brow Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Nose Droop\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Nose Droop",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Nose Droop $99 (regular $135)",
+      "item_name": "Nose Droop",
       "service_name": "Neurotoxin"
     },
     {
@@ -549,6 +644,11 @@
       "offer_raw_text": "Package of 10 Vitamin B shots for $199.",
       "item_name": "Vitamin B shots",
       "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Peel & Reveal — package of 3 VI Chemical Peels; members $785 (save $262).",
+      "item_name": "VI Chemical Peels",
+      "service_name": "Chemical Peel"
     },
     {
       "offer_raw_text": "Quick peel $400 (Reg. $550)",
@@ -601,6 +701,16 @@
       "service_name": "Neurotoxin"
     },
     {
+      "offer_raw_text": "Underarm Sweating\n$799.00\n-11%\n~~$899.00~~",
+      "item_name": "Underarm Sweating",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Underarm Sweating $799 (regular $899)",
+      "item_name": "Underarm Sweating",
+      "service_name": "Neurotoxin"
+    },
+    {
       "offer_raw_text": "Upper Lip: $525 (reg $750)",
       "item_name": "Upper Lip",
       "service_name": "Laser Hair Removal"
@@ -614,6 +724,11 @@
       "offer_raw_text": "Upper Lip and Chin: ~$900~, $630",
       "item_name": "Upper Lip",
       "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "VI Chemical Peels: $300 (reg. $350/peel).",
+      "item_name": "VI Chemical Peels",
+      "service_name": "Chemical Peel"
     },
     {
       "offer_raw_text": "VIP Introductory Offer: $199 (usually $600)",

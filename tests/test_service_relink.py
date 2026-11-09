@@ -108,6 +108,24 @@ def test_relink_apply_sql_checks_the_current_mapping(tmp_path, monkeypatch):
     assert "101" not in text and "any('{102}'" in text
 
 
+def test_relink_keeps_the_generic_service_when_the_page_does_not_name_the_brand(tmp_path, monkeypatch):
+    g = graph()
+    g["offers"][0]["offer_raw_text"] = "Crows Feet $12/unit"
+    g["items"][0]["item_name"] = "Crows Feet"
+    monkeypatch.setattr(FakeClient, "answers", {**FakeClient.answers, "Crows Feet": "Botox"})
+    report = {"issues": [{"rule": "service_scope_evidence", "table": "promo_offer_items", "id": 101,
+                          "status": "relink"}]}
+    plan, _, _ = run_link_services_plan(tmp_path, monkeypatch, g, report)
+    (entry,) = plan["items"]
+    assert (entry["action"], entry["service_id"]) == ("keep", 12)
+    # 页面写出品牌时改为品牌服务
+    g["offers"][0]["offer_raw_text"] = "Crows Feet Botox $12/unit"
+    (tmp_path / "named").mkdir()
+    plan, _, _ = run_link_services_plan(tmp_path / "named", monkeypatch, g, report)
+    (entry,) = plan["items"]
+    assert (entry["action"], entry["service_id"]) == ("link", 15)
+
+
 def test_blanket_item_reported_for_relink_stays_unlinked(tmp_path, monkeypatch):
     g = graph()
     g["offers"][2]["offer_raw_text"] = "Mystery Day: 20% off all services"
