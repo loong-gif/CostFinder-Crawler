@@ -84,6 +84,9 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "crawl-record": ("scripts.crawl_record_from_monitor", "record scheduled crawl results", "state files"),
     "read-snapshot": ("scripts.read_snapshot",
                       "run a command's read.sql with the Supabase CLI and save snapshot.json", "no (read only)"),
+    "service-access": ("scripts.service_access",
+                       "let this machine call the monitor server's Firecrawl, scraper and OCR directly (rerun when the IP "
+                       "changes)", "no (server firewall and tasks)"),
     "pending-sql": ("scripts.pending_sql",
                     "pull and list pending SQL files from the monitor host; --mark-applied FILE registers locally "
                     "and on the monitor host after MCP execution", "no (moves files)"),
