@@ -96,6 +96,9 @@
 
 规则与结果见 `docs/decisions-la-topic-search.md`。
 
-## 待定问题
+## 整店商品目录页（2026-11-09）
 
-- simplicitylaser（商家 3100）与 smoothmd 的促销来源是整店商品目录，是否按标准流程重新抽取待定。
+simplicitylaser（商家 3100，`/collections/all`）与 smoothmd（商家 2932，`/collections/all-treatments`）的促销来源是整店商品目录，按标准流程处理：`recrawl-sources --business-id 3100 --business-id 2932` → `crawl` → `extract-pages plan`（`output/pipeline/extract_pages/20261109T112753Z/`）。
+
+- smoothmd：9 张带售价的卡片在 ego-lite 渲染中全部可见，计划为更新促销 957（`row_differs`）。
+- simplicitylaser：LLM 抽取的卡片写成「Original price: $89.00」，页面只有「Sale / $ 59.00 / $ 89.00」，措辞无法追溯，按规则拒绝本页（`no_validated_promotions`）；页面没有证明促销失效，库中已有的行保持不变。
