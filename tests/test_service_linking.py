@@ -41,8 +41,11 @@ class FakeClient:
         self.calls = 0
 
     def create_json_response(self, messages, *, json_schema=None):
+        """按 item 名称回答，index 原样取自请求。"""
         self.calls += 1
-        return {"results": [{"index": i, "service_name": name} for i, name in self.answers.items()]}
+        self.batches = getattr(self, "batches", []) + [json.loads(messages[-1]["content"])]
+        return {"results": [{"index": e["index"], "service_name": self.answers[e["item_name"]]}
+                            for e in self.batches[-1]]}
 
 
 def test_deterministic_recognition_from_item_name_and_alias():
@@ -86,7 +89,7 @@ def test_existing_service_is_linked():
     entry = result["items"][0]
     assert (entry["action"], entry["service_id"], entry["basis"]) == ("link", 100, "deterministic")
     assert result["services_to_create"] == []
-    assert set(result) == {"generated_at", "counts", "services_to_create", "items"}
+    assert set(result) == {"generated_at", "counts", "services_to_create", "items", "confirmed_mappings"}
 
 
 def test_missing_service_is_created_with_null_regular_price():
@@ -122,7 +125,7 @@ def test_membership_service_takes_the_membership_source_url():
 
 
 def test_llm_resolves_only_when_deterministic_fails():
-    client = FakeClient({1: "Weight Loss"})
+    client = FakeClient({"Mystery vial": "Weight Loss"})
     resolver = LlmServiceResolver(client, ENUMS)
     result = plan([item(1, name="Mystery vial")], offers=[offer(text="Spring offer")], resolver=resolver)
     assert result["items"][0]["basis"] == "llm" and result["items"][0]["recognized"] == "Weight Loss"
@@ -132,10 +135,13 @@ def test_llm_resolves_only_when_deterministic_fails():
 
 
 def test_llm_none_and_multiple_are_unresolved():
-    resolver = LlmServiceResolver(FakeClient({1: "NONE", 2: "MULTIPLE"}), ENUMS)
+    client = FakeClient({"Mystery": "NONE", "Another mystery": "MULTIPLE"})
     offers = [offer(1, "Spring offer"), offer(2, "Summer offer")]
-    result = plan([item(1, 1, "Mystery"), item(2, 2, "Another mystery")], offers=offers, resolver=resolver)
+    result = plan([item(6020, 1, "Mystery"), item(6071, 2, "Another mystery")], offers=offers,
+                  resolver=LlmServiceResolver(client, ENUMS))
     assert [e["reason"] for e in result["items"]] == ["llm_none", "llm_multiple_services"]
+    # LLM 只看到批内序号，答案按序号映射回 item id
+    assert [e["index"] for e in client.batches[0]] == [0, 1]
 
 
 def test_llm_needed_without_resolver_fails_fast():
@@ -160,7 +166,8 @@ def test_apply_sql_creates_service_and_links_item():
     assert "returning service_id into v_service" in text and "v_map := v_map || jsonb_build_object(r.key, v_service)" in text
     assert '"Botox"' in text and "https://clinic.test/specials" in text
     link = next(line for line in text.splitlines() if "update public.promo_offer_items" in line)
-    assert "set service_id = v_ref" in link and "i.service_id is null" in link
+    assert "set service_id = v_ref" in link and "i.service_id is not distinct from r.current_id" in link
+    assert '[[1, "7:Botox:None", null]]' in text
     assert "get diagnostics v_count = row_count;" in text
     assert "if v_count <> 1 then raise exception 'stale_plan: item % cannot be linked" in text
     assert text.index("returning service_id into v_service") < text.index("update public.promo_offer_items")
@@ -171,7 +178,7 @@ def test_apply_sql_creates_service_and_links_item():
 def test_apply_sql_links_existing_service_without_creating():
     text = sql_for(plan([item(1)], services=[service(100, "Botox")]))
     assert "insert into public.clinic_services" not in text and "jsonb_build_object" not in text
-    assert '[[1, "100"]]' in text and "set service_id = v_ref" in text
+    assert '[[1, "100", null]]' in text and "set service_id = v_ref" in text
 
 
 def test_apply_sql_reuses_one_service_per_create_key():

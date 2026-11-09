@@ -49,6 +49,7 @@ reports/
 *.csv
 *.json
 !config/firecrawl_monitor_migration.json
+!/service_mapping_confirmations.json
 !/schema/
 !/schema/*.json
 *.xlsx

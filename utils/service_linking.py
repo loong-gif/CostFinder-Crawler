@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES, _normalized_name, live_clinic_service_payload
 from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, plan_digest
 from utils.promo_offer_items_db import is_blanket_offer_text
+from utils.service_mapping_confirmations import confirmed_mappings
 from utils.service_price_guard import normalize_source_url
 from utils.service_recognition import (
     LLM_MULTIPLE,
@@ -84,7 +85,9 @@ def price_invariant_ok(offer: dict[str, Any], item: dict[str, Any], item_count: 
 def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, Any]],
                          services: list[dict[str, Any]], promotions: list[dict[str, Any]],
                          memberships: list[dict[str, Any]], enum_values: list[str],
-                         resolver: LlmServiceResolver | None) -> dict[str, Any]:
+                         resolver: LlmServiceResolver | None, relink_ids: frozenset[int] = frozenset()
+                         ) -> dict[str, Any]:
+    """待关联的 item（service_id 为空）与 quality 交来重新判定的已关联 item（relink_ids）走同一套判定。"""
     if set(enum_values) != set(SERVICE_NAME_ENUM_VALUES):
         raise RuntimeError("enum_mismatch: clinic_service_name_enum differs from SERVICE_NAME_ENUM_VALUES")
     offer_by_id = {offer["id"]: offer for offer in offers}
@@ -96,8 +99,10 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
     rows_by_key: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
     for service in services:
         rows_by_key[(service["business_id"], service["service_name"])].append(dict(service))
+    service_names = {service["service_id"]: service["service_name"] for service in services}
 
-    pending = sorted((i for i in items if i["service_id"] is None), key=lambda i: i["offer_item_id"])
+    pending = sorted((i for i in items if i["service_id"] is None or i["offer_item_id"] in relink_ids),
+                     key=lambda i: i["offer_item_id"])
     decisions: dict[int, dict[str, Any]] = {}
     llm_requests = []
     for item in pending:
@@ -125,26 +130,38 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
                 decisions[index] = {"service_name": answer, "basis": "llm", "reason": "llm"}
 
     to_create: dict[tuple[int, str, str | None], dict[str, Any]] = {}
+    # 重新判定中的 item 不占用其当前服务
     taken: dict[int, set[tuple[Any, ...]]] = {
-        offer_id: {("id", i["service_id"]) for i in offer_items if i["service_id"] is not None}
+        offer_id: {("id", i["service_id"]) for i in offer_items
+                   if i["service_id"] is not None and i["offer_item_id"] not in relink_ids}
         for offer_id, offer_items in items_by_offer.items()}
     plan_items = []
     for item in pending:
         decision = decisions[item["offer_item_id"]]
         offer = offer_by_id[item["offer_id"]]
         business_id = offer["business_id"]
+        current = item["service_id"]
         entry = {"offer_item_id": item["offer_item_id"], "offer_id": item["offer_id"], "business_id": business_id,
                  "item_name": item["item_name"], "recognized": decision["service_name"],
                  "basis": decision["basis"], "reason": decision["reason"], "action": "unresolved",
-                 "service_id": None, "create_key": None}
+                 "service_id": None, "create_key": None, "current_service_id": current}
         if decision.get("candidates"):
             entry["candidates"] = decision["candidates"]
         plan_items.append(entry)
         name = decision["service_name"]
-        if name is None:
+        if current is not None and name == service_names[current] and ("id", current) not in taken[item["offer_id"]]:
+            # 判定与现有映射一致：保留，不写库
+            taken[item["offer_id"]].add(("id", current))
+            entry.update(action="keep", service_id=current)
             continue
         if not price_invariant_ok(offer, item, len(items_by_offer[item["offer_id"]])):
-            entry["reason"] = "price_invariant_would_fail"
+            if name is not None or current is not None:
+                entry["reason"] = "price_invariant_would_fail"
+            continue
+        if current is not None:
+            # 现有映射未被确认：先记为置 NULL，下面判出可用的另一服务时改为关联
+            entry["action"] = "unlink"
+        if name is None:
             continue
         unit_type = item_unit_type(item["item_name"])
         kind, row = match_service_row(rows_by_key[(business_id, name)], unit_type, item["item_name"])
@@ -178,19 +195,21 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "counts": {action: sum(1 for e in plan_items if e["action"] == action)
-                   for action in ("link", "create_and_link", "unresolved")},
+                   for action in ("link", "create_and_link", "unresolved", "keep", "unlink")},
         "services_to_create": list(to_create.values()),
         "items": plan_items,
+        "confirmed_mappings": confirmed_mappings(plan_items, {i["offer_item_id"]: i for i in items}, offer_by_id),
     }
 
 
-def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], client: StructuredClient | None) -> dict[str, Any]:
+def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], client: StructuredClient | None,
+               relink_ids: frozenset[int] = frozenset()) -> dict[str, Any]:
     enum_values = [row["enumlabel"] for row in sorted(snapshot["enums"], key=lambda row: row["enumsortorder"])]
     resolver = LlmServiceResolver(client, enum_values) if client is not None else None
     return build_plan_from_rows(
         items=snapshot["items"], offers=snapshot["offers"], services=snapshot["services"],
         promotions=snapshot["promotions"], memberships=snapshot["memberships"],
-        enum_values=enum_values, resolver=resolver)
+        enum_values=enum_values, resolver=resolver, relink_ids=relink_ids)
 
 
 def _json_literal(rows: list[list[Any]]) -> str:
@@ -224,20 +243,35 @@ def _create_service_statements(specs: list[dict[str, Any]]) -> list[str]:
 
 
 def _link_statements(entries: list[dict[str, Any]]) -> list[str]:
-    """逐条关联：只更新 service_id 仍为空且服务属于同一商家的 item，恰好 1 行。
-    已有 service 以数字 id 给出，新建的以 create_key 给出（从 v_map 取）。"""
+    """逐条关联：只更新 service_id 仍等于计划时的值（待关联为空，重新判定为原服务）且服务属于同一商家的 item，
+    恰好 1 行。已有 service 以数字 id 给出，新建的以 create_key 给出（从 v_map 取）。"""
     rows = [[entry["offer_item_id"],
-             str(entry["service_id"]) if entry["action"] == "link" else entry["create_key"]] for entry in entries]
+             str(entry["service_id"]) if entry["action"] == "link" else entry["create_key"],
+             entry.get("current_service_id")] for entry in entries]
     return [
-        "for r in select (e->>0)::bigint as item_id, e->>1 as ref "
+        "for r in select (e->>0)::bigint as item_id, e->>1 as ref, (e->>2)::bigint as current_id "
         f"from jsonb_array_elements({_json_literal(rows)}) e loop",
         "v_ref := case when r.ref ~ '^[0-9]+$' then r.ref::bigint else (v_map->>r.ref)::bigint end;",
         "update public.promo_offer_items i set service_id = v_ref, updated_at = now() "
         "from public.promo_offer_master m, public.clinic_services s "
-        "where i.offer_item_id = r.item_id and i.service_id is null and m.id = i.offer_id "
+        "where i.offer_item_id = r.item_id and i.service_id is not distinct from r.current_id and m.id = i.offer_id "
         "and s.service_id = v_ref and s.business_id = m.business_id;",
         "get diagnostics v_count = row_count;",
         "if v_count <> 1 then raise exception 'stale_plan: item % cannot be linked to its service', r.item_id; end if;",
+        "end loop;",
+    ]
+
+
+def _unlink_statements(entries: list[dict[str, Any]]) -> list[str]:
+    """重新判定判不出服务的 item：service_id 仍为原服务时置 NULL，恰好 1 行。"""
+    rows = [[entry["offer_item_id"], entry["current_service_id"]] for entry in entries]
+    return [
+        "for r in select (e->>0)::bigint as item_id, (e->>1)::bigint as current_id "
+        f"from jsonb_array_elements({_json_literal(rows)}) e loop",
+        "update public.promo_offer_items i set service_id = null, updated_at = now() "
+        "where i.offer_item_id = r.item_id and i.service_id = r.current_id;",
+        "get diagnostics v_count = row_count;",
+        "if v_count <> 1 then raise exception 'stale_plan: item % no longer has its planned service', r.item_id; end if;",
         "end loop;",
     ]
 
@@ -251,9 +285,12 @@ def render_apply(plan: Mapping[str, Any]) -> str:
     specs = [spec for spec in plan["services_to_create"] if spec["key"] in used_keys]
     if specs:
         statements.extend(_create_service_statements(specs))
-    entries = [entry for entry in plan["items"] if entry["action"] != "unresolved"]
+    entries = [entry for entry in plan["items"] if entry["action"] in ("link", "create_and_link")]
     if entries:
         statements.extend(_link_statements(entries))
+    unlinks = [entry for entry in plan["items"] if entry["action"] == "unlink"]
+    if unlinks:
+        statements.extend(_unlink_statements(unlinks))
     linked = [entry["offer_item_id"] for entry in entries]
     # 本批 blanket 检查：AGENTS.md 的查询原文，只检查本批关联的 item
     statements.append(
@@ -261,7 +298,7 @@ def render_apply(plan: Mapping[str, Any]) -> str:
         f"  and i.offer_item_id = any({literal(linked)}::bigint[])) blanket_rows;")
     statements.append(f"if v_count <> 0 then raise exception {literal('blanket_check_failed: linked items under blanket offers')}; end if;")
     header = (f"link-services apply\nplan sha256 {plan_digest(plan)}\n"
-              f"links {len(linked)}, services {len(specs)}")
+              f"links {len(linked)}, unlinks {len(unlinks)}, services {len(specs)}")
     return do_block(statements, declare=declare, header=header)
 
 

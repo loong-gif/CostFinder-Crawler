@@ -14,6 +14,8 @@ from utils.offer_purchase_semantics import (canonical_offer_semantics, usable_un
 from utils.offer_evidence_validator import _quantity_supported
 from utils.offer_field_normalize import normalize_service_area
 from utils.promo_offer_items_db import is_blanket_offer_text
+from utils.service_mapping_confirmations import confirmation_key, load_confirmations
+from utils.service_recognition import recognize_deterministic
 
 # offer 组成问题：按当前来源内容重新抽取即修正，来源 id 由 extract-offers 自动选入（reextract_sources）
 REEXTRACT_RULES = frozenset({"independent_options", "unsupported_quantity", "H_member_nonmember_regular",
@@ -29,6 +31,11 @@ def reextract_sources(queue: dict) -> dict[str, list[int]]:
             "memberships": sorted({i for e in entries for i in e.get("membership_ids", [])})}
 
 
+def relink_items(report: dict) -> list[int]:
+    """quality 报告中交给 link-services 重新判定服务映射的 offer_item_id。"""
+    return sorted({i["id"] for i in report.get("issues", []) if i.get("status") == "relink"})
+
+
 def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections: dict | None = None,
                    at: datetime | None = None) -> dict:
     """Return findings and frozen row patches; never mutate a snapshot or infer prices."""
@@ -41,6 +48,7 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
     promotions = {r["promotion_id"]: r for r in snapshot.get("promotions", [])}
     memberships = {r["plan_id"]: r for r in snapshot.get("memberships", [])}
     services = {r["service_id"]: r for r in snapshot.get("services", [])}
+    confirmed = load_confirmations()
     items = defaultdict(list)
     for row in snapshot.get("items", []):
         items[row["offer_id"]].append(row)
@@ -52,7 +60,7 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
         url = source.get("source_url", "")
         protected = _protected(snapshot, table, row, protections)
         route = ("reextract" if rule in REEXTRACT_RULES else "delete_offer_shells" if rule == "I_itemless_offer"
-                 else "review" if rule == "service_scope_evidence" else "recheck")
+                 else "relink" if rule == "service_scope_evidence" else "recheck")
         issue = {"rule": rule, "table": table, "id": row[pk], "reason": reason,
                  "source_url": url, "business_id": source.get("business_id"),
                  "status": "protected" if protected else "ready" if values else route}
@@ -62,7 +70,7 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
             if patch:
                 report["repairs"].append({**issue, "values": patch, "before": dict(row),
                                            "source_kind": kind or "promotion"})
-        elif url and not protected:
+        elif url and not protected and route != "relink":
             key = (source_key(url), kind or "promotion", source.get("business_id"))
             entry = queued.setdefault(key, {"source_url": url, "source_kind": kind or "promotion",
                         "business_id": source.get("business_id"), "reasons": [], "status": "pending",
@@ -238,8 +246,14 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
             if item.get("delivered_units") is not None and not _quantity_supported(item["delivered_units"], raw):
                 finding("unsupported_quantity", "promo_offer_items", item, "fixed quantity has no delivery evidence", parent=parent, kind=kind)
             mapped = services.get(item.get("service_id"))
-            if mapped and not blanket and not service_supported_by_source(mapped.get("service_name"), raw):
-                # 原文措辞与服务名不一致不等于映射错误（neuromodulator → Neurotoxin 等），证据不足以自动清除映射
+            if (mapped and not blanket and not service_supported_by_source(mapped.get("service_name"), raw)
+                    and confirmed.get(confirmation_key(raw, item.get("item_name"))) != mapped.get("service_name")
+                    and recognize_deterministic(item_name=item.get("item_name"), offer_raw_text=raw,
+                                                quantity=item.get("delivered_units"), sibling_count=len(parts),
+                                                is_package=bool(offer.get("is_package")))["service_name"]
+                    != mapped.get("service_name")):
+                # 原文措辞与服务名不一致不等于映射错误（neuromodulator → Neurotoxin 等）：交给 link-services 重新判定
+                # （relink）；其确定性规则得出同一服务、或 link-services 已对同一原文确认过的映射不再报出
                 finding("service_scope_evidence", "promo_offer_items", item, "explicit source service or controlled alias needs verification", parent=parent, kind=kind)
     for group in duplicates.values():
         if len(group) < 2:

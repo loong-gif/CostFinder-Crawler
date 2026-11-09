@@ -133,7 +133,10 @@ class LlmServiceResolver:
     def resolve(self, requests: list[dict[str, Any]]) -> dict[int, str]:
         answers: dict[int, str] = {}
         for start in range(0, len(requests), LLM_BATCH_SIZE):
-            batch = requests[start:start + LLM_BATCH_SIZE]
+            # 发给 LLM 的 index 是批内序号 0..n-1：稀疏的大 item id 会让模型补出中间不存在的序号
+            ids = [request["index"] for request in requests[start:start + LLM_BATCH_SIZE]]
+            batch = [{**request, "index": position}
+                     for position, request in enumerate(requests[start:start + LLM_BATCH_SIZE])]
             messages = [
                 {"role": "system", "content": (
                     "You map medical-aesthetics promotion items to exactly one service_name from the allowed enum. "
@@ -149,5 +152,5 @@ class LlmServiceResolver:
             for entry in results:
                 if entry["service_name"] not in self.enum_values + [LLM_NONE, LLM_MULTIPLE]:
                     raise RuntimeError(f"llm_invalid_service_name: {entry['service_name']}")
-                answers[entry["index"]] = entry["service_name"]
+                answers[ids[entry["index"]]] = entry["service_name"]
         return answers

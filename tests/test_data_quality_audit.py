@@ -1,7 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from utils.data_quality_audit import audit_snapshot, reextract_sources
+from utils.data_quality_audit import audit_snapshot, reextract_sources, relink_items
 from scripts.run_data_quality_audit import merge_queue
 from utils.supabase_rest import SupabaseRestClient
 import pytest
@@ -151,12 +151,18 @@ def test_F_from_price_dropped_is_routed_to_reextraction():
     assert reextract_sources({"entries": report["rechecks"]}) == {"promotions": [1], "memberships": []}
 
 
-def test_service_wording_mismatch_is_not_cleared_automatically():
+def test_service_wording_mismatch_is_routed_to_link_services():
     g = graph()
-    offer(g, offer_raw_text="Hydrafacial special $99")
+    offer(g, offer_raw_text="Bunny Lines $99 (regular $200)")
+    g["items"][0]["item_name"] = "Bunny Lines"
+    # 套餐 item 名称本身由 link-services 的确定性规则得出同一服务：无需重新判定
+    offer(g, 2, offer_raw_text="Iconique Lip Reset $1,200", is_package=True)
     report = audit_snapshot(g, at=AT)
-    issue = next(i for i in report["issues"] if i["rule"] == "service_scope_evidence")
-    assert issue["status"] == "review" and not report["repairs"]
+    issues = [i for i in report["issues"] if i["rule"] == "service_scope_evidence"]
+    assert [(i["id"], i["status"]) for i in issues] == [(101, "relink")] and not report["repairs"]
+    # relink 由 link-services 消费，不进入渲染复查队列
+    assert not any("service_scope_evidence" in e["reasons"] for e in report["rechecks"])
+    assert relink_items(report) == [101]
 
 
 def test_gone_membership_page_deactivates_its_offers():

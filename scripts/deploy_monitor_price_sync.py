@@ -70,7 +70,7 @@ def deploy(host: str, include_credentials: bool):
         "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
         "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",
         "scripts/monitor_rendered_page.js","scripts/monitor_ego_bridge.js","requirements_monitor_price_sync.txt",
-        "service_name_dict.json")]
+        "service_name_dict.json","service_mapping_confirmations.json")]
     payload = {str(path.relative_to(ROOT)):path.read_bytes() for path in files}
     if include_credentials:
         values = dotenv_values(ROOT / ".env")
