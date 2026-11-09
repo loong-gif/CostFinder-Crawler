@@ -44,10 +44,10 @@
 - Los Feliz（4443）的「St. Patrick's Day Sale」页面仍在线、没有年份，按 AGENTS.md 写入，活动日期为空，下架后由 monitor 停用。
 - LaserAway 洛杉矶三家分店（4439–4441）的来源页面是 `/savings` 与 `/bundles/laser-hair-removal-specials`。
 - Le Rêve（4442）重复的 New Client BOTOX 卡片合并为一条 offer。
-- batch-gate 的 10 个存量失败行逐条核对后作为有意保留记录在 `output/data_quality_state/data_quality/gate_retained.json`：
-  - C：类别内折扣（「all IV services」「all laser services」）关联到对应类别服务。
-  - D：同一权益出现在同一商家的多个会员方案中；D 检查的 ids 按 id 排序，保留记录的键在多次运行间保持稳定。
-  - G：「买 2 送第 3 支折扣」和二选一组合，交付数量不是单一数值。
+- batch-gate 检查条件（`utils/batch_gate_checks.py`）直接排除以下情形，不逐条登记：
+  - C：类别内折扣（「all IV services」「all laser services」）关联到名称含该类别词的服务。
+  - D：同一权益出现在同一商家的多个会员方案或促销中，按来源分组。
+  - G：「买 N 送」类 offer（「买 2 送第 3 支折扣」及其二选一组合），折扣由多个单位共享，交付数量不是单一数值。
 
 ## 结果
 

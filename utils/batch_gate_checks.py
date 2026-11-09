@@ -1,18 +1,21 @@
 """Checks every data-update batch must pass before it counts as complete.
 
 Each query must return zero rows, except rows deliberately retained and
-documented in the batch's retained file. Queries run on the linked production
-project through ``supabase db query --linked`` and are read-only.
+documented in the batch's retained file. All queries run as one read-only
+snapshot (``read.sql`` executed by ``utils.pipeline_db.fresh_snapshot``).
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
 from typing import Any, Callable
 
+from utils import pipeline_db
+from utils.pipeline_run import PROJECT_ROOT
 from utils.promo_offer_items_db import AGENTS_BLANKET_PATTERN
 from utils.supabase_rest import PRODUCTION_PROJECT_REF
+
+OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "batch_gate"
 
 CHECKS: dict[str, str] = {
     # A. Tables created in public (backups, staging, scratch).
@@ -27,20 +30,26 @@ select id, offer_raw_text from promo_offer_master
  where is_active and offer_raw_text ~* '\(est\.?\)'
 """,
     # C. Blanket offers linked to a specific service (the AGENTS.md pattern plus
-    #    "products & services", "all purchases", "all <word> services").
+    #    "products & services", "all purchases", "all <word> services"). A category-scoped
+    #    discount ("all IV services") linked to a service of that category is correct.
     "C_blanket_service_link": r"""
 select m.id, m.offer_raw_text, i.item_name, i.offer_item_id
   from promo_offer_master m join promo_offer_items i on i.offer_id = m.id
- where m.is_active and i.service_id is not null
+  join clinic_services s on s.service_id = i.service_id
+ where m.is_active
    and m.offer_raw_text ~* '(""" + AGENTS_BLANKET_PATTERN + r"""|products (and|&) services|all purchases|all [a-z-]+ services)'
+   and not (m.offer_raw_text !~* '(""" + AGENTS_BLANKET_PATTERN + r"""|products (and|&) services|all purchases)'
+            and s.service_name::text ~* ('\m' || substring(lower(m.offer_raw_text) from 'all ([a-z-]+) services') || '\M'))
 """,
-    # D. Blanket offers stored more than once at one clinic.
+    # D. Blanket offers stored more than once under one source (the same benefit in
+    #    different membership plans or promotions is one offer per source).
     "D_blanket_duplicates": r"""
-select business_id, offer_raw_text, count(*) as n, string_agg(id::text, ',' order by id) as ids
+select business_id, promotion_id, membership_plan_id, offer_raw_text, count(*) as n,
+       string_agg(id::text, ',' order by id) as ids
   from promo_offer_master
  where is_active
    and offer_raw_text ~* '(all services|all products|products (and|&) services|all purchases|all [a-z-]+ services)'
- group by business_id, offer_raw_text having count(*) > 1
+ group by business_id, promotion_id, membership_plan_id, offer_raw_text having count(*) > 1
 """,
     # E. Stored discount_price with no literal OR arithmetic support in offer text.
     # Computed totals (regular − amount, regular × (1 − percent/100)) pass; literal
@@ -97,7 +106,8 @@ select m.id, m.price_model, m.offer_raw_text
    and m.offer_raw_text ~* '\mfrom\s+\$'
 """,
     # G. A fixed pack size stated in a total-priced offer that no item delivers.
-    #    Thresholds ("minimum 40 units", "50+ units", "up to 4") are stripped first.
+    #    Thresholds ("minimum 40 units", "50+ units", "up to 4") are stripped first; buy-N-get
+    #    offers share one discount over several units and have no single delivered quantity.
     "G_units_in_text_not_delivered": r"""
 with q(re) as (
   select '(minimum|min\.?|at least|up to|maximum|max\.?)\s+(of\s+)?\d+'
@@ -108,6 +118,7 @@ with q(re) as (
          m.offer_raw_text || ' ; ' || coalesce(array_to_string(m.conditions, ' ; '), '') blob
     from promo_offer_master m
    where m.is_active and coalesce(m.price_model, 'total') = 'total'
+     and m.offer_raw_text !~* '\mbuy\s+\d+\M.*\m(get|receive)\M'
 )
 select x.id, i.offer_item_id, i.delivered_units, x.offer_raw_text
   from x cross join q join promo_offer_items i on i.offer_id = x.id
@@ -163,31 +174,25 @@ def _row_key(row: dict[str, Any]) -> str:
     return json.dumps(row, sort_keys=True, default=str)
 
 
-def linked_query(sql: str, *, root: Path) -> list[dict[str, Any]]:
-    linked = json.loads((root / "supabase/.temp/linked-project.json").read_text())
-    if linked.get("ref") != PRODUCTION_PROJECT_REF:
-        raise RuntimeError("database_project_mismatch")
-    # The Management API login occasionally drops the connection; retry the call, never the verdict.
-    for _attempt in range(3):
-        result = subprocess.run(["supabase", "db", "query", "--linked", "-o", "json", sql],
-                                cwd=root, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            break
-    if result.returncode != 0:
-        raise RuntimeError("linked_query_failed:" + result.stderr.strip()[-300:])
-    start = result.stdout.index("{")
-    payload, _ = json.JSONDecoder().raw_decode(result.stdout[start:])
-    return payload["rows"]
+def snapshot_tables() -> dict[str, tuple[str, str, str]]:
+    """每项检查作为快照中的一张"表"：检查查询整体作为子查询。"""
+    return {name: (f"({sql.strip()}) gate_rows", "*", "true") for name, sql in CHECKS.items()}
 
 
-def run_batch_gate(root: Path, retained: dict[str, dict[str, str]] | None = None,
-                   query: Callable[[str], list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+def run_batch_gate(retained: dict[str, dict[str, str]] | None = None, *, run_dir: Path | None = None,
+                   read: Callable[[dict[str, tuple[str, str, str]]], dict[str, list[dict[str, Any]]]] | None = None
+                   ) -> dict[str, Any]:
     """Run every check; rows are failures unless retained with a documented reason."""
     retained = retained or {}
-    query = query or (lambda sql: linked_query(sql, root=root))
+    tables = snapshot_tables()
+    if read is None:
+        directory = run_dir or pipeline_db.run_dir(OUTPUT_DIR)
+        snapshot = pipeline_db.load_snapshot(pipeline_db.fresh_snapshot(directory, tables), tables, typed=False)
+    else:
+        snapshot = read(tables)
     results = {}
-    for name, sql in CHECKS.items():
-        rows = query(sql)
+    for name in CHECKS:
+        rows = snapshot[name]
         documented = retained.get(name, {})
         kept = [{**row, "retained_reason": documented[_row_key(row)]} for row in rows
                 if str(documented.get(_row_key(row)) or "").strip()]

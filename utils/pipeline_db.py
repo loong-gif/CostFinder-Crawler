@@ -67,8 +67,13 @@ def read_snapshot(read_sql: Path) -> Path:
     linked = (PROJECT_ROOT / "supabase" / ".temp" / "project-ref").read_text().strip()
     if linked != PRODUCTION_PROJECT_REF:
         raise RuntimeError(f"database_project_mismatch: supabase CLI is linked to {linked}")
-    done = subprocess.run(["supabase", "db", "query", "--linked", "-o", "json", "-f", str(read_sql)],
-                          cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
+    command = ["supabase", "db", "query", "--linked", "-o", "json", "-f", str(read_sql)]
+    # Management API 登录偶尔断开连接：重新执行同一只读查询，三次都失败即报错
+    for _attempt in range(3):
+        done = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True)
+        if done.returncode == 0:
+            break
+    done.check_returncode()
     rows = json.loads(done.stdout)["rows"]
     if len(rows) != 1 or set(rows[0]) != {"snapshot"}:
         raise RuntimeError(f"unexpected snapshot result shape: {len(rows)} rows")
