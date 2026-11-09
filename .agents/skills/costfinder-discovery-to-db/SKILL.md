@@ -51,7 +51,7 @@ description: 当需要把新商家、新发现的促销页、会员页从发现�
 每批写入后运行 `batch-gate` 与 AGENTS.md 的 blanket-offer SQL，结果必须为零行，或把保留行记录在批次结果里。监控队列由 `clinic_promotions` / `clinic_memberships` 的 source_url 动态生成，写入数据库的 add 页面下次监控运行时自动入队，不需要维护 URL 清单。
 
 ## 维护命令
-- `recrawl-sources`：已有促销/会员重新抓取。`read-sql --promotion-id N --plan-id N` → `read-snapshot` → `decisions --snapshot` 写 decisions.json，再 `COSTFINDER_RAW_DIR=<目录>/raw crawl --decisions <目录>/decisions.json`，之后按第 4、5 步执行。`extract-offers` 对原文互相包含的旧 offer 唯一匹配时沿用其 ID，同一候选包含的多条旧 offer 保留最长者、其余停用。
+- `recrawl-sources`：已有促销/会员重新抓取。`recrawl-sources --promotion-id N --plan-id N --business-id N` 自动读取快照并写运行目录的 decisions.json（`--business-id` 选该商家全部 active 促销与全部会员），再 `COSTFINDER_RAW_DIR=<目录>/raw crawl --decisions <目录>/decisions.json`，之后按第 4、5 步执行。`extract-offers` 对原文互相包含的旧 offer 唯一匹配时沿用其 ID，同一候选包含的多条旧 offer 保留最长者、其余停用。
 - `read-snapshot <read.sql>`：用 Supabase CLI 只读执行 read.sql，写同目录 snapshot.json。
 - `merge-promotions`：按两步合并重复促销与 hub 子页面。
 - `enforce-promotion-rules`：按两步停用违反写入规则的现有启用促销；`plan --deactivate <promotion_id> <原因>`（可重复）只停用人工确认的促销，下游 offer 由触发器一并停用。
