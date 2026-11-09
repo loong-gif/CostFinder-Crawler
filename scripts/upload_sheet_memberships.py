@@ -1,16 +1,18 @@
-"""把上传表 clinic_memberships 工作表中 QA 通过的会员行写入数据库：
+"""把上传表 clinic_memberships 工作表中的会员行经渲染核验后写入数据库：
 
-  plan --xlsx F [--snapshot F]     读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），
-                                   筛选可写入的行，写 plan.json（entries 与 rejected 及原因）
-  apply-sql --plan F [--batch-size N]   渲染 apply_01.sql ...（每批一个 DO 块），经 MCP 执行
+  plan --xlsx F [--snapshot F]     读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），筛选可写入的行，
+                                   自动完成渲染核验（分片、ego-lite 渲染、可见性清单），写 plan.json（entries 与 rejected 及原因）
+  apply-sql --plan F [--batch-size N]   核对同目录可见性清单后渲染 apply_01.sql ...（每批一个 DO 块），经 MCP 执行
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 from utils import pipeline_db
+from utils.extract_pages_run import plan_with_visibility
 from utils.membership_sheet_upload import (
     SNAPSHOT_TABLES, build_plan, read_sheet_business_names, read_sheet_rows, render_apply)
 from utils.pipeline_db import load_snapshot, write_text
@@ -31,13 +33,17 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.step == "plan":
-        snapshot = args.snapshot or pipeline_db.fresh_snapshot(pipeline_db.run_dir(OUTPUT_DIR), SNAPSHOT_TABLES)
-        plan = build_plan(read_sheet_rows(args.xlsx), load_snapshot(snapshot, SNAPSHOT_TABLES),
-                          read_sheet_business_names(args.xlsx))
-        out = write_text(snapshot.parent / "plan.json", json.dumps(plan, ensure_ascii=False, indent=2))
+        snapshot_path = args.snapshot or pipeline_db.fresh_snapshot(pipeline_db.run_dir(OUTPUT_DIR), SNAPSHOT_TABLES)
+        snapshot = load_snapshot(snapshot_path, SNAPSHOT_TABLES)
+        rows, names = read_sheet_rows(args.xlsx), read_sheet_business_names(args.xlsx)
+        plan, _ = plan_with_visibility(snapshot_path.parent, lambda manifest: build_plan(rows, snapshot, names, manifest))
+        out = write_text(snapshot_path.parent / "plan.json", json.dumps(plan, ensure_ascii=False, indent=2))
         print(f"{out}\nentries={len(plan['entries'])} rejected={len(plan['rejected'])}")
         return 0
     plan = json.loads(args.plan.read_text())
+    manifest = json.loads((args.plan.parent / "visibility_manifest.json").read_text())
+    if hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest() != plan["visibility_manifest_sha256"]:
+        raise RuntimeError("visibility_manifest_changed: the manifest differs from the one used for planning")
     entries = plan["entries"]
     for start in range(0, len(entries), args.batch_size):
         batch = {**plan, "entries": entries[start:start + args.batch_size]}

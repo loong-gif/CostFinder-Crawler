@@ -69,7 +69,7 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "rename-items": ("scripts.rename_items", "rewrite problematic item_name values of active offers",
                      "apply-sql via MCP"),
     "upload-sheet-memberships": ("scripts.upload_sheet_memberships",
-                                 "write QA-passed membership rows of the upload sheet into clinic_memberships",
+                                 "write render-verified membership rows of the upload sheet into clinic_memberships",
                                  "apply-sql via MCP"),
     "delete-offer-shells": ("scripts.delete_offer_shells",
                             "delete inactive offers without items or user references (gate I)", "apply-sql via MCP"),

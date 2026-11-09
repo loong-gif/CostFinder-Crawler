@@ -1,11 +1,13 @@
-"""把上传表 clinic_memberships 工作表中 QA 通过、权益完整的会员行写入数据库。
+"""把上传表 clinic_memberships 工作表中经渲染核验的会员行写入数据库。
 
-筛选条件：qa_status 为 PASS；会员名称非空；价格为正数；权益是非空字符串组成的列表且不含链接残留；
-同一（商家、页面身份键、会员名称）只保留一行，且数据库中尚无该行。
+筛选条件：会员名称非空；价格为正数；权益是非空字符串组成的列表且不含链接残留；
+同一（商家、页面身份键、会员名称）只保留一行，且数据库中尚无该行；
+方案名称与"名称 $费用"在 ego-lite 渲染页面上可见（权益全部可见才写入，否则为 NULL）。
 写入按唯一索引 uq_clinic_memberships_business_source_name 的键，已存在的行不覆盖。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -13,6 +15,8 @@ from typing import Any, Mapping
 
 import openpyxl
 
+from utils.page_extraction_common import _visibility_for, index_manifest
+from utils.page_extraction_memberships import _claims_visible, _name_and_fee_visible
 from utils.pipeline_db import do_block, literal, plan_digest
 from utils.source_url import source_url_key
 
@@ -62,8 +66,6 @@ def _number(value: Any) -> float | None:
 
 def screen_row(row: Mapping[str, Any], businesses: set[int]) -> tuple[dict[str, Any] | None, str]:
     """返回 (可写入的行, "")；不可写入时返回 (None, 原因)。"""
-    if row.get("qa_status") != "PASS":
-        return None, f"qa_status_{row.get('qa_status')}"
     if row.get("business_id") is None or int(row["business_id"]) not in businesses:
         return None, "business_missing_or_name_differs_in_database"
     name = str(row.get("membership_name") or "").strip()
@@ -91,14 +93,24 @@ def screen_row(row: Mapping[str, Any], businesses: set[int]) -> tuple[dict[str, 
     source_url = str(row.get("source_url") or "").strip()
     if not source_url:
         return None, "source_url_missing"
-    return {"sheet_row": row["sheet_row"], "business_id": int(row["business_id"]), "source_url": source_url,
+    return {"kind": "membership", "action": "insert",
+            "sheet_row": row["sheet_row"], "business_id": int(row["business_id"]), "source_url": source_url,
             "membership_name": name, "membership_price": price, "billing_period": period,
             "minimum_commitment_months": months, "benefits": [b.strip() for b in benefits]}, ""
 
 
+def _render_checked(entry: dict[str, Any], manifest: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """渲染核验：方案名称与"名称 $费用"在页面上可见才写入；权益全部可见才写入，否则为 NULL（未知）。"""
+    page = _visibility_for(index_manifest(manifest), entry["source_url"]) or {}
+    if not _name_and_fee_visible(page, entry["membership_name"], entry["membership_price"]):
+        return None, "membership_name_or_fee_not_visible"
+    return {**entry, "benefits": entry["benefits"] if _claims_visible(page, entry["benefits"]) else None}, ""
+
+
 def build_plan(rows: list[Mapping[str, Any]], snapshot: Mapping[str, list[Mapping[str, Any]]],
-               sheet_business_names: Mapping[int, str]) -> dict[str, Any]:
-    """商家 ID 必须在库里，且库里的商家名称与上传表 master_business_info 中的名称一致（ID 可能被后来登记的商家占用）。"""
+               sheet_business_names: Mapping[int, str], manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """商家 ID 必须在库里，且库里的商家名称与上传表 master_business_info 中的名称一致（ID 可能被后来登记的商家占用）。
+    manifest 为渲染可见性清单；没有清单时的计划只用于生成可见性分片，不能渲染为 apply.sql。"""
     database_names = {int(r["business_id"]): r["name"] for r in snapshot["businesses"]}
     businesses = {b for b, name in database_names.items()
                   if b in sheet_business_names and business_key(name) == business_key(sheet_business_names[b])}
@@ -108,6 +120,8 @@ def build_plan(rows: list[Mapping[str, Any]], snapshot: Mapping[str, list[Mappin
     seen: set[tuple[int, str, str]] = set()
     for row in rows:
         entry, reason = screen_row(row, businesses)
+        if entry is not None and manifest is not None:
+            entry, reason = _render_checked(entry, manifest)
         if entry is None:
             rejected.append({"sheet_row": row["sheet_row"], "membership_name": row.get("membership_name"),
                              "source_url": row.get("source_url"), "reason": reason})
@@ -121,19 +135,23 @@ def build_plan(rows: list[Mapping[str, Any]], snapshot: Mapping[str, list[Mappin
         else:
             seen.add(key)
             entries.append(entry)
-    return {"entries": entries, "rejected": rejected}
+    sha = None if manifest is None else hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    return {"visibility_manifest_sha256": sha, "entries": entries, "rejected": rejected}
 
 
 def render_apply(plan: Mapping[str, Any]) -> str:
+    if plan["visibility_manifest_sha256"] is None:
+        raise RuntimeError("plan_without_visibility_manifest: the plan was not render-verified")
     entries = plan["entries"]
     statements = []
     for e in entries:
+        benefits = None if e["benefits"] is None else json.dumps(e["benefits"], ensure_ascii=False)
         statements.append(
             "insert into public.clinic_memberships (business_id, source_url, membership_name, membership_price, "
             "billing_period, minimum_commitment_months, benefits, created_at, updated_at) values ("
             f"{literal(e['business_id'])}, {literal(e['source_url'])}, {literal(e['membership_name'])}, "
             f"{literal(e['membership_price'])}, {literal(e['billing_period'])}, "
-            f"{literal(e['minimum_commitment_months'])}, {literal(json.dumps(e['benefits'], ensure_ascii=False))}::jsonb, "
+            f"{literal(e['minimum_commitment_months'])}, {literal(benefits)}::jsonb, "
             "now(), now()) on conflict (business_id, public.fn_source_url_key(source_url), "
             "lower(btrim(membership_name))) do nothing;")
         statements.append("get diagnostics v_rows = row_count; v_inserted := v_inserted + v_rows;")
