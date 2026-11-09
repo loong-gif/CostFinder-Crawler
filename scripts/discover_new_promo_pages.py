@@ -34,6 +34,7 @@ from utils.discovery_batch import DISCOVERY_DIR, discovered_path  # noqa: E402
 from utils.discovery_retry import retry_failed_pages, retry_one  # noqa: E402
 from utils.discovery_search import CloudSearch, SearchHealth  # noqa: E402
 from utils.discovery_snapshot import business_contexts, business_rows, known_urls, read_discovery_snapshot  # noqa: E402
+from utils.firecrawl_client import firecrawl_tunnel  # noqa: E402
 from utils.page_discovery_run import (  # noqa: E402
     Firecrawl,
     discover_business,
@@ -143,7 +144,7 @@ def main() -> int:
     known = known_urls(snapshot)
 
     started = time.monotonic()
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+    with firecrawl_tunnel(api_url), ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         def run_round(group: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return discover_per_site(group, lambda b: discover_business(fc, b, known, args), pool.map)
 
@@ -151,8 +152,8 @@ def main() -> int:
             args.search_health = SearchHealth()
 
         fresh = discover_until_stable(rows, run_round, reset=reset_search)
-    results = merge_results(earlier, fresh)
-    retried = retry_failed_pages(results, lambda url, record: retry_one(fc, url, record), workers=args.workers)
+        results = merge_results(earlier, fresh)
+        retried = retry_failed_pages(results, lambda url, record: retry_one(fc, url, record), workers=args.workers)
 
     summary = summarize(results, args, retried, time.monotonic() - started)
     out.parent.mkdir(parents=True, exist_ok=True)
