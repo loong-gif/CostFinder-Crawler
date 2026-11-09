@@ -1,11 +1,14 @@
 """监控主机上的只读数据库快照：经 Supabase REST 读取（监控主机没有 Supabase CLI，read-snapshot 只在本机运行）。"""
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 from utils.monitor_price_writer_plan import SERVICE_COLUMNS
+from utils.pipeline_db import write_text
 from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
 
 PROJECT_ID = "kdlpkjzcnbkjcvwsvlwn"
@@ -33,15 +36,18 @@ def all_rows(client: Any, table: str, columns: str = "*") -> list[dict]:
         offset += len(rows)
 
 
-def rest_tables(tables: Mapping[str, tuple[str, str, str]]) -> dict[str, list[dict]]:
-    """与 pipeline_db.read_tables 相同的表定义，经 REST 整表读取；REST 无法表达的 where 条件直接终止。"""
+def rest_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
+    """监控主机上代替 pipeline_db.fresh_snapshot：同样的表定义经 REST 整表读取，按 read_snapshot 的格式
+    写 directory/snapshot.json 并返回其路径。where 是 SQL 条件，REST 无法执行，Python 也不解析 SQL，
+    所以只接受整表（where 为 true），其他条件直接终止。"""
     client = rest_client()
-    result = {}
+    payload = {}
     for name, (source, columns, where) in tables.items():
         if where != "true":
             raise ValueError(f"rest_read_needs_whole_table: {name} where {where}")
-        result[name] = all_rows(client, source, columns.replace(" ", ""))
-    return result
+        rows = all_rows(client, source, columns.replace(" ", ""))
+        payload[name] = {"count": len(rows), "rows": rows}
+    return write_text(Path(directory) / "snapshot.json", json.dumps(payload, ensure_ascii=False))
 
 
 def database_snapshot() -> dict:

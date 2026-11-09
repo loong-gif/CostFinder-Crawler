@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from utils.data_quality_audit import TABLES, _protected
+from utils.data_quality_evidence import TABLES, _protected
 from utils.monitor_price_writer_plan import BLANKET_CHECK_SQL
 from utils.pending_sql import write_pending
 from utils.pipeline_db import do_block, literal, plan_digest
@@ -15,20 +15,8 @@ from utils.sql_checks import (
 GROUP_TABLES = {**TABLES, "terms": ("promo_offer_terms", "offer_id")}
 
 
-def fetch_all(client, table, pk, *, filters=None):
-    rows, offset = [], 0
-    while True:
-        page = client.fetch_rows(table, "*", filters=filters, order=f"{pk}.asc", limit=500, offset=offset)
-        rows.extend(page)
-        if len(page) < 500:
-            return rows
-        offset += len(page)
-
-
-def read_snapshot(client):
-    result = {group: fetch_all(client, table, pk) for group, (table, pk) in TABLES.items()}
-    result["terms"] = fetch_all(client, "promo_offer_terms", "offer_id")
-    return result
+# 数据质量审计的只读快照：各表全部行（pipeline_db.fresh_snapshot 执行）
+SNAPSHOT_TABLES = {group: (table, "*", "true") for group, (table, _) in GROUP_TABLES.items()}
 
 
 def scope(snapshot, business_id):

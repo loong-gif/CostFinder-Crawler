@@ -148,12 +148,15 @@ def plan_offers(candidates: list[dict[str, Any]], existing_offers: list[dict[str
                 olds = [head_match] if head_match is not None else []
         olds = olds or []
         if len(olds) > 1:
-            rejected.append({"offer_raw_text": candidate["master"]["offer_raw_text"][:300],
-                             "reason": "ambiguous_offer_identity", "blocking": True,
-                             "offer_ids": sorted(o["id"] for o in olds)})
+            # 同一来源下原文相同的重复 offer：保留最早的 active 行，没有 active 行时重新激活最近的一行，其余 active 行停用
+            active = sorted((o for o in olds if o["is_active"]), key=lambda o: o["id"])
+            survivor = active[0] if active else max(olds, key=lambda o: o["id"])
             matched.update(o["id"] for o in olds)
-            continue
-        items_actions = None
+            for duplicate in active:
+                if duplicate is not survivor:
+                    actions.append({"action": "deactivate", "offer_id": duplicate["id"],
+                                    "offer_raw_text": duplicate["offer_raw_text"], "reason": "duplicate_of_matched_offer"})
+            olds = [survivor]
         if not olds:
             actions.append({"action": "insert", "fingerprint": candidate["fingerprint"], "master": candidate["master"],
                             "blanket": candidate["blanket"], "is_active": True,
@@ -183,9 +186,9 @@ def plan_offers(candidates: list[dict[str, Any]], existing_offers: list[dict[str
             actions.append({"action": "deactivate", "offer_id": old["id"], "offer_raw_text": old["offer_raw_text"]})
             continue
         if still_in_evidence(old["offer_raw_text"], evidence):
-            # 内容仍包含原文，本次抽取不完整：保留原 offer，并阻止标记为已抽取
+            # 内容仍包含原文，本次抽取不完整：保留原 offer
             rejected.append({"offer_raw_text": str(old["offer_raw_text"])[:300], "reason": "unmatched_offer_still_in_content",
-                             "blocking": True, "offer_ids": [old["id"]]})
+                             "offer_ids": [old["id"]]})
             continue
         actions.append({"action": "deactivate", "offer_id": old["id"], "offer_raw_text": old["offer_raw_text"]})
     return actions, rejected
@@ -205,19 +208,10 @@ def plan_source(table: str, row: dict[str, Any], payload: dict[str, Any] | None,
               "existing_state": {str(o["id"]): _iso_or_none(o["updated_at"]) for o in existing_offers},
               "existing_item_ids": {str(o["id"]): sorted(i["offer_item_id"] for i in existing_items.get(o["id"], []))
                                     for o in existing_offers},
-              "rejected": [], "offers": [], "status": "ready", "blocked_reason": None}
-    active_existing = [o for o in existing_offers if o["is_active"]]
-    if payload is None:
-        # 内容为空：没有已有 active offer 时无需抽取；有则交人工确认，不自动停用
-        if active_existing:
-            result.update(status="blocked", blocked_reason="empty_content_with_active_offers")
-        return result
-    candidates, rejected = candidates_from_payload(payload, table, row, evidence)
-    if not candidates and active_existing and (not payload["offers"] or any(r["blocking"] for r in rejected)):
-        result.update(status="blocked", blocked_reason="empty_extraction_with_active_offers", rejected=rejected)
-        return result
-    actions, ambiguous = plan_offers(candidates, existing_offers, existing_items, valid_service_ids, evidence)
-    rejected += ambiguous
+              "rejected": [], "offers": []}
+    # 内容为空（payload 为 None）或抽取为空时同样按 plan_offers 的规则处理：原文仍在内容中的旧 offer 保留，其余停用
+    candidates, rejected = candidates_from_payload(payload, table, row, evidence) if payload is not None else ([], [])
+    actions, kept = plan_offers(candidates, existing_offers, existing_items, valid_service_ids, evidence)
     result["offers"] = actions
-    result["rejected"] = rejected
+    result["rejected"] = rejected + kept
     return result

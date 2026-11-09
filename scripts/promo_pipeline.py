@@ -12,9 +12,10 @@ Stages, in order:
   6 link-services                                  offer items -> clinic_services + service_id
 Maintenance: merge-promotions, deactivate-expired, monitor, quality, batch-gate.
 
-Every command runs the script's own ``main()`` with the remaining arguments. No command connects to the
-database: reads come from snapshot files exported through the Supabase MCP (``read-sql``), writes are rendered
-to a single-transaction ``apply.sql`` that is executed through the Supabase MCP (``apply-sql``).
+Every command runs the script's own ``main()`` with the remaining arguments. No command writes the
+database: ``plan`` reads a read-only snapshot automatically (``read.sql`` run by the Supabase CLI, see
+``utils.pipeline_db.fresh_snapshot``), writes are rendered to a single-transaction ``apply.sql`` that is executed
+through the Supabase MCP (``apply-sql``).
 """
 from __future__ import annotations
 
@@ -59,14 +60,12 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
                          "apply-sql via MCP"),
     "enforce-promotion-rules": ("scripts.enforce_promotion_rules",
                                 "deactivate existing active promotions that break the write rules", "apply-sql via MCP"),
-    "clear-membership-benefits": ("scripts.clear_membership_benefits",
-                                  "set unverified membership benefits to NULL (unknown)", "apply-sql via MCP"),
     "split-offers": ("scripts.split_offers", "split an offer that lists several services under one price into "
                      "independent offers", "apply-sql via MCP"),
     "rename-items": ("scripts.rename_items", "rewrite problematic item_name values of active offers",
                      "apply-sql via MCP"),
     "upload-sheet-memberships": ("scripts.upload_sheet_memberships",
-                                 "write QA-passed membership rows of the upload sheet into clinic_memberships",
+                                 "write render-verified membership rows of the upload sheet into clinic_memberships",
                                  "apply-sql via MCP"),
     "delete-offer-shells": ("scripts.delete_offer_shells",
                             "delete inactive offers without items or user references (gate I)", "apply-sql via MCP"),
@@ -86,9 +85,8 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "read-snapshot": ("scripts.read_snapshot",
                       "run a command's read.sql with the Supabase CLI and save snapshot.json", "no (read only)"),
     "pending-sql": ("scripts.pending_sql",
-                    "--pull pending SQL files from the monitor host; --mark-applied FILE after MCP execution "
-                    "(locally and on the monitor host)",
-                    "no (moves files)"),
+                    "pull and list pending SQL files from the monitor host; --mark-applied FILE registers locally "
+                    "and on the monitor host after MCP execution", "no (moves files)"),
 }
 
 

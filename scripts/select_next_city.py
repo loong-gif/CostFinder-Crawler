@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.city_selection import evaluate_pilot, pick_next_city, pilot_qualifying, score_city  # noqa: E402
 from utils.crawl_schedule_state import city_key, load_state, save_state  # noqa: E402
-from utils.pipeline_db import load_snapshot, read_tables  # noqa: E402
+from utils.pipeline_db import fresh_snapshot, load_snapshot  # noqa: E402
 
 DEMAND_TABLES = {"profiles": ("profiles", "id, location_city", "location_city is not null")}
 OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "select_city"
@@ -30,8 +30,8 @@ OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "select_city"
 
 def load_demand(snapshot: Path | None, now: datetime) -> dict[str, int]:
     """Signups per lower-cased city."""
-    rows = (load_snapshot(snapshot, DEMAND_TABLES) if snapshot
-            else read_tables(OUTPUT_DIR / now.strftime("%Y%m%dT%H%M%SZ"), DEMAND_TABLES))["profiles"]
+    path = snapshot or fresh_snapshot(OUTPUT_DIR / now.strftime("%Y%m%dT%H%M%SZ"), DEMAND_TABLES)
+    rows = load_snapshot(path, DEMAND_TABLES)["profiles"]
     return dict(Counter(str(r["location_city"]).strip().lower() for r in rows if str(r["location_city"]).strip()))
 
 

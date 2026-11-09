@@ -1,6 +1,7 @@
-"""列出 pending_sql/ 中待执行的 SQL 文件及其头部摘要。
+"""列出待执行的 SQL 文件及其头部摘要；--mark-applied 登记已执行的文件。
 
---pull 经 ssh 把监控主机 state/pending_sql/ 里待执行的文件拉回本地；会话经 Supabase MCP 执行后，
+监控主机上的无人值守任务只生成 SQL 文件，不写库。列出前经 ssh 自动把监控主机 state/pending_sql/ 里待执行的文件
+拉回第一个目录（自托管 Firecrawl 故障期间生成的文件不列出，见 utils.pending_sql.FIRECRAWL_OUTAGES）；会话经 Supabase MCP 执行后，
 --mark-applied 把文件移入 applied/，拉回的文件同时在监控主机上移入 applied/，下一次 monitor 运行时事件即完成。
 """
 from __future__ import annotations
@@ -19,9 +20,8 @@ DEFAULT_DIRS = (PULL_DIR, PROJECT_ROOT / "output" / "data_quality_state" / "pend
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", type=Path, action="append",
-                        help="pending_sql directory (repeatable); the first one receives --pull; "
-                             "default: the local monitor and data-quality state directories")
-    parser.add_argument("--pull", action="store_true", help="copy pending SQL files from the monitor host first")
+                        help="pending_sql directory (repeatable); the first one receives the files pulled from the "
+                             "monitor host; default: the local monitor and data-quality state directories")
     parser.add_argument("--mark-applied", type=Path, metavar="FILE",
                         help="move an executed SQL file into applied/ (on the monitor host too when it was pulled from there)")
     parser.add_argument("--host", default=HOST)
@@ -36,9 +36,8 @@ def main() -> int:
             print(mark_applied_remote(str(path.relative_to(pulled_dir)), base=args.remote_base, host=args.host))
         print(mark_applied(path))
         return 0
-    if args.pull:
-        for path in pull_pending(directories[0], base=args.remote_base, host=args.host):
-            print(f"pulled {path}")
+    for path in pull_pending(directories[0], base=args.remote_base, host=args.host):
+        print(f"pulled {path}")
     for directory in directories:
         entries = list_pending(directory) if directory.is_dir() else []
         print(f"{directory}: {len(entries)} pending")

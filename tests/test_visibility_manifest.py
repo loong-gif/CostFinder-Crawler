@@ -50,6 +50,13 @@ def test_manifest_marks_visible_lines_and_unrendered_pages():
                                                   "claimResults": []}
 
 
+def test_render_answered_with_404_marks_the_page_gone():
+    render = {"results": [{"url": "https://a.com/specials", "checked_at": "t", "http_status": 404,
+                           "result": {"texts": ["404 Not Found"]}}]}
+    page = build_manifest(build_shard(PLAN, "run"), render)["https://a.com/specials"]
+    assert (page["status"], page["reason"]) == ("page_not_accessible", "page_gone")
+
+
 def test_blank_render_is_page_unavailable_not_invisible_claims():
     shard = build_shard(PLAN, "run")
     render = {"results": [{"url": "https://a.com/specials", "checked_at": "t",
@@ -159,3 +166,36 @@ def test_one_command_shards_renders_and_writes_the_manifest_next_to_the_plan(tmp
     manifest = json.loads(manifest_path.read_text())
     assert [c["status"] for c in manifest["https://a.com/specials"]["claimResults"]] == ["visible_match", "not_visible"]
     assert manifest["https://b.com/specials"]["complete"] is True
+
+
+def test_plan_with_visibility_plans_twice_around_one_manifest_run(tmp_path):
+    import json
+
+    from utils.visibility_manifest import plan_with_visibility
+
+    seen = []
+
+    def plan_once(manifest):
+        seen.append(manifest)
+        return {**PLAN, "visibility_manifest_sha256": None if manifest is None else "x"}
+
+    def ego(shard_path, out_path, timeout_ms):
+        shard = json.loads(shard_path.read_text())
+        out_path.write_text(json.dumps({"results": [
+            {"url": item["url"], "checked_at": "t",
+             "result": {"images": [], "texts": [*PAGE_CHROME, "Botox $10/unit this month", "Lip filler $650"]}}
+            for item in shard["items"]]}))
+
+    plan, manifest = plan_with_visibility(tmp_path, plan_once, shards=1, run=ego)
+    assert seen == [None, manifest] and plan["visibility_manifest_sha256"] == "x"
+    assert json.loads((tmp_path / "visibility_manifest.json").read_text()) == manifest
+    assert manifest["https://b.com/specials"]["complete"] is True
+
+
+def test_page_answering_404_is_gone_even_when_its_render_is_blank():
+    shard = build_shard(PLAN, "run")
+    render = {"results": [{"url": "https://a.com/specials", "checked_at": "t", "http_status": 404,
+                           "result": {"images": [], "texts": ["Not Found"]}}]}
+    manifest = build_manifest(shard, render)
+    assert manifest["https://a.com/specials"]["reason"] == "page_gone"
+    assert manifest["https://b.com/specials"]["reason"] == "not_rendered"

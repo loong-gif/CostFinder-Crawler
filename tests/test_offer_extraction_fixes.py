@@ -132,7 +132,7 @@ def insert_action(price_model, service_id):
 
 
 def render_source(action):
-    source = {"table": "clinic_promotions", "id": 7, "status": "ready", "source_updated_at": "2026-01-01T00:00:00+00:00",
+    source = {"table": "clinic_promotions", "id": 7, "source_updated_at": "2026-01-01T00:00:00+00:00",
               "existing_state": {}, "existing_item_ids": {}, "offers": [action]}
     return render_apply({"sources": [source]})
 
@@ -258,12 +258,11 @@ def test_quantity_plus_is_not_a_bundle_and_regular_volume_pricing_is_not_a_promo
     candidates, rejected = candidates_from_payload({"offers": [llm, llm]}, PROMOTIONS,
                                                    {**promo, "promotion_content": [volume]}, volume)
     assert candidates == [] and {r["reason"] for r in rejected} == {"regular_price_not_promotion"}
-    assert not any(r["blocking"] for r in rejected)
     # 没有常规价格说明时是 50% 的批量折扣；LLM 重复给出同一条 offer 不阻塞
     candidates, rejected = candidates_from_payload({"offers": [llm, llm]}, PROMOTIONS,
                                                    {**promo, "promotion_content": [raw]}, raw)
     assert [c["master"]["discount_percent"] for c in candidates] == [50]
-    assert [(r["reason"], r["blocking"]) for r in rejected] == [("duplicate_in_source", False)]
+    assert [r["reason"] for r in rejected] == ["duplicate_in_source"]
 
 
 def test_raw_text_spanning_a_trailing_note_line_is_cut_after_the_priced_line():

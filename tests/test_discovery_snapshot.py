@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from utils import discovery_snapshot
+from utils import pipeline_db
 from utils.discovery_batch import snapshot_dir
 from utils.discovery_snapshot import business_contexts, business_rows, known_urls, read_discovery_snapshot
 from utils.pipeline_db import SnapshotIncomplete
@@ -31,7 +31,7 @@ def _reader(tables):
 
 
 def test_discovery_reads_the_database_through_an_automatic_read_only_snapshot(tmp_path, monkeypatch):
-    monkeypatch.setattr(discovery_snapshot, "read_snapshot", _reader(TABLES))
+    monkeypatch.setattr(pipeline_db, "read_snapshot", _reader(TABLES))
     snapshot = read_discovery_snapshot(tmp_path)
     assert (snapshot_dir(tmp_path) / "read.sql").exists()
     assert [row["business_id"] for row in business_rows(snapshot)] == [1, 2]
@@ -44,6 +44,6 @@ def test_discovery_reads_the_database_through_an_automatic_read_only_snapshot(tm
 
 def test_a_truncated_snapshot_stops_the_command(tmp_path, monkeypatch):
     broken = {name: rows for name, rows in TABLES.items() if name != "offers"}
-    monkeypatch.setattr(discovery_snapshot, "read_snapshot", _reader(broken))
+    monkeypatch.setattr(pipeline_db, "read_snapshot", _reader(broken))
     with pytest.raises(SnapshotIncomplete):
         read_discovery_snapshot(tmp_path)

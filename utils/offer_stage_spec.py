@@ -41,7 +41,7 @@ PATCH_COLUMNS = ("is_new_customer_required", "is_membership_required", "conditio
                  "is_package")
 NUMERIC_COLUMNS = {"regular_price", "discount_price", "discount_percent", "discount_amount"}
 
-# 过滤类原因：内容本身不构成可存 offer，不阻止 is_offer_extracted
+# 过滤类原因：内容本身不构成可存 offer；监控同步把这类条目过滤掉，不送人工审查
 BENIGN_REASONS = {"gift_only", "no_price_fact", "no_supported_promo_fact", "consultation", "membership_plan",
                   "skincare_product", "generic_offer_scope", "fragment_offer_text", "membership_term_offer",
                   "gift_card_offer", "non_service_target", "item_name_invalid", "multiple_services_in_offer",

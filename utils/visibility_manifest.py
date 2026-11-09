@@ -7,9 +7,10 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from utils.ego_render import ShardRunner, render_failure, render_pages, run_shard
+from utils.firecrawl_client import GONE_STATUSES
 from utils.paddle_ocr_markdown import filter_promo_image_urls, ocr_tunnel
 from utils.pipeline_db import write_text
 from utils.render_review import claim_anchors, claim_matches, claim_matches_sources, corpus_text, item_id, ocr_image
@@ -38,7 +39,8 @@ def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str, bool
                 ("membership", membership_fee_claim(name, entry["membership_price"]), True)]
             lines = [("membership", name, True)] + fee + \
                     [("membership", line, line.startswith(name)) for line in entry.get("source_claims") or []] + \
-                    [("membership", line, False) for line in entry.get("benefits") or []]
+                    [("membership", line, False) for line in entry.get("benefits") or []] + \
+                    [("membership", line, False) for line in entry.get("stored_benefits") or []]
         else:
             continue
         for page in entry.get("source_pages") or [entry["source_url"]]:
@@ -91,6 +93,15 @@ def run_manifest(plan_path: Path, *, shards: int = 4, run: ShardRunner = run_sha
     return write_text(run_dir / "visibility_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
 
 
+def plan_with_visibility(run_dir: Path, plan_once: Callable[[Mapping[str, Any] | None], dict[str, Any]], *,
+                         shards: int = 4, run: ShardRunner = run_shard) -> tuple[dict[str, Any], dict[str, Any]]:
+    """无清单计划写入 run_dir/plan_draft.json → run_manifest 渲染核验 → 带清单计划；返回 (计划, 清单)。
+    LLM 回答有缓存，第二次计划不再请求 LLM。"""
+    draft = write_text(Path(run_dir) / "plan_draft.json", json.dumps(plan_once(None), ensure_ascii=False, default=str))
+    manifest = json.loads(run_manifest(draft, shards=shards, run=run).read_text())
+    return plan_once(manifest), manifest
+
+
 def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> dict[str, Any]:
     records = {r["url"]: r for r in render_out["results"]}
 
@@ -103,6 +114,10 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
             # 只作为条款来源渲染的页面，本身没有待核验的内容
             continue
         record = records.get(item["url"])
+        if record is not None and not record.get("error") and record.get("http_status") in GONE_STATUSES:
+            # 站点对该地址返回 404/410：页面已不存在，是下架证据
+            manifest[item["url"]] = {"status": "page_not_accessible", "reason": "page_gone", "claimResults": []}
+            continue
         failure = render_failure(record)
         if failure:
             # 导航失败、空白页或拦截页说明页面没有正常渲染，声明无从判定

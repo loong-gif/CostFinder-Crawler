@@ -11,8 +11,8 @@ from decimal import Decimal
 from typing import Any, Mapping
 
 from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES, _normalized_name, live_clinic_service_payload
-from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, plan_digest, render
-from utils.promo_offer_items_db import _BLANKET_OFFER_RE, AGENTS_BLANKET_PATTERN, is_blanket_offer_text
+from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, do_block, literal, plan_digest
+from utils.promo_offer_items_db import is_blanket_offer_text
 from utils.service_price_guard import normalize_source_url
 from utils.service_recognition import (
     LLM_MULTIPLE,
@@ -34,16 +34,13 @@ def snapshot_tables(business_ids: list[int] | None = None) -> dict[str, tuple[st
                    "is_package, discount_price", where),
         "services": ("clinic_services", "service_id, business_id, service_name::text as service_name, unit_type, "
                      "service_area", where),
-        "promotions": ("clinic_promotions", "promotion_id, source_url, is_offer_extracted", where),
-        "memberships": ("clinic_memberships", "plan_id, source_url, is_offer_extracted", where),
+        "promotions": ("clinic_promotions", "promotion_id, source_url", where),
+        "memberships": ("clinic_memberships", "plan_id, source_url", where),
         "enums": SERVICE_NAME_ENUM_SNAPSHOT,
     }
 
 
 SNAPSHOT_TABLES = snapshot_tables()
-
-# is_blanket_offer_text 的 SQL 等价形式：AGENTS.md 的正则原文，加上 promo_offer_items_db 中的其余 blanket 词（\b 对应 \y）
-BLANKET_SQL_PATTERN = f"({AGENTS_BLANKET_PATTERN})|" + _BLANKET_OFFER_RE.pattern.replace(r"\b", r"\y")
 
 # AGENTS.md 规定的批次检查原文；apply 时追加条件，只检查本批关联的 item（存量的有意保留行由 batch-gate 登记）
 BLANKET_CHECK_SQL = """
@@ -132,7 +129,6 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
         offer_id: {("id", i["service_id"]) for i in offer_items if i["service_id"] is not None}
         for offer_id, offer_items in items_by_offer.items()}
     plan_items = []
-    linked_item_ids = set()
     for item in pending:
         decision = decisions[item["offer_item_id"]]
         offer = offer_by_id[item["offer_id"]]
@@ -179,31 +175,12 @@ def build_plan_from_rows(*, items: list[dict[str, Any]], offers: list[dict[str, 
             continue
         taken[item["offer_id"]].add(token)
         entry.update(action_fields)
-        linked_item_ids.add(item["offer_item_id"])
-
-    def complete(owner_offers: list[dict[str, Any]]) -> bool:
-        relevant = [i for o in owner_offers if not is_blanket_offer_text(o["offer_raw_text"])
-                    for i in items_by_offer[o["id"]]]
-        return bool(relevant) and all(i["service_id"] is not None or i["offer_item_id"] in linked_item_ids
-                                      for i in relevant)
-
-    promotion_offers: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    membership_offers: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for offer in offers:
-        if offer.get("promotion_id") is not None:
-            promotion_offers[offer["promotion_id"]].append(offer)
-        if offer.get("membership_plan_id") is not None:
-            membership_offers[offer["membership_plan_id"]].append(offer)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "counts": {action: sum(1 for e in plan_items if e["action"] == action)
                    for action in ("link", "create_and_link", "unresolved")},
         "services_to_create": list(to_create.values()),
         "items": plan_items,
-        "promotions_to_mark": sorted(p["promotion_id"] for p in promotions if not p["is_offer_extracted"]
-                                     and complete(promotion_offers.get(p["promotion_id"], []))),
-        "memberships_to_mark": sorted(m["plan_id"] for m in memberships if not m["is_offer_extracted"]
-                                      and complete(membership_offers.get(m["plan_id"], []))),
     }
 
 
@@ -265,24 +242,8 @@ def _link_statements(entries: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def _mark_statements(table: str, id_column: str, owner_column: str, owner_id: int) -> list[str]:
-    """is_offer_extracted 置 true 之前，该条记录下遗留的未关联 item 必须全部属于 blanket offer。"""
-    owner = literal(owner_id)
-    incomplete = literal(f"incomplete_mapping: {table} {owner_id} still has unlinked items")
-    missing = literal(f"stale_plan: {table} {owner_id} no longer exists")
-    return [
-        f"select count(*) into v_count from public.promo_offer_items i join public.promo_offer_master m "
-        f"on m.id = i.offer_id where m.{owner_column} = {owner} and i.service_id is null "
-        f"and not (coalesce(m.offer_raw_text, '') ~* {literal(BLANKET_SQL_PATTERN)});",
-        f"if v_count <> 0 then raise exception {incomplete}; end if;",
-        f"update public.{table} set is_offer_extracted = true, updated_at = now() where {id_column} = {owner};",
-        "get diagnostics v_count = row_count;",
-        f"if v_count <> 1 then raise exception {missing}; end if;",
-    ]
-
-
 def render_apply(plan: Mapping[str, Any]) -> str:
-    """整个计划渲染为单个 DO 块；任一 item 已变化、标记条件不成立或 blanket 检查非零即整体回滚。"""
+    """整个计划渲染为单个 DO 块；任一 item 已变化或 blanket 检查非零即整体回滚。"""
     statements: list[str] = []
     declare = ["v_count bigint", "v_ids bigint[]", "v_service bigint", "v_ref bigint", "v_map jsonb := '{}'::jsonb",
                "r record"]
@@ -294,19 +255,13 @@ def render_apply(plan: Mapping[str, Any]) -> str:
     if entries:
         statements.extend(_link_statements(entries))
     linked = [entry["offer_item_id"] for entry in entries]
-    for table, id_column, owner_column, ids in (
-            ("clinic_promotions", "promotion_id", "promotion_id", plan["promotions_to_mark"]),
-            ("clinic_memberships", "plan_id", "membership_plan_id", plan["memberships_to_mark"])):
-        for owner_id in ids:
-            statements.extend(_mark_statements(table, id_column, owner_column, owner_id))
     # 本批 blanket 检查：AGENTS.md 的查询原文，只检查本批关联的 item
     statements.append(
         f"select count(*) into v_count from ({BLANKET_CHECK_SQL.strip()}\n"
         f"  and i.offer_item_id = any({literal(linked)}::bigint[])) blanket_rows;")
     statements.append(f"if v_count <> 0 then raise exception {literal('blanket_check_failed: linked items under blanket offers')}; end if;")
     header = (f"link-services apply\nplan sha256 {plan_digest(plan)}\n"
-              f"links {len(linked)}, services {len(specs)}, promotions {len(plan['promotions_to_mark'])}, "
-              f"memberships {len(plan['memberships_to_mark'])}")
+              f"links {len(linked)}, services {len(specs)}")
     return do_block(statements, declare=declare, header=header)
 
 

@@ -49,6 +49,19 @@ def test_title_fetch_uses_ego_and_a_navigation_failure_is_that_page_result(tmp_p
         fetch_page_title("https://gone.example/specials", "Gone Spa")
 
 
+def test_title_fetch_of_a_404_page_raises_page_gone(tmp_path, monkeypatch):
+    from utils.ego_browser import fetch_page_title
+    from utils.page_title import PageGone
+
+    fake = tmp_path / "ego-browser"
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    fake.write_text("#!/bin/sh\necho 'EGO_TITLE {\"title\": \"404 Not Found\", \"og\": \"\", \"h1\": \"\", "
+                    "\"status\": 404}' >&2\n")
+    fake.chmod(0o755)
+    with pytest.raises(PageGone, match="page_gone"):
+        fetch_page_title("https://fixmedspa.com/specials", "Fix Med Spa")
+
+
 def test_ego_command_uses_the_windows_executable_under_wsl(tmp_path, monkeypatch):
     # WSL 中 PATH 上只有 Windows 端的 ego-browser.exe（首次设置写入的用户 PATH）
     exe = tmp_path / "ego-browser.exe"

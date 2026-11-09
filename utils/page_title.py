@@ -24,6 +24,10 @@ class TitleUnavailable(RuntimeError):
     pass
 
 
+class PageGone(TitleUnavailable):
+    """页面返回 404/410，已不存在。"""
+
+
 def is_generic_title(title: str, business_name: str = "") -> bool:
     text = " ".join(str(title or "").split())
     if not text or GENERIC_TITLE_RE.match(text):

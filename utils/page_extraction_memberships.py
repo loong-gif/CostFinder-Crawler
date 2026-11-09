@@ -16,15 +16,25 @@ from utils.visibility_manifest import membership_fee_claim
 MEMBERSHIP_TASK = """Extract every purchasable membership tier separately, using the plan name and fee exactly as shown; never invent, rename or combine a plan, and skip a tier whose name is not shown. For each tier, list the monthly fee and credit, included service choices and limits, gifts and frequency, discounts, duration, rollover, cancellation, exclusions, and eligibility, one fact per benefit. Rephrasing is allowed, but every service, price, percentage and quantity in a benefit must appear on the page for that tier. Do not join statements from different places on the page, borrow terms from another tier, add explanations, advice, inferences, computed values or placeholders, or infer content from missing images. Use null for benefits when the page states none for the tier."""
 
 
-def _name_and_fee_visible(page: Mapping[str, Any], name: str, price: float) -> bool:
-    """可见性清单中方案名称与“名称 $费用”两条声明都已核验可见。"""
+def _claims_visible(page: Mapping[str, Any], claims: list[str]) -> bool:
+    """可见性清单中每条声明都已核验可见。"""
     results = {c["claim"]: c for c in page.get("claimResults") or []}
-    for claim in (name, membership_fee_claim(name, price)):
+    for claim in claims:
         result = results.get(claim)
         if result is None or not (result["status"] == "visible_match" or (
                 result["status"] == "image_only" and image_claim_verified(claim, result, page))):
             return False
     return True
+
+
+def _name_and_fee_visible(page: Mapping[str, Any], name: str, price: float) -> bool:
+    """可见性清单中方案名称与“名称 $费用”两条声明都已核验可见。"""
+    return _claims_visible(page, [name, membership_fee_claim(name, price)])
+
+
+def _stored_benefits_visible(manifest: Mapping[str, Any], pages: list[str], stored: list[str]) -> bool:
+    """库中已有的权益在本组某个渲染页面上全部可见。"""
+    return any(_claims_visible(_visibility_for(manifest, url) or {}, stored) for url in pages)
 
 
 _ONLY_ELSEWHERE_RE = re.compile(
@@ -122,9 +132,7 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
                          "source_claims": source_claims,
                          "verified_benefits": decision.get("verified_benefits"),
                          "missing_claims": decision.get("missing_claims", []),
-                         "benefits_quality": "pass" if decision["complete"] else "review",
-                         "benefits_review_reason": decision["reason"] if source_plan else "membership_missing_from_source_inventory",
-                         "ocr_status": "complete" if image_ocr_complete else "pending",
+                         "benefits_reason": decision["reason"] if source_plan else "membership_missing_from_source_inventory",
                          "source_review": {"url": page["url"], "scrape_id": row.get("id"),
                                            "request_fingerprint": row.get("request_fingerprint"),
                                            "updated_at": row.get("updated_at"),
@@ -162,11 +170,16 @@ def _plan_memberships(pages: list[dict[str, Any]], *, scrapes, existing, llm, sc
             entries.append({**entry, "action": "insert", "reason": "new_row"})
             continue
         old_price = None if old["membership_price"] is None else float(old["membership_price"])
+        stored = list(old["benefits"] or [])
+        # 本次权益未核验通过（写入 NULL 时 upsert 保留旧值）而库中旧权益在渲染页面上看不到：旧权益同样置为 NULL
+        clear = (entry["benefits"] is None and bool(stored) and manifest is not None
+                 and not _stored_benefits_visible(manifest, entry["source_pages"], stored))
         same = (old_price == entry["membership_price"]
                 and old["billing_period"] == entry["billing_period"]
                 and old["minimum_commitment_months"] == entry["minimum_commitment_months"]
-                and (entry["benefits"] is None or old["benefits"] == entry["benefits"]))
-        entries.append({**entry, "action": "unchanged" if same else "update",
+                and not clear and (entry["benefits"] is None or old["benefits"] == entry["benefits"]))
+        entries.append({**entry, "stored_benefits": stored, "clear_benefits": clear,
+                        "action": "unchanged" if same else "update",
                         "reason": "identical" if same else "row_differs", "plan_id": old["plan_id"],
                         "expected_updated_at": _iso(old["updated_at"])})
     return entries

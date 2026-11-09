@@ -75,8 +75,9 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 不会被每小时重新打开。
 数据质量审计入口为 `run_data_quality_daily.sh`，需另建每小时触发的 Windows 任务
 `CostFinderDataQualityDaily`；脚本只在上海时间 **09** 点执行，其余小时直接退出，因此不受太平洋
-夏令时影响。它运行 `run_data_quality_audit.py --recheck`：只读审计并定向重抓到期、缺权益和
-超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
+夏令时影响。它运行 `promo_pipeline.py quality --rest --recheck`：监控主机没有 Supabase CLI，快照经
+Supabase REST 整表读取（`utils/monitor_database_snapshot.py`，同样存为运行目录的 `snapshot.json`）；
+只读审计并定向重抓到期、缺权益和超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
 同一来源的抓取和浏览器/提取分别累计连续失败，达到 **3 轮**后暂停该阶段的
 小时重试，事件保持 `retryable`，不进入审查清单；每日主任务每天把暂停的页面加入抓取，自动续跑。
 抓取一轮内的两个 HTTP 尝试只算一轮失败；重启程序或新事件不会绕过来源上限。成功抓取后清除抓取计数；
@@ -194,5 +195,5 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 
 ## 待执行 SQL、Variant 对账与批次闸门
 
-DO 块的核对内容、会话中的执行步骤（`pending-sql --pull` / `--mark-applied`）、Variant 对账与批次闸门 F–I
+DO 块的核对内容、会话中的执行步骤（`pending-sql` / `--mark-applied`）、Variant 对账与批次闸门 F–I
 见 [`monitor_pending_sql.md`](monitor_pending_sql.md)。

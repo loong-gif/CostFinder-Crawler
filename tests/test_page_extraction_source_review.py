@@ -136,10 +136,8 @@ def test_page_extraction_upserts_leave_offer_flags_to_the_database_trigger():
         sql = re.sub(r"\s+into v_inserted;", ";", re.sub(r"\{[^{}]+\}", "NULL", template))
         statement = parse_sql(sql)[0].stmt
         columns = [column.name for column in statement.cols]
-        values = dict(zip(columns, statement.selectStmt.valuesLists[0]))
         assignments = {target.name for target in statement.onConflictClause.targetList}
-        assert values["is_offer_extracted"].val.boolval is False
-        assert "is_offer_extracted" not in assignments
+        assert "is_offer_extracted" not in columns and "is_offer_extracted" not in assignments
 
 
 def test_review_title_with_the_price_pairs_with_the_extracted_card(tmp_path):

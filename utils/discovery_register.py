@@ -8,7 +8,7 @@ from typing import Any
 
 from utils.crawl_schedule_state import city_key, load_state, save_state
 from utils.discovery_logic import classify_places
-from utils.pipeline_db import load_snapshot, read_tables, write_text
+from utils.pipeline_db import fresh_snapshot, load_snapshot, write_text
 from utils.register_businesses import render_register
 
 MASTER_TABLES = {"master": ("master_business_info",
@@ -16,7 +16,7 @@ MASTER_TABLES = {"master": ("master_business_info",
 
 
 def read_master(run_dir: Path, snapshot: Path | None = None) -> list[dict[str, Any]]:
-    return (load_snapshot(snapshot, MASTER_TABLES) if snapshot else read_tables(run_dir, MASTER_TABLES))["master"]
+    return load_snapshot(snapshot or fresh_snapshot(run_dir, MASTER_TABLES), MASTER_TABLES)["master"]
 
 
 def register_places(places: list[dict[str, Any]], master: list[dict[str, Any]], *, city: str | None, state: str,

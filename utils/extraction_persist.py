@@ -10,7 +10,6 @@ from utils.clinic_service_extraction import (
 from utils.extraction_persist_offer import persist_promo_offer
 from utils.extraction_persist_pricing import route_offer
 from utils.extraction_persist_records import persist_service_item
-from utils.offer_scope_filter import exclude_reason
 from utils.offer_purchase_semantics import normalize_purchase_offers
 
 
@@ -49,14 +48,11 @@ def route_and_persist_extraction(
         "skipped": 0,
         "service_writes": [],
         "promo_writes": [],
-        "quarantine": [],
     }
     service_candidates: list[dict[str, Any]] = []
     normalized, purchase_reviews = normalize_purchase_offers(offers, evidence)
     stats["purchase_reviews"] = purchase_reviews
-    rejected_reviews = [review for review in purchase_reviews if review["reason"] != "generic_offer_scope"]
-    stats["quarantined"] += len(rejected_reviews)
-    stats["quarantine"].extend(rejected_reviews)
+    stats["quarantined"] += sum(review["reason"] != "generic_offer_scope" for review in purchase_reviews)
     for offer in _coalesce_source_offer_items(normalized):
         kind = route_offer(offer)
         if kind == "service":
@@ -68,12 +64,6 @@ def route_and_persist_extraction(
             continue
         if kind == "quarantine":
             stats["quarantined"] += 1
-            stats["quarantine"].append(
-                {
-                    "reason": exclude_reason(offer) or "unroutable",
-                    "offer_raw_text": str(offer.get("offer_raw_text") or "")[:200],
-                }
-            )
             continue
         write = persist_promo_offer(
             client,
@@ -90,13 +80,6 @@ def route_and_persist_extraction(
             stats["promos"] += 1
         elif write.get("action") == "quarantined":
             stats["quarantined"] += 1
-            stats["quarantine"].append(
-                {
-                    "reason": write.get("reason") or "evidence_validation_failed",
-                    "offer_raw_text": str(offer.get("offer_raw_text") or "")[:200],
-                    "evidence_issues": write.get("evidence_issues") or [],
-                }
-            )
         else:
             stats["skipped"] += 1
 

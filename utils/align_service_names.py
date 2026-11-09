@@ -1,23 +1,8 @@
-#!/usr/bin/env python3
-"""
-Align medspa service names into normalized labels plus entity-level mappings.
-
-Outputs:
-1. Row-level preview CSV with added alignment columns.
-2. Aggregated mapping CSV for each raw service_name.
-3. Manual review CSV containing medium/low-confidence mappings.
-"""
-
 from __future__ import annotations
 
-import argparse
 import re
 import unicodedata
-from collections import Counter
-from pathlib import Path
 from typing import Dict, List, NamedTuple
-
-import pandas as pd
 
 
 class MatchRule(NamedTuple):
@@ -118,36 +103,6 @@ FILLER_PROCEDURE_PATTERN = re.compile(
     r"natural glow package|full-face balancing|full facial balancing|naked lips|iconique lips",
     re.IGNORECASE,
 )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Align service_name values into normalized names and entities.")
-    parser.add_argument(
-        "--input",
-        default="/Users/wyl/Downloads/4.3 CF - qa (1).csv",
-        help="Input CSV path.",
-    )
-    parser.add_argument(
-        "--output",
-        default="/Users/wyl/Downloads/4.3_CF_qa_alignment_preview.csv",
-        help="Output CSV with added alignment columns.",
-    )
-    parser.add_argument(
-        "--aligned-original-output",
-        default="/Users/wyl/Downloads/4.3_CF_qa_service_name_aligned.csv",
-        help="Output CSV that preserves the original schema and writes back aligned service_name values.",
-    )
-    parser.add_argument(
-        "--mapping-output",
-        default="/Users/wyl/Downloads/4.3_CF_qa_service_name_mapping.csv",
-        help="Aggregated mapping CSV path.",
-    )
-    parser.add_argument(
-        "--review-output",
-        default="/Users/wyl/Downloads/4.3_CF_qa_service_name_manual_review.csv",
-        help="Manual review CSV path.",
-    )
-    return parser.parse_args()
 
 
 def normalize_text(value: str) -> str:
@@ -329,126 +284,3 @@ def infer_alignment(name: str, source_category: str | None = "") -> Dict[str, st
         "alignment_note": "Multiple categories matched",
     }
 
-
-def expand_multi_entity_rows(df: pd.DataFrame) -> pd.DataFrame:
-    expanded_rows = []
-    for _, row in df.iterrows():
-        entity_list = [item.strip() for item in str(row.get("aligned_entity_list", "")).split("|") if item.strip()]
-        category_list = [item.strip() for item in str(row.get("aligned_category_list", "")).split("|") if item.strip()]
-        if not entity_list:
-            entity_list = [str(row.get("aligned_service_name_canonical", "")).strip()]
-        if not category_list:
-            category_list = [str(row.get("aligned_service_category", "")).strip()]
-        if len(category_list) == 1 and len(entity_list) > 1:
-            category_list = category_list * len(entity_list)
-        if len(category_list) != len(entity_list):
-            category_list = [str(row.get("aligned_service_category", "")).strip()] * len(entity_list)
-
-        split_needed = len(entity_list) > 1
-        for split_index, (entity, category) in enumerate(zip(entity_list, category_list), start=1):
-            new_row = row.copy()
-            new_row["aligned_service_name_canonical"] = entity
-            new_row["aligned_service_category"] = category
-            new_row["aligned_split_from_multi_entity"] = "TRUE" if split_needed else "FALSE"
-            new_row["aligned_split_entity_index"] = str(split_index)
-            new_row["aligned_split_entity_count"] = str(len(entity_list))
-            expanded_rows.append(new_row)
-
-    return pd.DataFrame(expanded_rows)
-
-
-def build_mapping(df: pd.DataFrame) -> pd.DataFrame:
-    grouped = (
-        df.groupby(
-            [
-                "service_name",
-                "aligned_service_name_normalized",
-                "aligned_service_name_canonical",
-                "aligned_service_category",
-                "alignment_confidence",
-                "needs_manual_review",
-                "alignment_note",
-            ],
-            dropna=False,
-            as_index=False,
-        )
-        .size()
-        .reset_index()
-        .rename(columns={"service_name": "raw_service_name", "size": "row_count"})
-    )
-    grouped = grouped[
-        [
-            "raw_service_name",
-            "row_count",
-            "aligned_service_name_normalized",
-            "aligned_service_name_canonical",
-            "aligned_service_category",
-            "alignment_confidence",
-            "needs_manual_review",
-            "alignment_note",
-        ]
-    ]
-    return grouped.sort_values(
-        by=["needs_manual_review", "row_count", "raw_service_name"],
-        ascending=[False, False, True],
-    )
-
-
-def main() -> None:
-    args = parse_args()
-    input_path = Path(args.input)
-    output_path = Path(args.output)
-    aligned_original_output_path = Path(args.aligned_original_output)
-    mapping_path = Path(args.mapping_output)
-    review_path = Path(args.review_output)
-
-    df = pd.read_csv(input_path, dtype=str).fillna("")
-    original_columns = list(df.columns)
-    if "service_name" not in df.columns:
-        raise KeyError("Column 'service_name' not found in input CSV.")
-
-    alignment_records = [
-        infer_alignment(service_name, source_category)
-        for service_name, source_category in zip(df["service_name"], df.get("service_category", ""))
-    ]
-    alignment_df = pd.DataFrame(alignment_records)
-    result_df = pd.concat([df, alignment_df], axis=1)
-    expanded_result_df = expand_multi_entity_rows(result_df)
-    aligned_original_df = expanded_result_df[original_columns].copy()
-    aligned_original_df["service_name"] = expanded_result_df["aligned_service_name_canonical"]
-    mapping_df = build_mapping(expanded_result_df)
-    review_df = mapping_df[mapping_df["needs_manual_review"] == "TRUE"].copy()
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    aligned_original_output_path.parent.mkdir(parents=True, exist_ok=True)
-    mapping_path.parent.mkdir(parents=True, exist_ok=True)
-    review_path.parent.mkdir(parents=True, exist_ok=True)
-
-    expanded_result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
-    aligned_original_df.to_csv(aligned_original_output_path, index=False, encoding="utf-8-sig")
-    mapping_df.to_csv(mapping_path, index=False, encoding="utf-8-sig")
-    review_df.to_csv(review_path, index=False, encoding="utf-8-sig")
-
-    category_counts = Counter(result_df["aligned_service_category"])
-    confidence_counts = Counter(result_df["alignment_confidence"])
-
-    print(f"wrote preview csv: {output_path}")
-    print(f"wrote aligned original csv: {aligned_original_output_path}")
-    print(f"wrote mapping csv: {mapping_path}")
-    print(f"wrote manual review csv: {review_path}")
-    print(f"rows before expansion: {len(result_df)}")
-    print(f"rows after expansion: {len(expanded_result_df)}")
-    print(f"unique raw service_name: {result_df['service_name'].nunique()}")
-    print(f"unique normalized service_name: {result_df['aligned_service_name_normalized'].nunique()}")
-    print(f"unique canonical entities: {result_df['aligned_service_name_canonical'].nunique()}")
-    print("confidence counts:")
-    for label, count in sorted(confidence_counts.items()):
-        print(f"  {label}: {count}")
-    print("category counts:")
-    for label, count in sorted(category_counts.items()):
-        print(f"  {label}: {count}")
-    print(f"manual review names: {len(review_df)}")
-
-
-if __name__ == "__main__":
-    main()

@@ -4,7 +4,7 @@
 File payloads (including explicitly selected credentials) travel over SSH stdin,
 never command arguments or output. This tool performs no database operations; the
 deployed jobs never write the database, they only produce SQL files under
-``$BASE/state/pending_sql/`` that ``pending-sql --pull`` brings back and the session runs through the Supabase MCP.
+``$BASE/state/pending_sql/`` that ``pending-sql`` pulls back and the session runs through the Supabase MCP.
 """
 from __future__ import annotations
 
@@ -44,6 +44,20 @@ def monitor_launcher(log: str, run_type: str, extra_args: str, *, yield_to_runni
         'exit "$CODE"\n').encode()
 
 
+def data_quality_launcher() -> bytes:
+    """Daily deactivate-expired and quality; the host has no Supabase CLI, so quality reads its snapshot over REST.
+
+    Triggered hourly in server (Pacific) time; only the 09:00 Shanghai hour runs, so DST cannot shift it.
+    """
+    return (
+        '#!/bin/sh\nset -eu\n[ "$(TZ=Asia/Shanghai date +%H)" = "09" ] || exit 0\nBASE="'+BASE+'"\n'
+        'mkdir -p "$BASE/logs" "$BASE/state"\nexec >>"$BASE/logs/data_quality.log" 2>&1\ndate -u\n'
+        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\n'
+        '"$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" deactivate-expired --out-dir "$BASE/state/pending_sql"\n'
+        'exec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" quality '
+        '--state-dir "$BASE/state" --rest --recheck\n').encode()
+
+
 def deploy(host: str, include_credentials: bool):
     files = (list((ROOT / "utils").glob("*.py")) + list((ROOT / "schema").glob("*.json"))
              + list((ROOT / "config").glob("*.py")))
@@ -69,14 +83,7 @@ def deploy(host: str, include_credentials: bool):
     payload["run_monitor_validation.sh"] = monitor_launcher("monitor.log", "full_monitor", "")
     payload["run_monitor_retry.sh"] = monitor_launcher("retry.log", "failure_retry", " --retry-transient-only",
                                                        yield_to_running=True)
-    # Triggered hourly in server (Pacific) time; only the 09:00 Shanghai hour runs, so DST cannot shift it.
-    payload["run_data_quality_daily.sh"] = (
-        '#!/bin/sh\nset -eu\n[ "$(TZ=Asia/Shanghai date +%H)" = "09" ] || exit 0\nBASE="'+BASE+'"\n'
-        'mkdir -p "$BASE/logs" "$BASE/state"\nexec >>"$BASE/logs/data_quality.log" 2>&1\ndate -u\n'
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\n'
-        '"$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" deactivate-expired --out-dir "$BASE/state/pending_sql"\n'
-        'exec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" quality '
-        '--state-dir "$BASE/state" --recheck\n').encode()
+    payload["run_data_quality_daily.sh"] = data_quality_launcher()
     # PaddleOCR 服务：独立的 Python 3.12 环境（/home/loong/ocr_service），只监听本机 127.0.0.1:8082。
     payload["run_ocr_service.sh"] = (
         '#!/bin/sh\nset -eu\nBASE="'+BASE+'"\nOCR=/home/loong/ocr_service\nexec >>"$BASE/logs/ocr_service.log" 2>&1\ndate -u\n'

@@ -31,7 +31,7 @@
 
 ## offer 与服务关联规则
 
-- 单价 offer 在服务关联确定之前以未激活状态写入（触发器 `prevent_incomplete_offer_activation` 不允许激活），link-services 关联服务后由 extract-offers 重新激活。
+- 单价 offer 在服务关联确定之前以未激活状态写入（触发器 `prevent_incomplete_offer_activation` 不允许激活），link-services 关联服务后由 extract-offers 重新激活：extract-offers 自动选取"未激活 offer 的 item 已全部关联、且关联晚于 offer 最近一次写入"的来源（`utils.offer_stage.snapshot_tables`）。
 - LLM 从卡片后的条款段落取了 offer 原文时（gemini-2.5-flash-lite 与 gemini-2.5-flash 都会这样做），改用同一张卡片中条款之前、带有同一折扣数值的唯一标题行作为原文，条款作为条件，item 名称取原文的短标签；找不到唯一标题行时，含「Valid on purchases made」的条款段落不作为 offer 原文（`terms_paragraph_offer_text`）。
 - 小写冠词开头（「a package of 8」）或含「is available」的 item 名称是句子成分（`clause_fragment`）。
 - 同一来源中 item、价格字段与客户限制都相同的 offer 只保留条件最多的一条。
@@ -44,10 +44,10 @@
 - Los Feliz（4443）的「St. Patrick's Day Sale」页面仍在线、没有年份，按 AGENTS.md 写入，活动日期为空，下架后由 monitor 停用。
 - LaserAway 洛杉矶三家分店（4439–4441）的来源页面是 `/savings` 与 `/bundles/laser-hair-removal-specials`。
 - Le Rêve（4442）重复的 New Client BOTOX 卡片合并为一条 offer。
-- batch-gate 的 10 个存量失败行逐条核对后作为有意保留记录在 `output/data_quality_state/data_quality/gate_retained.json`：
-  - C：类别内折扣（「all IV services」「all laser services」）关联到对应类别服务。
-  - D：同一权益出现在同一商家的多个会员方案中；D 检查的 ids 按 id 排序，保留记录的键在多次运行间保持稳定。
-  - G：「买 2 送第 3 支折扣」和二选一组合，交付数量不是单一数值。
+- batch-gate 检查条件（`utils/batch_gate_checks.py`）直接排除以下情形，不逐条登记：
+  - C：类别内折扣（「all IV services」「all laser services」）关联到名称含该类别词的服务。
+  - D：同一权益出现在同一商家的多个会员方案或促销中，按来源分组。
+  - G：「买 N 送」类 offer（「买 2 送第 3 支折扣」及其二选一组合），折扣由多个单位共享，交付数量不是单一数值。
 
 ## 结果
 

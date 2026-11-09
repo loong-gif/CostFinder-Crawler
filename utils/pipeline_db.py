@@ -1,7 +1,7 @@
 """流水线不使用 DB_URL，不建立数据库连接。
 
-读：命令生成只读快照查询（read.sql），read_snapshot 用 Supabase CLI（--linked）执行并直接写入 snapshot.json；
-    加载时逐表核对 count 与行数，结果被截断即报错。
+读：命令的 plan 步骤经 fresh_snapshot 生成只读快照查询（read.sql），read_snapshot 用 Supabase CLI（--linked）
+    执行并直接写入 snapshot.json；加载时逐表核对 count 与行数，结果被截断即报错。
 写：命令把计划渲染为单个 DO 块（apply.sql），经 Supabase MCP（execute_sql）执行；块内先核对计划生成后
     数据未变化，再写入，最后执行收尾检查；任何一步失败整体回滚。
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -67,18 +67,27 @@ def read_snapshot(read_sql: Path) -> Path:
     linked = (PROJECT_ROOT / "supabase" / ".temp" / "project-ref").read_text().strip()
     if linked != PRODUCTION_PROJECT_REF:
         raise RuntimeError(f"database_project_mismatch: supabase CLI is linked to {linked}")
-    done = subprocess.run(["supabase", "db", "query", "--linked", "-o", "json", "-f", str(read_sql)],
-                          cwd=PROJECT_ROOT, capture_output=True, text=True, check=True)
+    command = ["supabase", "db", "query", "--linked", "-o", "json", "-f", str(read_sql)]
+    # Management API 登录偶尔断开连接：重新执行同一只读查询，三次都失败即报错
+    for _attempt in range(3):
+        done = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True)
+        if done.returncode == 0:
+            break
+    done.check_returncode()
     rows = json.loads(done.stdout)["rows"]
     if len(rows) != 1 or set(rows[0]) != {"snapshot"}:
         raise RuntimeError(f"unexpected snapshot result shape: {len(rows)} rows")
     return write_text(Path(read_sql).parent / "snapshot.json", json.dumps(rows[0]["snapshot"], ensure_ascii=False))
 
 
-def read_tables(run_dir: Path, tables: Mapping[str, tuple[str, str, str]]) -> dict[str, list[dict[str, Any]]]:
-    """生成只读快照查询 run_dir/read.sql，用 read_snapshot 自动执行，逐表核对行数后返回各表的行。"""
-    read_sql = write_text(Path(run_dir) / "read.sql", snapshot_query(tables))
-    return load_snapshot(read_snapshot(read_sql), tables)
+def run_dir(output_dir: Path) -> Path:
+    """命令的一次运行目录，按 UTC 时间命名。"""
+    return Path(output_dir) / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def fresh_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
+    """在 directory 写入只读快照查询 read.sql 并立即执行，返回 snapshot.json 的路径。"""
+    return read_snapshot(write_text(Path(directory) / "read.sql", snapshot_query(tables)))
 
 
 def _typed(row: dict[str, Any]) -> dict[str, Any]:
@@ -91,8 +100,9 @@ def _typed(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def load_snapshot(path: Path, expected: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
-    """读取 snapshot.json（snapshot 列的值），核对每张表的 count 与行数一致。"""
+def load_snapshot(path: Path, expected: Iterable[str], *, typed: bool = True) -> dict[str, list[dict[str, Any]]]:
+    """读取 snapshot.json（snapshot 列的值），核对每张表的 count 与行数一致；
+    typed 为真时日期与时间戳列转为 date/datetime，否则保留 JSON 原值。"""
     payload = json.loads(Path(path).read_text())
     missing = sorted(set(expected) - set(payload))
     if missing:
@@ -102,7 +112,7 @@ def load_snapshot(path: Path, expected: Iterable[str]) -> dict[str, list[dict[st
         part = payload[name]
         if part["count"] != len(part["rows"]):
             raise SnapshotIncomplete(f"incomplete_read:{name}: read {len(part['rows'])} of {part['count']}")
-        result[name] = [_typed(dict(row)) for row in part["rows"]]
+        result[name] = [_typed(dict(row)) if typed else dict(row) for row in part["rows"]]
     return result
 
 

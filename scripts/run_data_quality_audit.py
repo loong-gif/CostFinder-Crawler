@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the issue log on production (read-only); --apply renders reviewed repairs as pending SQL."""
+"""Audit the issue log on production (read-only snapshot); --apply renders the ready repairs as pending SQL."""
 from __future__ import annotations
 
 import argparse
@@ -9,17 +9,17 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 from utils.data_quality_audit import audit_snapshot, source_key
-from utils.data_quality_writer import read_snapshot, render_audit
+from utils.data_quality_writer import SNAPSHOT_TABLES, render_audit
+from utils.monitor_database_snapshot import rest_snapshot
 from utils.monitor_price_store import atomic_json, manual_protections, now, read_json, run_lock
-from utils.supabase_rest import PRODUCTION_PROJECT_REF, SupabaseRestClient, get_supabase_secret_key
+from utils.pipeline_db import fresh_snapshot, load_snapshot
 
 
 def load_captures(root):
@@ -41,6 +41,7 @@ def load_captures(root):
                        "viewports": [{"name": name, "complete": value.get("complete") is True} for name, value in coverage.items()],
                        "image_review_complete": image_done, "text": evidence.get("markdown", browser.get("text", ""))}
             capture["campaign_end_date"] = _campaign({}, {**evidence, "date_text": capture["text"]}).get("campaign_end_date")
+            capture["gone"] = evidence.get("gone") is True
             for name in ("memberships", "absent_membership_ids", "services"):
                 if name in evidence:
                     capture[name] = evidence[name]
@@ -52,8 +53,9 @@ def load_captures(root):
     return result
 
 
-def _repair_key(repair):
-    return (repair["rule"], repair["table"], repair["id"], json.dumps(repair["values"], sort_keys=True))
+def retry_after(attempts, at):
+    """失败复查的下次重试时间：间隔按失败次数翻倍（2、4、8 ... 天），最长 30 天。"""
+    return (at + timedelta(days=min(2 ** attempts, 30))).isoformat()
 
 
 def merge_queue(previous, entries):
@@ -63,12 +65,12 @@ def merge_queue(previous, entries):
     result = []
     for entry in entries:
         earlier = old.get(key(entry), {})
-        # Daily scans must not undo source retry pauses or unfinished write recovery.
+        # Daily scans must not undo the retry backoff or unfinished write recovery.
         merged = {**earlier, **entry}
-        for name in ("attempts", "last_attempt_at", "last_error", "resume_required"):
+        for name in ("attempts", "last_attempt_at", "last_error", "resume_required", "retry_after"):
             if name in earlier:
                 merged[name] = earlier[name]
-        if earlier.get("status") == "paused" or earlier.get("resume_required"):
+        if earlier.get("resume_required"):
             merged["status"] = earlier["status"]
         result.append(merged)
     result.extend({**e, "status": "resolved", "resolved_at": now()} for k, e in old.items()
@@ -87,6 +89,7 @@ def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
     from utils.rendered_visibility_gate import current_page_manifest
     from utils.offer_extraction_llm import build_client_from_env
     from utils.membership_evidence import prepare_membership_write
+    from utils.monitor_rendered_checks import confirmed_not_found
     client = build_client_from_env()
     if client is None:
         raise RuntimeError("extraction_credentials_missing")
@@ -95,8 +98,11 @@ def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
     schema["required"].append("all_memberships_extracted")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     deferred = 0
+    started = datetime.now(timezone.utc)
     for index, entry in enumerate(queue["entries"]):
-        if entry.get("source_kind") not in {"membership", "service"} or entry.get("status") not in {"pending", "review"}:
+        if entry.get("source_kind") not in {"membership", "service"} or entry.get("status") != "pending":
+            continue
+        if entry.get("retry_after") and datetime.fromisoformat(entry["retry_after"]) > started:
             continue
         if deadline is not None and time.monotonic() >= deadline:
             deferred += 1
@@ -105,6 +111,11 @@ def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
         entry["last_attempt_at"] = now()
         try:
             browser = render_page(entry["source_url"], directory)
+            if confirmed_not_found(browser):
+                # 页面返回 404 且渲染证实"未找到"：下架证据，审计据此停用该来源的 offer
+                atomic_json(directory / "evidence.json", {"url": entry["source_url"], "gone": True})
+                entry.update(status="gone", attempts=0, evidence_path=str(directory / "evidence.json"))
+                continue
             if not browser.get("accessible") or source_key(browser.get("final_url")) != source_key(entry["source_url"]):
                 raise RuntimeError("source_inaccessible_or_redirected")
             text = browser.get("text", "")
@@ -151,7 +162,9 @@ def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
         except Exception as exc:
             category = str(exc) if isinstance(exc, RuntimeError) and str(exc).replace("_", "").isalnum() else type(exc).__name__
             attempts = int(entry.get("attempts", 0)) + 1
-            entry.update(status="paused" if attempts >= 3 else "review", attempts=attempts, last_error=category)
+            # 被拦截或暂时无法访问不是下架证据：保持 pending，按退避时间自动重试
+            entry.update(status="pending", attempts=attempts, last_error=category,
+                         retry_after=retry_after(attempts, datetime.now(timezone.utc)))
             atomic_json(directory / "failure.json", {"reason": category, "recorded_at": now()})
     atomic_json(root / "data_quality" / "recheck_queue.json", queue)
     return deferred
@@ -160,39 +173,34 @@ def recheck_catalog_and_memberships(queue, snapshot, root, deadline=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=ROOT / "output/data_quality_state")
-    parser.add_argument("--snapshot", type=Path, help="Offline snapshot; always read-only")
+    parser.add_argument("--snapshot", type=Path, help="Saved snapshot.json (read_snapshot format) instead of reading now")
+    parser.add_argument("--rest", action="store_true",
+                        help="Read the snapshot over Supabase REST (the monitor host has no Supabase CLI)")
     parser.add_argument("--captures", type=Path, help="Verified capture manifest for offline regression/audit")
     parser.add_argument("--apply", action="store_true",
                         help="Render frozen ready repairs as <state-dir>/pending_sql/*.sql (never writes the database)")
     parser.add_argument("--recheck", action="store_true", help="Refresh flagged sources and run promotion-only Monitor checks")
-    parser.add_argument("--approved-plan", type=Path, help="With --apply: only repairs also present in this reviewed plan.json")
     parser.add_argument("--max-seconds", type=float,
                         default=float(os.getenv("DATA_QUALITY_RECHECK_MAX_SECONDS", "1800")),
                         help="Stop starting new rendered rechecks after this many seconds (0 = unlimited); "
                              "unfinished entries stay queued for the next run")
     args = parser.parse_args()
-    if args.apply and not args.approved_plan:
-        parser.error("--apply requires --approved-plan from a reviewed read-only run")
     if args.snapshot and args.recheck:
         parser.error("offline snapshots cannot trigger external rechecks")
+    if args.snapshot and args.rest:
+        parser.error("--rest reads the database now; it cannot be combined with --snapshot")
     load_dotenv(ROOT / ".env")
     root = args.state_dir
     with run_lock(root):
         protections = manual_protections(read_json(root / "manual_protections.json", {}))
-        if args.snapshot:
-            snapshot = read_json(args.snapshot)
-            if snapshot.get("project_ref") != "kdlpkjzcnbkjcvwsvlwn":
-                raise RuntimeError("snapshot_project_mismatch")
-        else:
-            base = os.getenv("SUPABASE_URL", "")
-            if urlsplit(base).hostname != PRODUCTION_PROJECT_REF + ".supabase.co":
-                raise RuntimeError("database_project_mismatch")
-            snapshot = read_snapshot(SupabaseRestClient(base, get_supabase_secret_key()))
-        captures = read_json(args.captures) if args.captures else load_captures(root)
-        report = audit_snapshot(snapshot, captures, protections=protections)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         directory = root / "data_quality/runs" / stamp
-        atomic_json(directory / "snapshot.json", snapshot)
+        # 只读快照：本机由 Supabase CLI（--linked）执行 read.sql；监控主机（--rest）经 REST 整表读取；逐表核对行数
+        read = rest_snapshot if args.rest else fresh_snapshot
+        snapshot_path = args.snapshot or read(directory, SNAPSHOT_TABLES)
+        snapshot = load_snapshot(snapshot_path, SNAPSHOT_TABLES, typed=False)
+        captures = read_json(args.captures) if args.captures else load_captures(root)
+        report = audit_snapshot(snapshot, captures, protections=protections)
         atomic_json(directory / "plan.json", report)
         atomic_json(root / "manual_protections.json", protections)
         queue = merge_queue(read_json(root / "data_quality/recheck_queue.json", {}), report["rechecks"])
@@ -205,11 +213,7 @@ def main():
             report["rechecks_deferred"] = deferred
             atomic_json(directory / "plan.json", report)
         if args.apply:
-            # Execute only what was reviewed; anything new waits for the next review.
-            approved = {_repair_key(r) for r in read_json(args.approved_plan)["repairs"]}
-            report["unapproved_repairs"] = [r for r in report["repairs"] if _repair_key(r) not in approved]
-            report["repairs"] = [r for r in report["repairs"] if _repair_key(r) in approved]
-            # Rendering only: the SQL runs later through the Supabase MCP, then the batch gate runs.
+            # ready 修复由确定性规则冻结，DO 块逐行 CAS 核对与写后核对；Rendering only: the SQL runs later through the Supabase MCP, then the batch gate runs.
             report["apply"] = render_audit(report, snapshot, root, protections)
         atomic_json(directory / "report.json", report)
         atomic_json(root / "data_quality/report.json", report)

@@ -253,6 +253,7 @@ class OpenAICompatibleClient:
     api_key: str
     model: str
     timeout: int = 90
+    session: requests.Session = field(default_factory=lambda: _retrying_session(), repr=False)
 
     def create_json_response(
         self,
@@ -278,7 +279,7 @@ class OpenAICompatibleClient:
             body["response_format"] = {"type": "json_object"}
         if not self._is_reasoning_model():
             body["temperature"] = 0
-        response = requests.post(
+        response = self.session.post(
             self.api_url,
             headers={
                 "Authorization": f"Bearer {self.api_key}",

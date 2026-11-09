@@ -1,4 +1,4 @@
-"""discover-pages 与 review-pages 的只读数据库快照：生成 read.sql，由 read_snapshot（Supabase CLI --linked）自动执行。"""
+"""discover-pages 与 review-pages 的只读数据库快照：pipeline_db.fresh_snapshot 生成并执行 read.sql（Supabase CLI --linked）。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from typing import Any
 
 from utils.discovery_batch import snapshot_dir
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url
-from utils.pipeline_db import load_snapshot, read_snapshot, snapshot_query, write_text
+from utils.pipeline_db import fresh_snapshot, load_snapshot
 from utils.promo_value_review import BusinessContext
 
 DISCOVERY_TABLES = {
@@ -19,8 +19,7 @@ DISCOVERY_TABLES = {
 
 
 def read_discovery_snapshot(batch: Path) -> dict[str, list[dict[str, Any]]]:
-    read_sql = write_text(snapshot_dir(batch) / "read.sql", snapshot_query(DISCOVERY_TABLES))
-    return load_snapshot(read_snapshot(read_sql), DISCOVERY_TABLES)
+    return load_snapshot(fresh_snapshot(snapshot_dir(batch), DISCOVERY_TABLES), DISCOVERY_TABLES)
 
 
 def business_rows(snapshot: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:

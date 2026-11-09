@@ -15,7 +15,7 @@ from utils.offer_scope_filter import (
     _TERMS_PARAGRAPH_RE, clean_item_name, exclude_reason, item_name_problem, multiple_services_reason,
     non_promotable_reason, short_item_label)
 from utils.offer_stage_spec import (
-    BENIGN_REASONS, MASTER_COLUMNS, MEMBERSHIPS, PROMOTIONS, SOURCE_SPEC, SYSTEM_PROMPT, TASK_PROMPTS,
+    MASTER_COLUMNS, MEMBERSHIPS, PROMOTIONS, SOURCE_SPEC, SYSTEM_PROMPT, TASK_PROMPTS,
     _GIFT_SIGNAL, _REGULAR_PRICE_CARD)
 from utils.promo_offer_items_db import is_blanket_offer_text
 from utils.render_review import claim_anchors
@@ -101,7 +101,7 @@ def candidates_from_payload(payload: dict[str, Any], table: str, row: dict[str, 
     seen: set[str] = set()
 
     def reject(text: Any, reason: str) -> None:
-        rejected.append({"offer_raw_text": str(text or "")[:300], "reason": reason, "blocking": reason not in BENIGN_REASONS})
+        rejected.append({"offer_raw_text": str(text or "")[:300], "reason": reason})
 
     cards = [card for card in row[spec["content"]] or [] if isinstance(card, str)]
 

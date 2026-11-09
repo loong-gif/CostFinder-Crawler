@@ -188,10 +188,10 @@ def _branch_source_statements(sources: list[Mapping[str, Any]]) -> list[str]:
 
 
 def render_apply(plan: Mapping[str, Any]) -> str:
-    """有 offer 动作的 ready 源渲染为单个 DO 块：逐源核对未变化、先停用再写入、写后核对激活状态（is_offer_extracted 由触发器 trg_sync_is_offer_extracted 维护），
+    """有 offer 动作的源渲染为单个 DO 块：逐源核对未变化、先停用再写入、写后核对激活状态（is_offer_extracted 由数据库触发器维护），
     块末对本批 offer 执行 blanket 检查；任一不符即 raise exception 整体回滚。没有 offer 动作的源无需写入。
     连锁分店内容相同的全新来源合并为一个循环写入。"""
-    ready = [s for s in plan["sources"] if s["status"] == "ready" and s["offers"]]
+    ready = [s for s in plan["sources"] if s["offers"]]
     groups: dict[str, list[Mapping[str, Any]]] = {}
     for source in ready:
         key = _branch_key(source)

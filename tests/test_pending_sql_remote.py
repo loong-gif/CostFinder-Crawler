@@ -58,7 +58,7 @@ def test_pull_copies_every_pending_file_once_and_skips_applied_ones(tmp_path, mo
     calls = []
     monkeypatch.setattr(monitor_host.subprocess, "run", fake_ssh(calls))
     local = tmp_path / "local"
-    assert run_command(monkeypatch, "--pull", "--dir", str(local), "--remote-base", str(base)) == 0
+    assert run_command(monkeypatch, "--dir", str(local), "--remote-base", str(base)) == 0
     assert (local / flat.name).read_text() == flat.read_text()
     assert (local / "20261109T000000Z" / "apply.sql").read_text() == nested.read_text()
     assert not (local / done.name).exists() and len(calls) == 1
@@ -67,6 +67,23 @@ def test_pull_copies_every_pending_file_once_and_skips_applied_ones(tmp_path, mo
     (local / flat.name).rename(local / "applied" / flat.name)
     assert monitor_host.pull_pending(local, base=str(base)) == []
     assert not (local / flat.name).exists()
+
+
+def test_files_from_the_firecrawl_outage_window_are_neither_pulled_nor_listed(tmp_path, monkeypatch, capsys):
+    base = server(tmp_path)
+    remote = base / "state" / "pending_sql"
+    remote.mkdir(parents=True)
+    (remote / "20261107T010000000000Z_evt1.sql").write_text("-- plan evt1\n")
+    (remote / "20261108T010000000000Z_evt2.sql").write_text("-- plan evt2\n")
+    monkeypatch.setattr(monitor_host.subprocess, "run", fake_ssh([]))
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "20261106T200000000000Z_evt0.sql").write_text("-- plan evt0\n")
+    assert run_command(monkeypatch, "--dir", str(local), "--remote-base", str(base)) == 0
+    assert sorted(p.name for p in local.iterdir()) == ["20261106T200000000000Z_evt0.sql",
+                                                       "20261108T010000000000Z_evt2.sql"]
+    out = capsys.readouterr().out
+    assert f"{local}: 1 pending" in out and "evt0" not in out
 
 
 def test_mark_applied_moves_the_file_on_the_server_so_the_monitor_event_completes(tmp_path, monkeypatch):
@@ -78,7 +95,7 @@ def test_mark_applied_moves_the_file_on_the_server_so_the_monitor_event_complete
     calls = []
     monkeypatch.setattr(monitor_host.subprocess, "run", fake_ssh(calls))
     local = tmp_path / "local"
-    run_command(monkeypatch, "--pull", "--dir", str(local), "--remote-base", str(base))
+    run_command(monkeypatch, "--dir", str(local), "--remote-base", str(base))
     assert run_command(monkeypatch, "--mark-applied", str(local / sql.name), "--dir", str(local),
                        "--remote-base", str(base)) == 0
     assert (local / "applied" / sql.name).is_file() and (state / "pending_sql" / "applied" / sql.name).is_file()

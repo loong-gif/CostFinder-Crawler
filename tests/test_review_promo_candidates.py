@@ -4,7 +4,7 @@ import json
 import sys
 
 from scripts.review_promo_candidates import load_pages, main
-from utils import discovery_snapshot
+from utils import pipeline_db
 from utils.discovery_batch import decisions_path, discovered_path
 
 
@@ -30,7 +30,7 @@ def test_review_reads_the_batch_discovery_and_writes_the_decisions_every_later_s
         path.write_text(json.dumps({name: {"count": len(rows), "rows": rows} for name, rows in tables.items()}))
         return path
 
-    monkeypatch.setattr(discovery_snapshot, "read_snapshot", read)
+    monkeypatch.setattr(pipeline_db, "read_snapshot", read)
     monkeypatch.setattr(sys, "argv", ["review-pages", "--batch-dir", str(tmp_path), "--today", "2026-11-09"])
     assert main() == 0
     decisions = json.loads(decisions_path(tmp_path).read_text())["decisions"]

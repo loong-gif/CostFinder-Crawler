@@ -366,17 +366,7 @@ def audit_rows(
             )
 
         # --- service name alignment (informational) ---
-        if (
-            is_active
-            and alignment.get("needs_manual_review") == "TRUE"
-            and service_name not in {"", "Package"}
-        ):
-            add(
-                "service_name_manual_review",
-                "medium",
-                alignment.get("alignment_note", "service_name 需人工复核"),
-            )
-        elif is_active and canonical_name and canonical_name != service_name and service_name != "Package":
+        if is_active and canonical_name and canonical_name != service_name and service_name != "Package":
             add(
                 "service_name_noncanonical",
                 "low",

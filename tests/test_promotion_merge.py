@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from utils import pipeline_db, promotion_merge
-from utils.page_title import TitleUnavailable
+from utils.page_title import PageGone, TitleUnavailable
 from utils.promotion_rules import today
 
 T0 = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -53,10 +53,25 @@ def test_title_failure_blocks_group_with_active_rows(monkeypatch):
     rows = [promo(1, "https://glow.com/specials", active=True), promo(2, "https://glow.com/specials/", active=False)]
 
     def no_title(url, name):
-        raise TitleUnavailable("http_404")
+        raise TitleUnavailable("ego_timeout")
 
     [group] = plan_with(monkeypatch, rows, fetch_title=no_title)["groups"]
-    assert group["status"] == "blocked_title" and "http_404" in group["title_error"]
+    assert group["status"] == "blocked_title" and "ego_timeout" in group["title_error"]
+
+
+def test_gone_page_merges_the_group_inactive_with_the_existing_title(monkeypatch):
+    rows = [promo(1, "https://glow.com/specials", active=True, title="Specials | Glow"),
+            promo(2, "https://glow.com/specials/", active=False)]
+
+    def gone(url, name):
+        raise PageGone("page_gone")
+
+    [group] = plan_with(monkeypatch, rows, fetch_title=gone)["groups"]
+    assert group["status"] == "ready" and group["rule_deactivated"] == "page_gone"
+    assert group["new_values"]["is_active"] is False and group["new_values"]["promotion_title"] == "Specials | Glow"
+    assert "update public.clinic_promotions set promotion_title='Specials | Glow', is_active=false" in \
+        promotion_merge.render_apply(json.loads(promotion_merge.dump_plan(plan_with(monkeypatch, rows,
+                                                                                    fetch_title=gone))))
 
 
 def test_inactive_group_on_unavailable_page_keeps_existing_title(monkeypatch):

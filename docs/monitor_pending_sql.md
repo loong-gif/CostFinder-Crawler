@@ -21,9 +21,10 @@ DO 块是一条语句，执行失败整体回滚，不存在部分写入：
 
 会话中的执行步骤：
 
-1. `python scripts/promo_pipeline.py pending-sql --pull` 经 ssh（主机别名 `firecrawl`，目录 `$BASE`，
-   见 `utils/monitor_host.py`）把服务器 `$BASE/state/pending_sql/` 里待执行的文件拉到
-   `output/self_hosted_monitor_state/pending_sql/`，并列出每个文件的头部摘要；本地已有或已登记执行的文件不再拉回。
+1. `python scripts/promo_pipeline.py pending-sql` 经 ssh（主机别名 `firecrawl`，目录 `$BASE`，
+   见 `utils/monitor_host.py`）自动把服务器 `$BASE/state/pending_sql/` 里待执行的文件拉到
+   `output/self_hosted_monitor_state/pending_sql/`，并列出每个文件的头部摘要；本地已有或已登记执行的文件不再拉回，
+   自托管 Firecrawl 故障期间生成的文件不列出（`utils.pending_sql.FIRECRAWL_OUTAGES`）。
 2. 用 Supabase MCP `execute_sql` 执行整个文件；DO 块自行核对 before 快照、保护项与写后不变量，任一不符整体回滚。
 3. 成功后 `pending-sql --mark-applied <文件>`：先在服务器上把同一文件移入 `applied/`，再移动本地文件；
    服务器移动失败即终止，本地文件保持待执行。下次 monitor 运行时事件变为 `completed`。
