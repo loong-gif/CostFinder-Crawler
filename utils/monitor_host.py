@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import subprocess
 from pathlib import Path
@@ -10,6 +11,8 @@ from utils.pending_sql import APPLIED_DIR_NAME, PENDING_DIR_NAME
 
 HOST = "firecrawl"
 BASE = "/home/loong/costfinder_monitor"
+# 每次 ssh 调用取回的文件内容上限（字节）
+PULL_BATCH_BYTES = 1_000_000
 
 
 def remote_python(code: str, *, stdin: bytes = b"", timeout: int = 60, host: str = HOST) -> str:
@@ -26,24 +29,47 @@ def _remote_pending(base: str) -> str:
     return f"{base}/state/{PENDING_DIR_NAME}"
 
 
-def pull_pending(local_dir: Path, *, base: str = BASE, host: str = HOST) -> list[Path]:
-    """把服务器 pending_sql/ 里待执行的文件拉到本地同名路径；本地已有或已移入 applied/ 的不再写入。"""
-    code = (f"import base64,json,sys\nfrom pathlib import Path\nsys.path.insert(0,{base!r})\n"
+def _remote_listing(base: str, host: str) -> dict[str, int]:
+    """服务器上待执行文件的相对路径与字节数。"""
+    code = (f"import json,sys\nfrom pathlib import Path\nsys.path.insert(0,{base!r})\n"
             "from utils.pending_sql import list_pending\n"
             f"root=Path({_remote_pending(base)!r})\n"
             "found=list_pending(root) if root.is_dir() else []\n"
-            "print(json.dumps({str(p.relative_to(root)):base64.b64encode(p.read_bytes()).decode() for p,_ in found}))\n")
-    files = json.loads(remote_python(code, host=host, timeout=300))
+            "print(json.dumps({str(p.relative_to(root)):p.stat().st_size for p,_ in found}))\n")
+    return json.loads(remote_python(code, host=host))
+
+
+def _batches(sizes: dict[str, int]) -> list[list[str]]:
+    """按 PULL_BATCH_BYTES 分批；单个超过上限的文件独占一批。"""
+    batches: list[list[str]] = []
+    total = 0
+    for relative, size in sorted(sizes.items()):
+        if not batches or total + size > PULL_BATCH_BYTES:
+            batches.append([])
+            total = 0
+        batches[-1].append(relative)
+        total += size
+    return batches
+
+
+def pull_pending(local_dir: Path, *, base: str = BASE, host: str = HOST) -> list[Path]:
+    """把服务器 pending_sql/ 里待执行的文件拉到本地同名路径；本地已有或已移入 applied/ 的不传输。
+    先取清单，再按大小分批取内容：一次传回全部内容经 Windows OpenSSH 与 WSL 会超过几分钟。"""
     local_dir = Path(local_dir)
+    missing = {relative: size for relative, size in _remote_listing(base, host).items()
+               if not (local_dir / relative).exists()
+               and not (local_dir / APPLIED_DIR_NAME / Path(relative).parts[0]).exists()}
     written = []
-    for relative, content in sorted(files.items()):
-        target = local_dir / relative
-        applied = local_dir / APPLIED_DIR_NAME / Path(relative).parts[0]
-        if target.exists() or applied.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(content))
-        written.append(target)
+    for batch in _batches(missing):
+        # 内容经 gzip 压缩后传回：ssh 到 WSL 的标准输出在 2MB 以上会被截断，SQL 文本压缩后不到原来的十分之一
+        code = (f"import base64,gzip,json\nfrom pathlib import Path\nroot=Path({_remote_pending(base)!r})\n"
+                f"print(json.dumps({{r:base64.b64encode(gzip.compress((root/r).read_bytes())).decode() "
+                f"for r in {batch!r}}}))\n")
+        for relative, content in json.loads(remote_python(code, host=host, timeout=300)).items():
+            target = local_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(gzip.decompress(base64.b64decode(content)))
+            written.append(target)
     return written
 
 

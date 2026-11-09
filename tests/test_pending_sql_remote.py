@@ -61,12 +61,29 @@ def test_pull_copies_every_pending_file_once_and_skips_applied_ones(tmp_path, mo
     assert run_command(monkeypatch, "--dir", str(local), "--remote-base", str(base)) == 0
     assert (local / flat.name).read_text() == flat.read_text()
     assert (local / "20261109T000000Z" / "apply.sql").read_text() == nested.read_text()
-    assert not (local / done.name).exists() and len(calls) == 1
-    # 本地已登记执行的文件不再拉回
+    # 一次列出文件清单，一次取回两个文件的内容
+    assert not (local / done.name).exists() and len(calls) == 2
+    # 本地已登记执行的文件不再拉回，也不再传输内容
     (local / "applied").mkdir()
     (local / flat.name).rename(local / "applied" / flat.name)
+    calls.clear()
     assert monitor_host.pull_pending(local, base=str(base)) == []
-    assert not (local / flat.name).exists()
+    assert not (local / flat.name).exists() and len(calls) == 1
+
+
+def test_large_pending_sets_are_fetched_in_batches(tmp_path, monkeypatch):
+    base = server(tmp_path)
+    state = base / "state"
+    paths = [write_pending(state, f"evt{i}", str(i) * 64, {}, f"select {i};\n" + "-- pad\n" * 200) for i in range(3)]
+    calls = []
+    monkeypatch.setattr(monitor_host.subprocess, "run", fake_ssh(calls))
+    monkeypatch.setattr(monitor_host, "PULL_BATCH_BYTES", paths[0].stat().st_size)
+    local = tmp_path / "local"
+    written = monitor_host.pull_pending(local, base=str(base))
+    assert sorted(p.name for p in written) == sorted(p.name for p in paths)
+    assert all((local / p.name).read_text() == p.read_text() for p in paths)
+    # 一次清单，每批一个文件
+    assert len(calls) == 4
 
 
 def test_files_from_the_firecrawl_outage_window_are_neither_pulled_nor_listed(tmp_path, monkeypatch, capsys):
@@ -99,7 +116,8 @@ def test_mark_applied_moves_the_file_on_the_server_so_the_monitor_event_complete
     assert run_command(monkeypatch, "--mark-applied", str(local / sql.name), "--dir", str(local),
                        "--remote-base", str(base)) == 0
     assert (local / "applied" / sql.name).is_file() and (state / "pending_sql" / "applied" / sql.name).is_file()
-    assert not sql.exists() and len(calls) == 2
+    # 拉回（清单、内容）与服务器端登记
+    assert not sql.exists() and len(calls) == 3
     process_events(state, {})
     assert json.loads((state / "events" / "evt1.json").read_text())["status"] == "completed"
 
