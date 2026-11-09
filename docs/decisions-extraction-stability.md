@@ -42,8 +42,8 @@
   - 浏览器路径同样拿到 403 拦截页（「Attention Required! | Cloudflare」），默认 30 秒超时内还会返回 `SCRAPE_TIMEOUT`（HTTP 408）。
   - 本机设置了 `HTTP_PROXY`，访问端口转发地址时必须绕过代理，否则本机代理会返回 502。
 - 促销页上的 Black Friday「75% OFF LASER HAIR REMOVAL」只存在于导航下拉菜单和通知卡片中。ego-lite 渲染时，这些容器高度为 0（`submenu-column`、`notification-card`），鼠标悬停后子菜单容器的计算高度仍是 0；按现有渲染可见性规则，这张卡片不可见。页面顶部横幅只显示「The Black Friday Sale」。
-- Google Maps scraper 在 72.52.161.65 上运行正常，经 SSH 端口转发 18081 → 8081 访问 `/api/v1/jobs` 返回 200。
-- 3002 端口从 Mac 无法直接访问：`crawl` 与 `discover-pages` 在本机地址（`.env` 的 `FIRECRAWL_SELF_HOSTED_API_URL`，13002）不可达时自动建立 `ssh -L 13002:127.0.0.1:3002 firecrawl` 隧道，命令结束时关闭（`utils.firecrawl_client.firecrawl_tunnel`）。
+- Google Maps scraper 在 72.52.161.65 上运行正常，`/api/v1/jobs` 返回 200。
+- Firecrawl（3002）、Google Maps scraper（8081）与 OCR（8082）由本机直接调用 `http://72.52.161.65:<端口>`（`utils.service_endpoints`），请求绕过本机 HTTP 代理；经本机代理访问时代理返回 502。
 - 页面内容：
   - 导航栏每个菜单里重复出现同一条 Black Friday 横幅「75% OFF LASER HAIR REMOVAL ǂ / Select packages」，共 9 次。
   - 正文有 10 张 First Time Specials 卡片，多数只有百分比，没有原价或现价；带价格的只有 Botox $10/unit、Xeomin $7/unit、Instant Glow $90。

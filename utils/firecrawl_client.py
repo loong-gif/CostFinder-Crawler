@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, ContextManager, Dict, Sequence
+from typing import Any, Callable, Dict
 
 import requests
 from dotenv import load_dotenv
@@ -11,9 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from utils.page_title import is_block_page
-from utils.ssh_tunnel import ssh_tunnel
-
-FIRECRAWL_REMOTE_PORT = 3002
+from utils.service_endpoints import FIRECRAWL_URL
 
 
 def firecrawl_session() -> requests.Session:
@@ -177,13 +175,7 @@ def fetched_content(data: dict[str, Any]) -> bool:
 def self_hosted_firecrawl(*, browser: Callable[[str], dict[str, Any]],
                           project_root: Path | None = None) -> SelfHostedFirecrawl:
     load_firecrawl_env(project_root)
-    return SelfHostedFirecrawl(os.environ["FIRECRAWL_SELF_HOSTED_API_URL"].strip("'\""),
-                               os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), browser=browser)
-
-
-def firecrawl_tunnel(api_url: str, command: Sequence[str] | None = None) -> ContextManager[None]:
-    """Firecrawl 只监听服务器本机 3002 端口：本机地址不可达时由命令建立 SSH 隧道，命令结束时关闭。"""
-    return ssh_tunnel(api_url, FIRECRAWL_REMOTE_PORT, "/", command)
+    return SelfHostedFirecrawl(FIRECRAWL_URL, os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), browser=browser)
 
 
 def scrape_page_markdown(fc: Any, url: str) -> tuple[str, dict[str, Any]]:

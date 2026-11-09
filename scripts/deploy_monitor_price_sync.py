@@ -35,7 +35,7 @@ def monitor_launcher(log: str, run_type: str, extra_args: str, *, yield_to_runni
     return (
         '#!/bin/sh\nset -eu\nBASE="'+BASE+'"\nmkdir -p "$BASE/logs" "$BASE/state"\n'
         'exec >>"$BASE/logs/'+log+'" 2>&1\ndate -u\n' + yield_check +
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\n'
+        'export PYTHONUNBUFFERED=1\n'
         'PY="$BASE/.venv/bin/python"\nSTARTED="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"\nCODE=0\n'
         '"$PY" "$BASE/scripts/promo_pipeline.py" monitor --state-dir "$BASE/state"'+extra_args+' || CODE=$?\n'
         '"$PY" "$BASE/scripts/promo_pipeline.py" notify-run --state-dir "$BASE/state" '
@@ -52,7 +52,7 @@ def data_quality_launcher() -> bytes:
     return (
         '#!/bin/sh\nset -eu\n[ "$(TZ=Asia/Shanghai date +%H)" = "09" ] || exit 0\nBASE="'+BASE+'"\n'
         'mkdir -p "$BASE/logs" "$BASE/state"\nexec >>"$BASE/logs/data_quality.log" 2>&1\ndate -u\n'
-        'export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"\nexport PYTHONUNBUFFERED=1\n'
+        'export PYTHONUNBUFFERED=1\n'
         '"$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" deactivate-expired --out-dir "$BASE/state/pending_sql"\n'
         'exec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" quality '
         '--state-dir "$BASE/state" --rest --recheck\n').encode()
@@ -75,7 +75,7 @@ def deploy(host: str, include_credentials: bool):
     if include_credentials:
         values = dotenv_values(ROOT / ".env")
         keys = ("SUPABASE_URL","SUPABASE_SECRET_KEY","SUPABASE_SERVICE_ROLE_KEY",
-                "FIRECRAWL_SELF_HOSTED_API_URL","FIRECRAWL_SELF_HOSTED_API_KEY",
+                "FIRECRAWL_SELF_HOSTED_API_KEY",
                 "LLM_API_KEY","LLM_API_URL","LLM_API_BASE","LLM_MODEL","LLM_BACKEND","GEMINI_API_KEY",
                 "FEISHU_APP_ID","FEISHU_APP_SECRET","FEISHU_NOTIFY_OPEN_ID")
         payload[".env"] = ("\n".join(key+"="+json.dumps(values[key]) for key in keys if values.get(key))+"\n").encode()

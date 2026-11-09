@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import socket
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -12,15 +10,8 @@ import requests
 from PIL import Image
 
 from utils import paddle_ocr_markdown
-from utils.paddle_ocr_markdown import OCR_REMOTE_PORT, ocr_lines, ocr_tunnel
+from utils.paddle_ocr_markdown import ocr_lines
 from utils.render_review import ocr_image
-from utils.ssh_tunnel import MONITOR_HOST, tunnel_command
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 class _Server:
@@ -61,45 +52,7 @@ def _image(fmt: str) -> bytes:
     return buffer.getvalue()
 
 
-NO_PROXY = {"http": None, "https": None}
 OK_LINES = (200, "application/json", json.dumps({"lines": ["Botox $10/unit"]}).encode())
-
-
-def test_default_tunnel_forwards_the_configured_local_port_to_the_ocr_service_host():
-    command = tunnel_command("http://127.0.0.1:18082", OCR_REMOTE_PORT)
-    assert command[0] == "ssh" and command[-1] == MONITOR_HOST == "firecrawl"
-    assert "127.0.0.1:18082:127.0.0.1:8082" in command
-
-
-def test_reachable_service_needs_no_tunnel():
-    service = _Server({"/health": [(200, "application/json", b'{"ok": true}')]})
-    try:
-        with ocr_tunnel(service.url, command=[sys.executable, "-c", "raise SystemExit(3)"]):
-            assert requests.get(f"{service.url}/health", timeout=5, proxies=NO_PROXY).ok
-    finally:
-        service.close()
-
-
-def test_unreachable_service_gets_a_tunnel_for_the_command_and_it_is_closed_afterwards():
-    port = _free_port()
-    url = f"http://127.0.0.1:{port}"
-    # 隧道进程的替身：在本地端口上提供 /health，与 ssh -L 把远端服务映射到本地端口的效果相同
-    serve = ("import http.server,sys\n"
-             "class H(http.server.BaseHTTPRequestHandler):\n"
-             "    def do_GET(self):\n"
-             "        self.send_response(200); self.send_header('Content-Length','2'); self.end_headers(); self.wfile.write(b'{}')\n"
-             f"http.server.HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n")
-    with ocr_tunnel(url, command=[sys.executable, "-c", serve]):
-        assert requests.get(f"{url}/health", timeout=5, proxies=NO_PROXY).ok
-    with pytest.raises(requests.ConnectionError):
-        requests.get(f"{url}/health", timeout=2, proxies=NO_PROXY)
-
-
-def test_a_tunnel_that_cannot_be_opened_stops_the_command():
-    url = f"http://127.0.0.1:{_free_port()}"
-    with pytest.raises(RuntimeError, match="ssh_tunnel_failed"):
-        with ocr_tunnel(url, command=[sys.executable, "-c", "raise SystemExit(255)"]):
-            pass
 
 
 def test_ocr_requests_are_retried_and_a_lasting_failure_stops_the_command(monkeypatch):

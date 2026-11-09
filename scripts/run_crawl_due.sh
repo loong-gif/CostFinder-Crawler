@@ -7,7 +7,6 @@ CAP="${CRAWL_DUE_CAP:-30}"
 mkdir -p "$BASE/logs" "$BASE/state/due_monitor"
 exec >>"$BASE/logs/crawl_due.log" 2>&1
 date -u
-export FIRECRAWL_SELF_HOSTED_API_URL="http://127.0.0.1:3002"
 export PYTHONUNBUFFERED=1
 cd "$BASE"
 PY="$BASE/.venv/bin/python"

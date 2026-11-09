@@ -4,14 +4,13 @@
 """
 from __future__ import annotations
 
-import contextlib
 import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from utils.ego_render import ShardRunner, render_failure, render_pages, run_shard
 from utils.firecrawl_client import GONE_STATUSES
-from utils.paddle_ocr_markdown import filter_promo_image_urls, ocr_tunnel
+from utils.paddle_ocr_markdown import filter_promo_image_urls
 from utils.pipeline_db import write_text
 from utils.render_review import claim_anchors, claim_matches, claim_matches_sources, corpus_text, item_id, ocr_image
 from utils.rendered_visibility_gate import IMAGE_OCR_PROOF, image_claim_verified
@@ -87,9 +86,7 @@ def run_manifest(plan_path: Path, *, shards: int = 4, run: ShardRunner = run_sha
     write_text(run_dir / "visibility_shard.json", json.dumps(shard, ensure_ascii=False, indent=1))
     records = render_pages(shard["items"], run_dir / "visibility_render", name=f"visibility-{run_dir.name}",
                            shards=shards, run=run)
-    needs_ocr = any(_promo_images(records.get(item["url"])) for item in shard["items"] if item["claims"])
-    with ocr_tunnel() if needs_ocr else contextlib.nullcontext():
-        manifest = build_manifest(shard, {"results": list(records.values())})
+    manifest = build_manifest(shard, {"results": list(records.values())})
     return write_text(run_dir / "visibility_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))
 
 

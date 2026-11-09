@@ -34,7 +34,7 @@ from utils.discovery_batch import DISCOVERY_DIR, discovered_path  # noqa: E402
 from utils.discovery_retry import retry_failed_pages, retry_one  # noqa: E402
 from utils.discovery_search import CloudSearch, SearchHealth  # noqa: E402
 from utils.discovery_snapshot import business_contexts, business_rows, known_urls, read_discovery_snapshot  # noqa: E402
-from utils.firecrawl_client import firecrawl_tunnel  # noqa: E402
+from utils.service_endpoints import FIRECRAWL_URL  # noqa: E402
 from utils.page_discovery_run import (  # noqa: E402
     Firecrawl,
     discover_business,
@@ -106,8 +106,7 @@ def main() -> int:
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
-    api_url = os.getenv("FIRECRAWL_SELF_HOSTED_API_URL", "http://127.0.0.1:3002").strip("'\"")
-    fc = Firecrawl(api_url, os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), search_interval=args.search_interval)
+    fc = Firecrawl(FIRECRAWL_URL,os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), search_interval=args.search_interval)
     args.search_health = SearchHealth()
     args.search_client = None
     if args.search_backend == "cloud":
@@ -144,7 +143,7 @@ def main() -> int:
     known = known_urls(snapshot)
 
     started = time.monotonic()
-    with firecrawl_tunnel(api_url), ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         def run_round(group: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             return discover_per_site(group, lambda b: discover_business(fc, b, known, args), pool.map)
 

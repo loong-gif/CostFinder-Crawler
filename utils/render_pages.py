@@ -13,7 +13,6 @@ from typing import Any, Callable, Dict, List, Mapping, Tuple
 
 from utils.discovery_batch import decisions_path, render_dir
 from utils.ego_render import ShardRunner, render_failure, render_pages, run_shard
-from utils.paddle_ocr_markdown import ocr_tunnel
 from utils.pipeline_db import write_text
 from utils.render_review import build_deep_items, deep_verdict, ocr_image
 
@@ -84,8 +83,7 @@ def review_batch(batch: Path, *, shards: int = 4, run: ShardRunner = run_shard) 
     if needs_ocr:
         image_dir = work / "images"
         image_dir.mkdir(parents=True, exist_ok=True)
-        with ocr_tunnel():
-            image_verdicts(verdicts, needs_ocr, items, records, lambda url: ocr_image(url, image_dir))
+        image_verdicts(verdicts, needs_ocr, items, records, lambda url: ocr_image(url, image_dir))
     write_text(work / "verdicts.json", json.dumps(verdicts, ensure_ascii=False, indent=1))
     apply_render_verdicts(payload["decisions"], verdicts)
     counts = dict(collections.Counter(r["decision"] for r in payload["decisions"]))

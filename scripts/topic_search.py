@@ -14,7 +14,6 @@ and lookups are not repeated. Read-only against the database.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import sys
@@ -28,7 +27,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.gmaps_scraper_client import GMAPS_SCRAPER_URL, GmapsClient, gmaps_tunnel  # noqa: E402
+from utils.gmaps_scraper_client import GMAPS_SCRAPER_URL, GmapsClient  # noqa: E402
+from utils.service_endpoints import FIRECRAWL_URL  # noqa: E402
 from utils.page_discovery_run import Firecrawl  # noqa: E402
 from utils.topic_search import (DEFAULT_QUERY_TEMPLATES, expand_queries, lookup_keyword,  # noqa: E402
                                 match_with_lookups, run_topic_search, search_report)
@@ -58,8 +58,7 @@ def main() -> int:
         hits = json.loads(hits_path.read_text())
     else:
         load_dotenv(PROJECT_ROOT / ".env")
-        firecrawl = Firecrawl(os.environ["FIRECRAWL_SELF_HOSTED_API_URL"].strip("'\""),
-                              os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""))
+        firecrawl = Firecrawl(FIRECRAWL_URL, os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""))
         queries = expand_queries(args.query or DEFAULT_QUERY_TEMPLATES, args.area)
         hits = run_topic_search(firecrawl.search, queries, limit=args.limit, interval=args.interval)
         hits_path.write_text(json.dumps(hits, indent=1, ensure_ascii=False))
@@ -68,20 +67,16 @@ def main() -> int:
     proxies = [p.strip() for p in os.getenv("GMAPS_SCRAPER_PROXIES", "").split(",") if p.strip()]
     city = args.lookup_city or args.city[0]
 
-    with contextlib.ExitStack() as stack:
-        clients: List[GmapsClient] = []
+    client = GmapsClient(GMAPS_SCRAPER_URL, proxies=proxies)
 
-        def lookup(root: str) -> List[Dict[str, Any]]:
-            if not clients:  # 有站点要补查时才建立 scraper 隧道
-                stack.enter_context(gmaps_tunnel())
-                clients.append(GmapsClient(GMAPS_SCRAPER_URL, proxies=proxies))
-            return clients[0].discover(f"costfinder-lookup-{root}", [lookup_keyword(root, city, args.state)],
-                                       depth=1, max_time=900, wait_timeout=LOOKUP_WAIT_S)
+    def lookup(root: str) -> List[Dict[str, Any]]:
+        return client.discover(f"costfinder-lookup-{root}", [lookup_keyword(root, city, args.state)],
+                               depth=1, max_time=900, wait_timeout=LOOKUP_WAIT_S)
 
-        def save(lookups: Dict[str, List[Dict[str, Any]]]) -> None:
-            lookups_path.write_text(json.dumps(lookups, indent=1, ensure_ascii=False))
+    def save(lookups: Dict[str, List[Dict[str, Any]]]) -> None:
+        lookups_path.write_text(json.dumps(lookups, indent=1, ensure_ascii=False))
 
-        matched, _, lookups = match_with_lookups(hits, places, args.city, lookup, done=done, save=save)
+    matched, _, lookups = match_with_lookups(hits, places, args.city, lookup, done=done, save=save)
     report = search_report(hits, matched)
     register = list({p["google_place_id"]: p for c in matched["clinics"] for p in c["places"]}.values())
     seeds = {c["root"]: {"website": c["website"], "candidates": c["candidates"]} for c in matched["clinics"]}

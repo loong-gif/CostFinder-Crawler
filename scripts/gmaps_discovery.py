@@ -7,11 +7,9 @@ never-discovered cities first, at most ``--max-cities``): each city's places go 
 ``output/pipeline/discover_businesses/<UTC timestamp>/<city>_<state>.json`` and are registered right away
 (apply.sql per city, run through the Supabase MCP), which also moves the city's next discovery date.
 
-The scraper runs on the Firecrawl server (127.0.0.1:8081 there, task ``CostFinderGmapsScraper``); when it is
-unreachable the command opens an SSH tunnel to it for the run and closes it afterwards
-(``utils.gmaps_scraper_client.gmaps_tunnel``). The address comes from the environment: ``GMAPS_SCRAPER_URL``
-(default http://127.0.0.1:18081, the tunnel) and optional ``GMAPS_SCRAPER_PROXIES`` (comma-separated proxy URLs;
-the server reaches Google directly, so none is needed).
+The scraper runs on the monitor server (port 8081, task ``CostFinderGmapsScraper``) and is called directly at the
+address in ``utils.service_endpoints``. ``GMAPS_SCRAPER_PROXIES`` (comma-separated proxy URLs) is optional; the server
+reaches Google directly, so none is needed.
 """
 from __future__ import annotations
 
@@ -33,7 +31,6 @@ from utils.gmaps_scraper_client import (  # noqa: E402
     DEFAULT_KEYWORD_TEMPLATES,
     GMAPS_SCRAPER_URL,
     GmapsClient,
-    gmaps_tunnel,
 )
 
 OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "discover_businesses"
@@ -84,11 +81,10 @@ def main() -> int:
     if not args.due and not (args.city and args.state and args.out):
         parser.error("--city, --state and --out are required without --due")
     client = scraper_client()
-    with gmaps_tunnel():
-        if args.due:
-            discover_due(client, args)
-            return 0
-        places = discover_city(client, args.city, args.state, args)
+    if args.due:
+        discover_due(client, args)
+        return 0
+    places = discover_city(client, args.city, args.state, args)
     args.out.write_text(json.dumps(places, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {args.out}")
     return 0

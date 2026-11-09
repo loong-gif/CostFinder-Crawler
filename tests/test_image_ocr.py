@@ -52,7 +52,7 @@ def _ocr_service_reachable() -> bool:
 
 requires_ocr_service = pytest.mark.skipif(
     not _ocr_service_reachable(),
-    reason="PaddleOCR service unreachable; commands open the tunnel with utils.paddle_ocr_markdown.ocr_tunnel")
+    reason="PaddleOCR service on the monitor server is unreachable")
 
 
 def test_image_ocr_has_a_single_entry_point():

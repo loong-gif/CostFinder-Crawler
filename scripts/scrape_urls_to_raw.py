@@ -1,6 +1,5 @@
 """爬虫层：用自托管 Firecrawl 抓取已决定加入的页面，原始结果写入本地 raw 文件存储。"""
 import argparse
-import contextlib
 import json
 import os
 import threading
@@ -11,7 +10,7 @@ import requests
 from dotenv import load_dotenv
 
 from utils.discovery_batch import DECISIONS
-from utils.firecrawl_client import firecrawl_tunnel, self_hosted_firecrawl
+from utils.firecrawl_client import self_hosted_firecrawl
 from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_fingerprint
 from utils.browser_scrape import BrowserScrapeFailed, ego_scrape, scrapling_browser_scrape, scrapling_scrape
 from utils.linked_terms import collect_linked_terms
@@ -112,8 +111,7 @@ def main() -> int:
         save_scrape_response(store, fingerprint, url, payload, success=True)
         return "ok"
 
-    with firecrawl_tunnel(firecrawl.api_url) if firecrawl else contextlib.nullcontext():
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            outcomes = list(pool.map(scrape, urls))
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        outcomes = list(pool.map(scrape, urls))
     print({name: outcomes.count(name) for name in set(outcomes)}, "urls", len(urls))
     return 0

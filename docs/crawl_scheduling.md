@@ -78,10 +78,9 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
   `crawl_scheduler.py record --apply`。单次上限用环境变量 `CRAWL_DUE_CAP` 调整。
 - 该任务只更新 `state/crawl_schedule/`，不会写数据库；每日监控（按页面 7/15/30 天档期抓取，见 `docs/monitor_price_sync.md`）与每小时重试任务不变。
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。
-- 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，只监听该机 `127.0.0.1:8081`，
+- 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，监听 `0.0.0.0:8081`（服务器防火墙只放行项目 IP），
   Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
-  不需要代理。`discover-businesses` 与 `topic-search` 的默认地址是 `GMAPS_SCRAPER_URL=http://127.0.0.1:18081`，
-  不可达时命令自动建立 `ssh -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl` 隧道，命令结束时关闭。
+  不需要代理。`discover-businesses` 与 `topic-search` 直接调用 `utils.service_endpoints` 中的地址（`http://72.52.161.65:8081`）。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 

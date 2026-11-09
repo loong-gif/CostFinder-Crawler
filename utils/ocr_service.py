@@ -1,7 +1,7 @@
-"""PaddleOCR 服务，运行在监控服务器的 OCR 专用环境里，只监听本机 127.0.0.1。
+"""PaddleOCR 服务，运行在监控服务器的 OCR 专用环境里，监听所有网卡的 8082 端口（服务器防火墙只放行项目 IP）。
 
 POST /ocr 收一张图片的原始字节，返回 {"lines": [...]}（行合并见 utils/ocr_rows.py）；GET /health 返回 {"ok": true}。
-本机流水线通过 SSH 隧道调用，入口见 utils/paddle_ocr_markdown.py 的 ocr_lines。
+本机流水线直接调用，入口见 utils/paddle_ocr_markdown.py 的 ocr_lines，地址见 utils/service_endpoints.py。
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from paddleocr import PaddleOCR
 
 from utils.ocr_rows import rows_from_detections
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 MAX_IMAGE_BYTES = 30 * 1024 * 1024
 
 # oneDNN 加速在 PaddlePaddle 3.x 的静态图推理里会报 ConvertPirAttribute2RuntimeAttribute，关闭它

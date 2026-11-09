@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 from utils.ego_browser import BrowserScrapeFailed, ego_scrape
 from utils.firecrawl_client import fetched_content, page_gone
+from utils.service_endpoints import FIRECRAWL_URL
 from utils.monitor_price_store import atomic_json, digest, run_lock
 DEFAULT_STATE_DIR = PROJECT_ROOT / "output" / "self_hosted_monitor_state"
 
@@ -449,7 +450,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--timeout", type=float, default=float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS", "120")))
     parser.add_argument("--workers", type=int, default=int(os.getenv("FIRECRAWL_MONITOR_WORKERS", "5")))
-    parser.add_argument("--api-url", default=os.getenv("FIRECRAWL_SELF_HOSTED_API_URL") or os.getenv("FIRECRAWL_API_URL") or "http://127.0.0.1:3002")
+    parser.add_argument("--api-url", default=FIRECRAWL_URL)
     parser.add_argument("--api-key", default=os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY") or os.getenv("FIRECRAWL_API_KEY") or "")
     parser.add_argument("--send-notifications", action="store_true")
     return parser.parse_args()

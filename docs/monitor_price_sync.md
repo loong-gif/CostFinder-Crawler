@@ -16,11 +16,11 @@ Daily、00:30，下次运行 2026-11-07 00:30。
 图片里的促销与会员权益由服务器上的 PaddleOCR 识别（`utils/ocr_service.py`，PP-OCRv6 模型）。它运行在独立的
 Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.14 的安装包；系统库 `libgomp` 解压在该目录的
 `lib_root/`，不改系统；关闭 oneDNN 加速以避开 PaddlePaddle 3.x 的 `ConvertPirAttribute2RuntimeAttribute` 报错），
-只监听服务器本机 `127.0.0.1:8082`，由 Windows 任务 `CostFinderOcrService`（登录时启动，
+监听服务器 8082 端口（服务器防火墙只放行项目 IP），由 Windows 任务 `CostFinderOcrService`（登录时启动，
 `wsl.exe -d Ubuntu -- /home/loong/costfinder_monitor/run_ocr_service.sh`，日志 `logs/ocr_service.log`）启动。
-本机流水线的唯一入口是 `utils.paddle_ocr_markdown.ocr_lines`，经 `OCR_SERVICE_URL`（默认 `http://127.0.0.1:18082`）调用；
-`render-pages` 与 `visibility-manifest` 在服务不可达时用 `ocr_tunnel` 自动建立 `ssh -N -L 127.0.0.1:18082:127.0.0.1:8082 firecrawl`
-子进程，命令结束时关闭。服务暂时不可用时 `ocr_lines` 按递增间隔重试，仍失败即终止命令。
+流水线的唯一入口是 `utils.paddle_ocr_markdown.ocr_lines`，直接调用 `utils.service_endpoints` 中的地址（本机
+`http://72.52.161.65:8082`，服务器上的任务 `http://127.0.0.1:8082`）。服务暂时不可用时 `ocr_lines` 按递增间隔重试，
+仍失败即终止命令。
 同一行的多个检测框按纵向位置合并为一行（`utils/ocr_rows.py`），服务名与价格因此保持在同一行。
 `tests/test_image_ocr.py` 里三个依赖真实识别的测试在服务不可达时跳过。
 

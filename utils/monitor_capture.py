@@ -11,6 +11,7 @@ from utils.monitor_frequency import due_urls, load_schedule, record_reports
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json, now
 from utils.monitor_queue import config_kinds, config_urls
+from utils.service_endpoints import FIRECRAWL_URL
 
 
 def capture_urls(root: Path, config: dict, quality_urls: set[str], *, retry_only: bool,
@@ -36,7 +37,7 @@ def capture(root: Path, config: dict, names: list[str], selected_urls: set[str] 
         filtered = {url for url in selected_urls if url in target_urls} if selected_urls is not None else None
         if filtered is not None and not filtered:
             continue
-        reports.append(run_monitor(config, name, api_url=os.getenv("FIRECRAWL_SELF_HOSTED_API_URL", "http://127.0.0.1:3002"),
+        reports.append(run_monitor(config, name, api_url=FIRECRAWL_URL,
             api_key=os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), state_dir=root,
             timeout=float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS", "120")), limit=limit,
             workers=int(os.getenv("FIRECRAWL_MONITOR_WORKERS", "3")), send_notifications=False,

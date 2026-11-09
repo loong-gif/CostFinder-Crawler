@@ -4,24 +4,17 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 import re
 import time
-from typing import Any, ContextManager, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import requests
 
-from utils.ssh_tunnel import ssh_tunnel
+from utils.service_endpoints import GMAPS_URL
 
 DEFAULT_KEYWORD_TEMPLATES = ("med spa in {city}, {state}", "aesthetic clinic in {city}, {state}", "botox in {city}, {state}")
-# scraper 在监控服务器上只监听本机 8081 端口；本机经隧道在 GMAPS_SCRAPER_URL 访问
-GMAPS_SCRAPER_URL = os.getenv("GMAPS_SCRAPER_URL", "http://127.0.0.1:18081")
-GMAPS_REMOTE_PORT = 8081
-
-
-def gmaps_tunnel() -> ContextManager[None]:
-    """scraper 不可达时由命令建立 SSH 隧道，命令结束时关闭。"""
-    return ssh_tunnel(GMAPS_SCRAPER_URL, GMAPS_REMOTE_PORT, "/api/v1/jobs")
+# scraper 运行在监控服务器上，地址见 utils.service_endpoints
+GMAPS_SCRAPER_URL = GMAPS_URL
 _STATE_ZIP = re.compile(r",\s*([A-Z]{2})\s+\d{5}")
 
 
