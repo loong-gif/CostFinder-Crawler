@@ -26,11 +26,16 @@ def _address_key(address) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(address or "").casefold()))
 
 
+def _host(url) -> str:
+    text = str(url or "")
+    return (urlsplit(text if "://" in text else "https://" + text).hostname or "").lower().removeprefix("www.")
+
+
 def bind_source(url: str, snapshot: dict) -> list[dict]:
     """来源页面对应的商家，按 business_id 排序。
 
-    多家商家共用同一来源页面（连锁品牌的统一促销页）时，地址各不相同的是不同分店，每家各写一份；
-    地址相同或缺失时无法区分是分店还是重复登记，交人工审查。
+    已有促销或服务行指向这个页面的商家各写一份（连锁分店共用统一促销页）。没有任何既有行、只能按网站域名
+    找到多家商家时，地址各不相同的是不同分店；地址相同或缺失时无法区分是分店还是重复登记，交人工审查。
     """
     check_promotion_source(url, snapshot)
     canonical = normalize_source_url(url)
@@ -44,16 +49,12 @@ def bind_source(url: str, snapshot: dict) -> list[dict]:
                         matches.add(row["business_id"])
                 except ValueError:
                     pass
+    by_rows = bool(matches)
     if not matches:
-        domain = urlsplit(url).hostname.lower().removeprefix("www.")
-        for row in snapshot["businesses"]:
-            website = str(row.get("website") or "")
-            host = urlsplit(website if "://" in website else "https://"+website).hostname
-            if host and host.lower().removeprefix("www.") == domain:
-                matches.add(row["business_id"])
+        matches = {row["business_id"] for row in snapshot["businesses"] if _host(row.get("website")) == _host(url)}
     if not matches:
         raise RuntimeError("source_business_missing")
-    if len(matches) > 1:
+    if len(matches) > 1 and not by_rows:
         addresses = {row["business_id"]: _address_key(row.get("address")) for row in snapshot["businesses"]
                      if row["business_id"] in matches}
         keys = [addresses.get(business_id, "") for business_id in matches]
@@ -62,17 +63,22 @@ def bind_source(url: str, snapshot: dict) -> list[dict]:
     return [{"business_id":business_id, "url":url} for business_id in sorted(matches)]
 
 
+def redirect_stays_with_business(final_url: str, url: str, sources: list[dict], snapshot: dict) -> bool:
+    """同域跳转，或跳到每个绑定商家自己登记的网站（网站迁移）；跳到第三方网站返回 False。"""
+    if _host(final_url) == _host(url):
+        return True
+    websites = {row["business_id"]: _host(row.get("website")) for row in snapshot["businesses"]}
+    return all(websites.get(source["business_id"]) == _host(final_url) for source in sources)
+
+
 def not_found_plan(source: dict, graph: dict, protections: dict) -> dict:
-    """页面确认 404：停用该商家在这个来源上唯一的有效促销及其 offer。"""
-    active = [p for p in graph["promotions"] if p.get("is_active") is True]
-    if len(active) != 1:
-        raise RuntimeError("not_found_source_match_requires_review")
-    parent_id = active[0]["promotion_id"]
+    """页面确认 404：停用该商家在这个来源上的全部有效促销及其 offer；没有有效促销时不做任何改动。"""
+    parents = {p["promotion_id"] for p in graph["promotions"] if p.get("is_active") is True}
     operations = [{"table":"promo_offer_master","action":"update","id":o["id"],
                    "values":{"is_active":False}} for o in graph["offers"]
-                  if o.get("is_active") is True and o["promotion_id"] == parent_id]
-    operations.append({"table":"clinic_promotions","action":"update","id":parent_id,
-                       "values":{"is_active":False}})
+                  if o.get("is_active") is True and o["promotion_id"] in parents]
+    operations.extend({"table":"clinic_promotions","action":"update","id":parent_id,
+                       "values":{"is_active":False}} for parent_id in sorted(parents))
     _protect(graph,operations,protections)
     return {"schema_version":1,"status":"ready","source":source,"before":graph,
             "operations":operations,"review":[],"evidence_summary":{"confirmed_http_and_visible_404":True},

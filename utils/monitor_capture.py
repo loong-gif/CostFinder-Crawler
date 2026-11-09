@@ -8,6 +8,7 @@ from typing import Callable
 
 from utils.monitor_event_queue import retry_failed_scrape_urls
 from utils.monitor_frequency import due_urls, load_schedule, record_reports
+from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json, now
 from utils.monitor_queue import config_kinds, config_urls
 
@@ -19,10 +20,11 @@ def capture_urls(root: Path, config: dict, quality_urls: set[str], *, retry_only
         return retry_failed_scrape_urls(root, config)
     if capture_all:
         return None
-    # 每天运行：只抓轮询到期的页面，加上到期活动与数据质量复查要求的页面
+    # 每天运行：抓轮询到期的页面、到期活动与数据质量复查要求的页面，以及暂停小时重试的页面（每天续跑一次）
     configured = set(config_urls(config))
     schedule = load_schedule(root, configured, started, config_kinds(config))
-    return due_urls(schedule, configured, started) | quality_urls
+    paused = RetryLimits(root).paused_urls() & configured
+    return due_urls(schedule, configured, started) | quality_urls | paused
 
 
 def capture(root: Path, config: dict, names: list[str], selected_urls: set[str] | None, *, limit: int | None,

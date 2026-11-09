@@ -70,13 +70,12 @@ class RetryLimits:
         self.state["scrape"] = states
         self.save()
 
-    def review(self, stage, url):
-        return {**self.get(stage, url), "url": url, "status": "review", "retry_stage": stage,
-                "category": "retry_limit_reached", "hourly_retry_paused": True,
-                "review": [{"reason": "retry_limit_reached", "blocking": True}]}
-
-    def paused_reviews(self):
-        return [self.review(stage, value["url"])
+    def paused_sources(self):
+        """暂停小时重试的来源（通知用）；它们由每日任务继续抓取重试，不进入审查。"""
+        return [{**value, "retry_stage": stage, "hourly_retry_paused": True}
                 for stage in ("scrape", "processing", "recovery")
                 for value in self.state[stage].values()
                 if value["consecutive_failures"] >= MAX_CONSECUTIVE_FAILURES]
+
+    def paused_urls(self):
+        return {row["url"] for row in self.paused_sources()}

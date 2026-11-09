@@ -53,7 +53,7 @@ def report_message(report: Mapping[str, Any], *, started_at: str, exit_code: int
         lines.append(f"  · {row['url']}")
     paused = report.get("paused_retries", [])
     if paused:
-        lines.append(f"暂停重试并待审查：{len(paused)} 个来源")
+        lines.append(f"暂停小时重试：{len(paused)} 个来源（每日任务继续重试）")
     errors = [error for row in monitors for error in row.get("page_errors", [])]
     if errors:
         lines.append(f"抓取失败页面（列出 {min(len(errors), MAX_LISTED)}/{len(errors)}）：")

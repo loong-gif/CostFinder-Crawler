@@ -28,9 +28,6 @@ def resources_complete(frames: list[dict], text: str = "") -> bool:
 
 
 def confirmed_not_found(browser: dict) -> bool:
+    """文档请求返回 HTTP 404 且页面已完整渲染出截图：页面已下架。"""
     return bool(browser.get("http_status") == 404 and browser.get("scroll_complete")
-                and Path(browser.get("screenshot_path", "")).is_file()
-                and not browser.get("failures") and re.search(
-                    r"\bpage\b.{0,30}\b(?:not\s+found|does not exist|doesn't exist)\b|"
-                    r"\b404\s*[-: ]*\s*(?:page\s*)?(?:not\s+found|error)\b",
-                    browser.get("text", ""), re.I))
+                and Path(browser.get("screenshot_path", "")).is_file())

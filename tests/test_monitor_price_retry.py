@@ -55,7 +55,7 @@ def test_three_failed_runs_pause_hourly_fetch_and_weekly_success_resets(tmp_path
         assert selected == ({URL} if count < 3 else set())
         assert RetryLimits(tmp_path).get("scrape", URL)["consecutive_failures"] == count
     assert Monitor.calls == 6  # Each failed page run still has two HTTP attempts.
-    assert RetryLimits(tmp_path).paused_reviews()[0]["category"] == "retry_limit_reached"
+    assert RetryLimits(tmp_path).paused_sources()[0]["hourly_retry_paused"] is True
     # The next weekly capture is not filtered by the hourly limit.
     assert capture()["error"] == 1
     assert retry_failed_scrape_urls(tmp_path, CONFIG) == set()
@@ -90,12 +90,12 @@ def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_reset
         runner.process_events(tmp_path, SNAPSHOT, retryable_only=count > 1)
         assert len(calls) == count
     assert RetryLimits(tmp_path).paused("processing", URL)
-    assert json.loads(path.read_text())["status"] == "review"
+    assert json.loads(path.read_text())["status"] == "retryable"
     # A new event / URL variant must not silently reopen a paused source hourly.
     newer = setup_event(tmp_path, "2", "http://www.a.test/specials/")
     runner.process_events(tmp_path, SNAPSHOT)
     runner.process_events(tmp_path, SNAPSHOT, retryable_only=True)
-    assert len(calls) == 3 and json.loads(newer.read_text())["status"] == "review"
+    assert len(calls) == 3 and json.loads(newer.read_text())["status"] == "retryable"
     fresh = tmp_path / "evidence/fresh.json"
     atomic_json(fresh, {"url": URL, "captured_at": datetime.now(timezone.utc).isoformat(), "markdown": "fresh $12"})
     monkeypatch.setattr(runner, "render_page", lambda url, *a, **k: calls.append("browser") or {"accessible": True, "final_url": url})
@@ -156,7 +156,8 @@ def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_p
     report = json.loads((tmp_path / "sync_report.json").read_text())
     assert writes == ["ready"]
     assert {r["retry_stage"] for r in report["paused_retries"]} == {"scrape", "processing"}
-    assert any(r.get("category") == "retry_limit_reached" for r in json.loads((tmp_path / "review_queue.json").read_text()))
+    # 暂停小时重试只是通知，每日任务继续抓取，不进审查清单
+    assert json.loads((tmp_path / "review_queue.json").read_text()) == []
 
 
 def pending_file_renderer(rendered):

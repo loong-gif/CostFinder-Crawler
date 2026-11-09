@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-import re
-
 from utils.monitor_price_plan_campaign import _campaign
 from utils.monitor_price_plan_common import _Review, _text
 from utils.monitor_price_plan_offer import _resolve_items, _term_values, _validated_offer
 from utils.monitor_price_plan_variant import _variant_catalog_complete, _variant_reconciliation_records
 from utils.monitor_price_writer_plan import WriterError
+from utils.offer_stage_spec import BENIGN_REASONS
 from utils.promo_offer_items_db import is_blanket_offer_text
-
-
-_NON_MEMBER = re.compile(r"\bnon[- ]?members?\b", re.I)
 
 
 def collect_expected_offers(raw_offers: list, evidence: dict, markdown: str, observed_date: str | None,
                             promotions: list[dict], services: list[dict], business_id: int,
-                            plan: dict, warning, expired_campaigns: list) -> tuple[list, int]:
+                            plan: dict, warning, expired_campaigns: list) -> tuple[list, int, set[str]]:
+    """返回 (当前 offer, 不构成促销的条数, 已过期 offer 的原文)。"""
     expected: list[tuple[dict, list[dict], dict, dict, int]] = []
     non_promo = 0
+    expired_quotes: set[str] = set()
     for index, raw in enumerate(raw_offers):
         if not isinstance(raw, dict):
             warning("invalid_offer_evidence", index)
@@ -32,7 +30,8 @@ def collect_expected_offers(raw_offers: list, evidence: dict, markdown: str, obs
         try:
             resolved_items = _resolve_items(raw, services, business_id)
             master, reason = _validated_offer(raw, markdown, resolved_items)
-            if master is None and reason == "no_supported_promo_fact":
+            if master is None and reason in BENIGN_REASONS:
+                # 赠品、没有可存价格的条目不是可写的 offer：过滤，不存也不审查
                 non_promo += 1
                 plan["notes"].append({"reason": reason, "offer_index": index, "blocking": False})
                 continue
@@ -43,14 +42,15 @@ def collect_expected_offers(raw_offers: list, evidence: dict, markdown: str, obs
                 plan["notes"].append({"reason": "service_mapping_pending", "offer_index": index, "blocking": False})
             campaign = _campaign(raw, evidence)
             if observed_date and campaign["campaign_end_date"] and campaign["campaign_end_date"] < observed_date:
+                # 已过期的活动不写入；同一结束日期（和标题）的现有促销全部下架
                 matches = [p for p in promotions if p.get("is_active") is True
                            and p.get("campaign_end_date") == campaign["campaign_end_date"]
                            and (not campaign["promotion_title"] or _text(p.get("promotion_title")) == _text(campaign["promotion_title"]))]
-                if len(matches) != 1:
-                    warning("expired_campaign_evidence" if not matches else "expired_campaign_identity_requires_review", index)
-                else:
-                    expired_campaigns.append(matches[0]["promotion_id"])
-                    plan["notes"].append({"reason":"expired_campaign_verified", "promotion_id":matches[0]["promotion_id"], "blocking":False})
+                expired_campaigns.extend(p["promotion_id"] for p in matches)
+                non_promo += 1
+                expired_quotes.add(_text(raw.get("offer_raw_text")))
+                plan["notes"].append({"reason": "expired_campaign_not_written", "offer_index": index,
+                                      "promotion_ids": [p["promotion_id"] for p in matches], "blocking": False})
                 continue
             if master["price_model"] == "from":
                 if _variant_reconciliation_records(evidence) and not _variant_catalog_complete(evidence):
@@ -59,12 +59,8 @@ def collect_expected_offers(raw_offers: list, evidence: dict, markdown: str, obs
                 plan["notes"].append({"reason": "starting_price_variant_set_incomplete",
                                       "offer_index": index, "blocking": False})
                 plan["evidence_summary"]["complete"] = False
-            if raw.get("is_membership_required") and raw.get("regular_price") is None:
-                promo_blob = _text(markdown)
-                if _NON_MEMBER.search(promo_blob) or _NON_MEMBER.search(str(raw.get("offer_raw_text") or "")):
-                    warning("member_regular_price_missing", index)
             terms = _term_values(master)
             expected.append((master, resolved_items, campaign, terms, index))
         except (_Review, WriterError) as exc:
             warning(str(exc), index)
-    return expected, non_promo
+    return expected, non_promo, expired_quotes

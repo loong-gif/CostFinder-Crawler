@@ -23,27 +23,24 @@ def test_unsupported_quote_does_not_block_independent_valid_offer_or_allow_remov
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
 
 
-def test_inactive_historical_promotion_is_never_resurrected_by_url():
+def test_inactive_promotion_of_the_source_is_reactivated_with_its_visible_offer():
     graph = _graph()
     graph["promotions"][0]["is_active"] = False
     graph["offers"][0]["is_active"] = False
     plan = build_plan(SOURCE, graph, _evidence(), {})
     assert plan["status"] == "ready", plan
-    assert all(op["action"] == "insert" for op in plan["operations"])
-    assert plan["before"]["promotions"][0]["is_active"] is False
-    assert plan["operations"][0]["values"]["campaign_end_date"] is None
+    assert not any(op["action"] == "insert" for op in plan["operations"])
+    assert _operation(plan, "clinic_promotions", 3)["values"]["is_active"] is True
+    assert _operation(plan, "promo_offer_master", 4)["values"]["is_active"] is True
 
 
-def test_distinct_current_campaign_inserts_promotion_without_rewriting_history():
-    graph = _graph()
-    graph["promotions"][0].update(promotion_title="September specials", campaign_end_date="2026-09-30", is_active=False)
-    graph["offers"][0]["is_active"] = False
+def test_new_campaign_on_the_same_source_updates_its_single_promotion_row():
     evidence = _evidence(promotion_title="October specials", promotion_end_date="2026-10-31")
-    plan = build_plan(SOURCE, graph, evidence, {})
+    plan = build_plan(SOURCE, _graph(), evidence, {})
     assert plan["status"] == "ready", plan
-    assert all(op["action"] == "insert" for op in plan["operations"])
-    assert plan["operations"][0]["values"]["campaign_end_date"] == "2026-10-31"
-    assert plan["before"]["promotions"][0]["promotion_title"] == "September specials"
+    assert not any(op["action"] == "insert" for op in plan["operations"])
+    values = _operation(plan, "clinic_promotions", 3)["values"]
+    assert values["promotion_title"] == "October specials" and values["campaign_end_date"] == "2026-10-31"
 
 
 def test_two_campaigns_with_same_url_without_current_identity_require_review():
@@ -109,11 +106,14 @@ def test_explicit_empty_cascade_respects_protected_item():
 
 
 def test_expired_campaign_evidence_cannot_create_or_reactivate_offers():
+    graph = _graph()
+    graph["promotions"][0]["is_active"] = False
+    graph["offers"][0]["is_active"] = False
     evidence = _evidence(promotion_title="September specials", promotion_end_date="2026-09-30",
                          observed_date="2026-10-09")
-    plan = build_plan(SOURCE, _graph(), evidence, {})
-    assert plan["status"] == "review" and not plan["operations"]
-    assert plan["review"][-1]["reason"] == "expired_campaign_evidence"
+    plan = build_plan(SOURCE, graph, evidence, {})
+    assert plan["status"] == "ready" and not plan["operations"] and plan["review"] == []
+    assert plan["notes"][-1]["reason"] == "no_offers_and_no_live_rows"
 
 
 def test_unknown_current_dates_clear_old_dates_without_blocking():
@@ -125,12 +125,12 @@ def test_unknown_current_dates_clear_old_dates_without_blocking():
 
 
 @pytest.mark.parametrize("yearless", ["10/31", "October 31"])
-def test_yearless_model_date_is_null_instead_of_a_write_blocker(yearless):
+def test_yearless_model_date_takes_the_observed_year(yearless):
     graph = _graph()
     graph["promotions"][0]["campaign_end_date"] = "2026-09-30"
-    plan = build_plan(SOURCE, graph, _evidence(campaign_end_date=yearless), {})
+    plan = build_plan(SOURCE, graph, _evidence(campaign_end_date=yearless, observed_date="2026-10-09"), {})
     assert plan["status"] == "ready", plan
-    assert _operation(plan, "clinic_promotions", 3)["values"]["campaign_end_date"] is None
+    assert _operation(plan, "clinic_promotions", 3)["values"]["campaign_end_date"] == "2026-10-31"
 
 
 def test_unmapped_existing_offer_price_change_preserves_offer_and_item_ids():
@@ -175,22 +175,25 @@ def test_unknown_year_does_not_inherit_expired_parent_date():
     assert _operation(plan, "clinic_promotions", 3)["values"]["campaign_end_date"] is None
 
 
-def test_model_cannot_borrow_footer_year_for_a_yearless_campaign_date():
+def test_yearless_page_date_matches_the_model_date_only_in_the_observed_year():
     graph = _graph()
     graph["promotions"][0]["campaign_end_date"] = "2026-09-30"
-    evidence = _evidence(promotion_title="Specials", campaign_end_date="2026-10-31")
+    evidence = _evidence(promotion_title="Specials", campaign_end_date="2027-10-31", observed_date="2026-10-09")
     evidence["date_text"] = "Offers valid through 10/31. Copyright 2026."
     plan = build_plan(SOURCE, graph, evidence, {})
     assert plan["status"] == "ready", plan
     assert _operation(plan, "clinic_promotions", 3)["values"]["campaign_end_date"] is None
-    evidence["date_text"] = "Offers valid through October 31, 2026."
+    evidence["campaign_end_date"] = "2026-10-31"
     plan = build_plan(SOURCE, graph, evidence, {})
-    assert _operation(plan, "clinic_promotions", -1)["values"]["campaign_end_date"] == "2026-10-31"
+    assert _operation(plan, "clinic_promotions", 3)["values"]["campaign_end_date"] == "2026-10-31"
 
 
-def test_explicit_two_digit_expired_year_is_not_cleared_as_unknown():
-    evidence = _evidence(campaign_end_date="2026-09-30", observed_date="2026-10-11")
+def test_explicit_two_digit_expired_year_retires_the_matching_campaign():
+    graph = _graph()
+    graph["promotions"][0]["campaign_end_date"] = "2026-09-30"
+    evidence = _evidence(campaign_end_date="2026-09-30", observed_date="2026-10-11",
+                         all_offers_extracted=True, image_review_complete=True)
     evidence["date_text"] = "Expires 09/30/26"
-    plan = build_plan(SOURCE, _graph(), evidence, {})
-    assert plan["status"] == "review"
-    assert plan["review"][-1]["reason"] == "expired_campaign_evidence"
+    plan = build_plan(SOURCE, graph, evidence, {})
+    assert plan["status"] == "ready" and plan["review"] == [], plan
+    assert _operation(plan, "clinic_promotions", 3)["values"] == {"is_active": False}

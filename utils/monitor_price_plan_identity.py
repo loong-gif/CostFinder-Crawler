@@ -85,15 +85,28 @@ def select_existing_promotion(promotions: list[dict], campaign: dict, source_pro
         candidates = [p for p in candidates if p["promotion_id"] == source_promotion_id]
     else:
         candidates = [p for p in candidates if p.get("is_active") is True]
+    if not candidates and source_promotion_id is None and len(promotions) == 1:
+        # 一个 (business_id, 来源 URL) 只有一行促销（数据库唯一约束）：本页活动就是这一行
+        candidates = promotions
     if len(candidates) > 1:
         raise _Review("ambiguous_source_campaign")
-    existing_promotion = candidates[0] if candidates else None
-    if existing_promotion is not None:
-        if existing_promotion.get("is_active") is not True:
-            raise _Review("historical_campaign_requires_review")
-        # Current verified copy may omit a year/date. Null replaces
-        # stale dates; an explicit expired date was rejected above.
-    return existing_promotion
+    # 失效的那一行随当前页面重新激活（promo_values 带 is_active=True）；当前页面没有年份的日期写 NULL，
+    # 明确已过期的日期在上一步已排除。
+    return candidates[0] if candidates else None
+
+
+def _content_key(row: dict, items: list[dict]) -> tuple:
+    prices = tuple(row.get(field) for field in ("regular_price", "discount_price", "discount_percent", "discount_amount"))
+    return (_raw_identity(row.get("offer_raw_text")), prices, row.get("price_model"), bool(row.get("is_package")),
+            tuple(sorted((repr(i.get("service_id")), _service_name_key(i.get("item_name")), repr(i.get("delivered_units")))
+                         for i in items)))
+
+
+def identical_offers(candidates: list[dict], existing_items: dict) -> list[dict]:
+    """候选 Offer 内容完全相同（原文、价格、项目）时按 ID 升序返回，否则返回空列表。"""
+    if len({_content_key(o, existing_items[o["id"]]) for o in candidates}) != 1:
+        return []
+    return sorted(candidates, key=lambda o: o["id"])
 
 
 def match_existing_item(old_items: list[dict], desired: dict, blanket: bool, services: list[dict]) -> tuple[dict, dict | None]:
@@ -101,6 +114,10 @@ def match_existing_item(old_items: list[dict], desired: dict, blanket: bool, ser
     if not matches:
         matches = [i for i in old_items if (i.get("service_id") is None or desired["service_id"] is None)
                    and _service_name_key(_catalog_items([i], services)[0]["item_name"]) == _service_name_key(desired["item_name"])]
+    if len({(i.get("service_id"), _service_name_key(i.get("item_name")), i.get("delivered_units"), i.get("unit_price"))
+            for i in matches}) == 1:
+        # 内容相同的重复 Item 用最小 ID
+        matches = sorted(matches, key=lambda i: i["offer_item_id"])[:1]
     if len(matches) > 1:
         raise _Review("ambiguous_item_match")
     if matches and desired["service_id"] is None and not blanket:

@@ -112,14 +112,14 @@ def test_image_proof_age_uses_capture_time_not_new_plan_timestamp(tmp_path):
     assert image_write_block(plan,tmp_path/'journals')=='image_capture_expired_requires_refresh'
 
 
-def test_shadow_images_allow_new_independent_text_parent_without_reactivating_history():
+def test_shadow_images_reactivate_the_parent_without_touching_its_other_fields():
     graph=_graph();graph['promotions'][0]['is_active']=False;graph['offers'][0]['is_active']=False
     evidence=_evidence(complete=False,image_policy={'version':1,'depends_on_images':False,'hold_parent_fields':True})
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan['status']=='ready',plan['review']
     parent=next(op for op in plan['operations'] if op['table']=='clinic_promotions')
-    assert parent['action']=='insert' and 'is_offer_extracted' not in parent['values']
-    assert all(op['action']=='insert' for op in plan['operations'])
+    assert parent['action']=='update' and parent['values']=={'is_active':True}
+    assert not any(op['action']=='insert' for op in plan['operations'])
 
 
 def test_same_image_url_changed_pixels_enqueues_even_with_identical_markdown(tmp_path,monkeypatch):
@@ -178,10 +178,11 @@ def test_independent_text_offer_preserves_protected_image_sibling(tmp_path):
     assert "where id = 21" not in sql and "offer_item_id = 31" not in sql.split("set constraints all immediate;")[0].split("update public.promo_offer_items")[-1]
 
 
-def test_404_requires_both_response_visible_page_and_saved_screenshot(tmp_path):
+def test_404_requires_the_document_response_and_a_saved_rendered_screenshot(tmp_path):
     from utils.monitor_rendered_checks import confirmed_not_found
     shot=tmp_path/'404.png';shot.write_bytes(b'png')
     browser={'http_status':404,'scroll_complete':True,'failures':[],'text':'404 page not found','screenshot_path':str(shot)}
     assert confirmed_not_found(browser)
-    for changed in ({'http_status':200},{'text':'Specials unavailable'},{'text':'Botox special $10/unit. Call (404) 555-0123 to book.'},{'screenshot_path':'missing'},{'failures':['blocked']}):
+    for changed in ({'http_status':200},{'text':'Botox special $10/unit. Call (404) 555-0123 to book.','http_status':200},
+                    {'screenshot_path':'missing'},{'scroll_complete':False}):
         assert not confirmed_not_found({**browser,**changed})

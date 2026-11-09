@@ -77,10 +77,20 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 夏令时影响。它运行 `run_data_quality_audit.py --recheck`：只读审计并定向重抓到期、缺权益和
 超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
 同一来源的抓取和浏览器/提取分别累计连续失败，达到 **3 轮**后暂停该阶段的
-小时重试并加入审查清单。抓取一轮内的两个 HTTP 尝试只算一轮失败；重启程序或新事件
-不会绕过来源上限。主任务在页面到期时照常抓取，成功抓取后清除抓取计数；暂停的提取阶段
-只有在主任务取得该页新正文后才重新核验，提取成功后清零。仍失败时继续保持暂停。
+小时重试，事件保持 `retryable`，不进入审查清单；每日主任务每天把暂停的页面加入抓取，自动续跑。
+抓取一轮内的两个 HTTP 尝试只算一轮失败；重启程序或新事件不会绕过来源上限。成功抓取后清除抓取计数；
+暂停的提取阶段在主任务取得该页新正文后重新核验，提取成功后清零。
 某一阶段成功不会清空其他阶段的失败计数。
+
+事件状态由 `utils/monitor_review_policy.py` 决定，只有证据无法判定的情形进入审查清单 `review_queue.json`：
+用户手工保护、无法唯一对应的 Source/Offer 身份（`ambiguous_offer_match`、`ambiguous_item_match`、
+没有既有行且地址相同的 `source_business_ambiguous`）、跨域跳到第三方网站、401/403 凭据被拒绝，以及用户显式关闭的
+图片写入。网络异常（含 `SSLError`、`ReadTimeout`）与渲染失败是临时故障，等待重试。页面被拦截或为空、模型输出
+未通过校验、截图或渲染证据不全、证据超过 24 小时等未确认情形不改动现有记录，事件标为
+`retryable`、`retry_reason=fresh_scrape_required`，由下一次抓取（Firecrawl 取不到正文时用 ego-lite）取得新证据后重新处理。
+确认 404（文档请求返回 404 且渲染出截图）时停用该来源的全部有效促销及其 offer，没有有效促销则不改动。
+跳转到商家自己登记的网站（`master_business_info.website`）按网站迁移继续处理。
+已有促销或服务行指向同一页面的多家商家各出一份计划；没有对应商家的来源标为 `excluded`。
 运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文；服务器已有的
 Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
 每个临时页面都会关闭。WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
@@ -91,11 +101,11 @@ Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存
 到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。
 服务器只用 `SUPABASE_SECRET_KEY` 或 `SUPABASE_SERVICE_ROLE_KEY` 经 REST 只读，服务名称枚举
 经只读函数 `fn_clinic_service_names()` 读取；服务器不连数据库、不写数据库，也不使用 `DB_URL`。
-所有写入由会话经 Supabase MCP 执行（见下文「待执行 SQL」）。
+所有写入由会话经 Supabase MCP 执行（见 `monitor_pending_sql.md`）。
 OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；401/403 凭据被拒绝
 时进入审查。失败不能作为改价或移除证据，不通过自动购买额度解决。
-写入门禁按来源及候选判断：部分抓取失败、其他来源待审查和小时任务返回 2，均不关闭全局
-写入开关，也不阻止独立、证据明确的来源继续同步。来源内存在不确定候选时，明确的兄弟优惠
+写入门禁按来源及候选判断：部分抓取失败、其他来源待审查和小时任务返回 2，均不阻止独立、
+证据明确的来源继续同步。来源内存在不确定候选时，明确的兄弟优惠
 可以更新，但保留审查项和 `is_offer_extracted=false`，不据此停用未匹配的优惠。
 已经核验完成的批次可保存为 `state/verified_batch_receipts.json`：每次运行重新比较指定记录
 及其字段、版本，结果写入 `sync_report.json` 的 `previously_verified`。这只确认已完成的部分，
@@ -135,7 +145,8 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 空正文、HTTP/浏览器失败、未加载的可见图片、无法核验的背景资源、未检查的
 滚动区域/框架和未完成 OCR 都不能证明移除。部分证据允许已确认报价更新，
 但禁止下架。完全没有抽到报价也不能证明移除；明确可见的“当前没有促销”声明
-才可构成清空证据。活动日期过期或历史来源身份不清时进入审查。
+才可构成清空证据。已过期的活动不写入：结束日期（和标题）相同的现有促销全部下架；
+页面上只剩已过期活动且证据完整时，该来源的现有促销与优惠下架。
 
 ## 匹配、价格与保护
 
@@ -145,19 +156,27 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 会员表仅只读获取来源归属，不读取或同步会员费、权益。
 
 已有优惠按唯一的来源、服务组成、部位、资格和限制条件匹配，改价保留 Offer
-和 Item ID；Offer/活动归属不能唯一确定时进入审查。Blanket Offer 的服务关联保持 NULL，
+和 Item ID。唯一对应的失效 Offer 随当前页面重新激活；一个来源只有一行促销（数据库唯一约束），
+页面上的活动就是这一行，失效时重新激活，活动标题和日期按当前页面更新。内容完全相同（原文、价格、项目）的
+重复 Offer 保留最小 ID、停用其余，重复 Item 用最小 ID；页面上重复出现的同一条 offer 只写一次。
+候选之间价格或内容不同、无法与页面唯一对应时，该条进入审查。Blanket Offer 的服务关联保持 NULL，
 不能假借一个具体服务。具体服务不能唯一映射时保存网页原名和 `service_id=NULL`，
 价格、数量和条款仍同步；已有唯一匹配且正确的服务关联保留。缺映射不阻断独立优惠，
 不阻断已有完整页面证据支持的移除，但保持 `is_offer_extracted=false`。
-日期没有明确年份时写 NULL，不猜年份，也不沿用过时日期；明确已过期的页面报价仍不能激活。
+没有年份的日期（"October 31"、"10/31"、只有月份的 "July"）按观察当年解释，只有月份时取当月最后一天；
+因此十一月看到的 "July special" 已过期。读不出或起止颠倒的日期写 NULL，不阻断更新，也不沿用过时日期；
+明确已过期的页面报价不能激活。
 
 `state/visual_verifications.json` 保存已完成的 Ego Lite 核验引用和原始时间。
 只有 URL、原始抓取时间及正文都与核验对象完全一致，且页面完整、已查看截图时，
 才复用该次核验的可见正文/图片转录。不能仅因后来的 Markdown 一致就复用旧图片价格。
 不同抓取仍走当前浏览器与 OCR；复用记录不改变原始核验时间，也不直接重放旧数据库计划。
 
-条件文字不同且仍有相同服务组成、资格和计价基础的未匹配 active 优惠时，
-整来源进入审查，避免把条件转述误当作新增和下架；明确仍展示旧优惠时允许独立新增。
+只有会员资格等标志不同的页面 offer 作为独立 Offer 新增；旧 Offer 是否仍在展示由页面完整性决定。
+
+- 金额互相矛盾时按页面明示的折后价更新：折后价高于原价时原价写 NULL，与原价、折后价对不上的节省金额或
+  百分比写 NULL。一个 offer 含多个项目即为套餐。会员价没有非会员价时 `regular_price` 写 NULL。
+- 赠品、没有可存价格的条目（`utils/offer_stage_spec.BENIGN_REASONS`）直接过滤，不存也不审查。
 
 - 单位价且数量可变/最低购买门槛：`delivered_units=NULL`，Master 折后价及
   Item 单位价均为来源单位价；最低购买数量保留为条件。
@@ -172,68 +191,7 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 程序从现有业务确认和管理员记录持续补充保护，保留手动追加项。
 保护包括父活动/优惠的子记录及触发器间接修改；一项冲突会阻止整来源更新。
 
-## 待执行 SQL
+## 待执行 SQL、Variant 对账与批次闸门
 
-服务器把每个通过门禁（图片证据、证据不超过 24 小时）的冻结计划渲染为一个
-DO 块，写入 `state/pending_sql/<UTC 时间戳>_<事件ID>.sql`，事件状态为 `pending_sql`。
-DO 块是一条语句，执行失败整体回滚，不存在部分写入：
-
-1. 先锁定相关行（插入促销时锁表），核对来源完整集合与计划 before 的每一行全部列和
-   `updated_at`、保护项（存在性、直接操作、父子级联）；不一致即 raise。
-2. 写入：新 Promotion 使用当前最大 ID + 1，Offer/Item 使用默认序列；Offer 先以 inactive 插入，
-   子行写完后再按计划激活；每条 DML 核对影响行数恰为 1。
-3. 写后核对：请求字段与实际值一致、派生优惠与公式一致、受保护行未变化、来源成员集合与所有权
-   未变化、active Offer 的结构与价格不变量（有子项、数量大于 0、套餐无单价、单价乘数量等于折后价、
-   Blanket 不链接服务、服务不跨业务、父促销 active 且未过期），最后执行 AGENTS.md 的 Blanket 检查。
-
-价格总额遵循现有触发器：Master 折后总价按 `coalesce(delivered_units,1)` 除到 Item，
-固定数量不能再次除法；套餐只给总价时 Item 单位价为 NULL。
-
-会话中的执行步骤：
-
-1. `python scripts/promo_pipeline.py pending-sql --pull` 经 ssh（主机别名 `firecrawl`，目录 `$BASE`，
-   见 `utils/monitor_host.py`）把服务器 `$BASE/state/pending_sql/` 里待执行的文件拉到
-   `output/self_hosted_monitor_state/pending_sql/`，并列出每个文件的头部摘要；本地已有或已登记执行的文件不再拉回。
-2. 用 Supabase MCP `execute_sql` 执行整个文件；DO 块自行核对 before 快照、保护项与写后不变量，任一不符整体回滚。
-3. 成功后 `pending-sql --mark-applied <文件>`：先在服务器上把同一文件移入 `applied/`，再移动本地文件；
-   服务器移动失败即终止，本地文件保持待执行。下次 monitor 运行时事件变为 `completed`。
-   文件丢失时事件回到 `retryable` 并重新渲染。
-4. 执行后运行批次闸门（`batch-gate`）。
-
-小时入口 `run_monitor_retry.sh` 运行 `promo_pipeline.py monitor --retry-transient-only`：
-只回抓最近失败的页面，并且只处理每个 URL 最新的 retryable 事件。
-`--retry-reviews` 可重新核验审查事件。
-
-## Variant 对账与批次闸门 F–I
-
-Shopify 商品页抓取在 `browser.json` 中写入 `variant_expected`、`variant_skipped`、
-`variant_captures` 与（集合页）`product_variant_reconciliation`。规划器在
-`variant_reconciliation_mismatch` 时阻断写入；`from` 起价仅在页面有 variant 对账记录且集合
-未抓全时阻断（`starting_price_variant_set_incomplete`），无 variant 的普通起价页仍按非阻断提示写入下限。
-
-`promo_offer_items.delivered_units` 是 `smallint`，计划中必须写整数。
-集合页汇总时按 `(business_id, variant_id)` 去重，避免同一商品在多个 collection 重复建 offer。
-
-会员价与普通价：**非会员档写入会员 offer 的 `regular_price`**，不单独建非会员 offer。
-`visible_variant_offers` 会配对同规格 Member / Non-Member 变体，只输出会员 offer 并带上
-非会员售价作为 `regular_price`。文本 offer 同理：`merge_member_tiers` 在 item 与 `price_model`
-相同、非会员价更高且唯一配对时并入会员 offer；配对按 `/products/<handle>` 比较，不受 collection
-与商品页 URL 差异影响。
-
-每次经 MCP 执行写入 SQL 后运行批次闸门 A–J（`promo_pipeline.py batch-gate`）：
-
-| 检查 | 含义 |
-| --- | --- |
-| F | 文案含 `from $` 但 `price_model` 不是 `from` |
-| G | `total` offer 的文案/conditions 写明固定数量 N（≥2 units/sessions/syringes/treatments），但没有任何 item 交付 N；门槛表述（minimum、at least、N+、or more、up to、max）不算 |
-| H | 会员 offer 在来源中声明 non-member 价，但 `regular_price` 缺失、≤ 折扣价或与声明不符 |
-| I | 无 item 的 offer（上架一律报；未上架超过 24h 的空壳报出） |
-
-只读审计 `run_data_quality_audit.py` 使用同名规则前缀（F/G/H/I）。
-
-## 验证边界
-
-本地针对规划、证据队列和 SQL 渲染的测试不连接生产数据库。渲染出的每个 DO 块都经
-PostgreSQL 解析器（pglast）校验语法，测试对 SQL 文本断言前置核对、写入顺序与写后核对。
-语法校验与文本断言不能替代真实触发器下的执行验收：首次上线时先在会话中经 MCP 执行少量
-待执行 SQL，并回读核对结果。
+DO 块的核对内容、会话中的执行步骤（`pending-sql --pull` / `--mark-applied`）、Variant 对账与批次闸门 F–I
+见 [`monitor_pending_sql.md`](monitor_pending_sql.md)。

@@ -96,7 +96,7 @@ def test_extraction_http_failures_preserve_queue_with_safe_categories(tmp_path,m
     snapshot={"promotions":[],"services":[],"offers":[],"items":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
     plan=prepare_event(path,snapshot,{},tmp_path)
     assert plan["status"] == "review" and plan["operations"] == []
-    assert plan["review"] == [{"reason":reason}]
+    assert plan["review"] == [{"reason":reason,"transient":True}]
     assert json.loads(path.read_text())["status"] == status
 
 

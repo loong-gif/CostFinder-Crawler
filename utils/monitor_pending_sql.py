@@ -1,4 +1,4 @@
-"""monitor 计划到 pending SQL：写入前的策略门（开关、图片证据、证据时效），通过后渲染 DO 块并写入 pending_sql/。"""
+"""monitor 计划到 pending SQL：写入前的策略门（图片证据、证据时效），通过后渲染 DO 块并写入 pending_sql/。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -35,7 +35,7 @@ def render_pending(plan, protections, state_dir: Path) -> dict:
     if plan.get("prepared_at"):
         prepared = datetime.fromisoformat(plan["prepared_at"].replace("Z", "+00:00"))
         if datetime.now(timezone.utc) - prepared > EVIDENCE_MAX_AGE:
-            return {"status": "review", "category": "evidence_expired_requires_review"}
+            return {"status": "review", "category": "evidence_expired"}
     try:
         sql_text = "\n".join(render_apply(branch, protections) for branch in branch_plans(plan))
     except WriterError as exc:

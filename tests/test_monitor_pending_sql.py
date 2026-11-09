@@ -53,13 +53,13 @@ def test_one_blocked_branch_holds_back_the_whole_page(tmp_path):
     stale = ready_plan(evidence_path=evidence_path,
                        prepared_at=(datetime.now(timezone.utc) - timedelta(hours=25)).isoformat())
     combined = combine_branch_plans("https://clinic.example/specials", [stale, ready_plan(evidence_path=evidence_path)])
-    assert render_pending(combined, {}, tmp_path)["category"] == "evidence_expired_requires_review"
+    assert render_pending(combined, {}, tmp_path)["category"] == "evidence_expired"
     assert not pending_dir(tmp_path).exists()
 
 
 def test_policy_gates_return_review_without_a_file(tmp_path):
     expired = ready_plan(prepared_at=(datetime.now(timezone.utc) - timedelta(hours=25)).isoformat())
-    assert render_pending(expired, {}, tmp_path) == {"status": "review", "category": "evidence_expired_requires_review"}
+    assert render_pending(expired, {}, tmp_path) == {"status": "review", "category": "evidence_expired"}
     assert not pending_dir(tmp_path).exists()
 
 
