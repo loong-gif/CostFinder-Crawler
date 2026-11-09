@@ -349,7 +349,7 @@ END_DATE_RE = re.compile(
 
 
 def extract_end_dates(text: str, today: Optional[_dt.date] = None) -> List[str]:
-    """ISO dates the page says an offer ends on. A missing year is the next occurrence within 60 days of past."""
+    """页面写明的活动结束日期（ISO 格式）。月日没有年份时取当前年份。"""
     today = today or _dt.date.today()
     found: Set[str] = set()
     for match in END_DATE_RE.finditer(str(text or "")):
@@ -366,11 +366,7 @@ def extract_end_dates(text: str, today: Optional[_dt.date] = None) -> List[str]:
                 month = _MONTHS[tokens[0][:3]]
                 day = int(tokens[1])
                 year = int(tokens[2]) if len(tokens) > 2 and len(tokens[2]) == 4 else None
-            explicit = year is not None
-            candidate = _dt.date(year or today.year, month, day)
-            if not explicit and candidate < today - _dt.timedelta(days=60):
-                candidate = _dt.date(today.year + 1, month, day)
-            found.add(candidate.isoformat())
+            found.add(_dt.date(year or today.year, month, day).isoformat())
         except (ValueError, KeyError, IndexError):
             continue
     return sorted(found)
