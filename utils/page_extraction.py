@@ -10,15 +10,20 @@ from typing import Any, Callable, Mapping
 
 from psycopg.types.json import Jsonb
 
-from utils.page_extraction_common import _campaign_date, _rejection, index_manifest
+from utils.page_extraction_common import _campaign_date, _iso, _rejection, index_manifest
 from utils.page_extraction_memberships import _plan_memberships
 from utils.page_extraction_promotions import _plan_promotions
 from utils.page_extraction_snapshot import _page_evidence
 from utils.page_extraction_source_review import SourceReviewValidationError, _source_review, verified_source_review
 from utils.pipeline_db import LOCK_PROMOTIONS, NEXT_PROMOTION_ID, do_block, literal, plan_digest, render
 from utils.promo_extraction import comparison_key
+from utils.promotion_enforcement import deactivate_statements
 from utils.promotion_rules import check_promotion
 from utils.source_url import source_url_key
+
+# 页面本身证明促销已不成立的拒绝原因：库中同身份的 active 行随之停用
+REMOVAL_REASONS = frozenset({"source_page_not_promotion", "no_rendered_visible_promotion_content", "expired_campaign",
+                             "price_page_without_discount", "page_gone"})
 
 PROMOTION_UPSERT = """
 insert into public.clinic_promotions (promotion_id, business_id, source_url, promotion_title, promotion_content,
@@ -90,11 +95,31 @@ def build_plan(pages: list[dict[str, Any]], *, scrapes: Mapping[str, Mapping[str
     entries += _plan_memberships(
         membership_pages, scrapes=scrapes, existing=state["memberships"], cities=state.get("cities", {}),
         llm=llm, schema=membership_schema, cache_dir=cache_dir, manifest=manifest)
+    entries = _deactivate_removed(entries, state["promotions"])
     counts: dict[str, int] = defaultdict(int)
     for entry in entries:
         counts[f"{entry['kind']}:{entry['action']}"] += 1
     return {"generated_at": datetime.now(timezone.utc).isoformat(), "visibility_manifest_sha256": manifest_sha256,
             "pages": len(pages), "summary": dict(sorted(counts.items())), "entries": entries}
+
+
+def _deactivate_removed(entries: list[dict[str, Any]], existing: Mapping[tuple[int, str], Mapping[str, Any]]
+                        ) -> list[dict[str, Any]]:
+    """页面本身证明促销已不成立（不是促销页、渲染后没有可见卡片、已过期、价目页无折扣、页面已不存在）时，
+    库中同身份的 active 行在同一份 apply.sql 中停用；本批同一身份另有写入条目时不停用。"""
+    written = {(e["business_id"], e["target_key"]["source_url_key"]) for e in entries
+               if e["kind"] == "promotion" and e["action"] in ("insert", "update", "unchanged")}
+    result = []
+    for entry in entries:
+        key = (entry["business_id"], entry["target_key"]["source_url_key"])
+        old = existing.get(key)
+        if (entry["kind"] == "promotion" and entry["action"] == "rejected" and entry["reason"] in REMOVAL_REASONS
+                and old is not None and old["is_active"] and key not in written):
+            written.add(key)
+            entry = {**entry, "action": "deactivate", "promotion_id": old["promotion_id"],
+                     "expected_updated_at": _iso(old["updated_at"])}
+        result.append(entry)
+    return result
 
 
 def _row_where(entry: Mapping[str, Any]) -> tuple[str, str]:
@@ -132,7 +157,11 @@ def _entry_statements(entry: Mapping[str, Any]) -> list[str]:
                         start=_campaign_date(entry["campaign_start_date"]), end=end)
     else:
         benefits = entry["benefits"]
-        upsert = render(MEMBERSHIP_UPSERT, business_id=entry["business_id"], source_url=entry["source_url"],
+        template = MEMBERSHIP_UPSERT
+        if entry.get("clear_benefits"):
+            # 库中旧权益在当前渲染中看不到：置为 NULL（未知），不保留旧值
+            template = template.replace("coalesce(excluded.benefits, clinic_memberships.benefits)", "excluded.benefits")
+        upsert = render(template, business_id=entry["business_id"], source_url=entry["source_url"],
                         name=entry["membership_name"], price=entry["membership_price"],
                         billing_period=entry["billing_period"], months=entry["minimum_commitment_months"],
                         benefits=None if benefits is None else Jsonb(benefits))
@@ -175,7 +204,7 @@ def _branch_statements(entries: list[Mapping[str, Any]]) -> list[str]:
 
 
 def render_apply(plan: Mapping[str, Any], manifest: Mapping[str, Any]) -> str:
-    """全部 insert/update 条目渲染为单个 DO 块；核对可见性清单哈希，并重新执行促销写入规则。"""
+    """全部 insert/update/deactivate 条目渲染为单个 DO 块；核对可见性清单哈希，并重新执行促销写入规则。"""
     if plan["visibility_manifest_sha256"] is None:
         raise RuntimeError("plan_without_visibility_manifest: regenerate the plan with --visibility-manifest")
     if hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest() != plan["visibility_manifest_sha256"]:
@@ -183,6 +212,10 @@ def render_apply(plan: Mapping[str, Any], manifest: Mapping[str, Any]) -> str:
     writes = [e for e in plan["entries"] if e["action"] in ("insert", "update")]
     statements = [LOCK_PROMOTIONS] if any(e["kind"] == "promotion" for e in writes) else []
     counts: dict[str, int] = defaultdict(int)
+    for entry in plan["entries"]:
+        if entry["action"] == "deactivate":
+            statements.extend(deactivate_statements(entry["promotion_id"], entry["expected_updated_at"]))
+            counts["promotion:deactivate"] += 1
     branches: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for entry in writes:
         if entry["kind"] == "promotion":
@@ -203,4 +236,4 @@ def render_apply(plan: Mapping[str, Any], manifest: Mapping[str, Any]) -> str:
               f"visibility manifest sha256 {plan['visibility_manifest_sha256']}\n"
               f"writes {json.dumps(dict(sorted(counts.items())))}")
     return do_block(statements, declare=["v_updated timestamptz", "v_inserted boolean", "v_business_id bigint",
-                                         "v_i int"], header=header)
+                                         "v_i int", "v_count bigint"], header=header)

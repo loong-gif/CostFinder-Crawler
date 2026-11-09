@@ -50,6 +50,13 @@ def test_manifest_marks_visible_lines_and_unrendered_pages():
                                                   "claimResults": []}
 
 
+def test_render_answered_with_404_marks_the_page_gone():
+    render = {"results": [{"url": "https://a.com/specials", "checked_at": "t", "http_status": 404,
+                           "result": {"texts": ["404 Not Found"]}}]}
+    page = build_manifest(build_shard(PLAN, "run"), render)["https://a.com/specials"]
+    assert (page["status"], page["reason"]) == ("page_not_accessible", "page_gone")
+
+
 def test_blank_render_is_page_unavailable_not_invisible_claims():
     shard = build_shard(PLAN, "run")
     render = {"results": [{"url": "https://a.com/specials", "checked_at": "t",

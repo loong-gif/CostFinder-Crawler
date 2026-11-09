@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 import requests
 
+from utils.firecrawl_client import GONE_STATUSES
 from utils.paddle_ocr_markdown import filter_promo_image_urls
 from utils.page_title import is_block_page
 from utils.render_review import claim_anchors, claim_matches, claim_matches_sources, corpus_text, item_id, ocr_image
@@ -40,7 +41,8 @@ def _page_claims(plan: Mapping[str, Any]) -> dict[str, list[tuple[str, str, bool
                 ("membership", membership_fee_claim(name, entry["membership_price"]), True)]
             lines = [("membership", name, True)] + fee + \
                     [("membership", line, line.startswith(name)) for line in entry.get("source_claims") or []] + \
-                    [("membership", line, False) for line in entry.get("benefits") or []]
+                    [("membership", line, False) for line in entry.get("benefits") or []] + \
+                    [("membership", line, False) for line in entry.get("stored_benefits") or []]
         else:
             continue
         for page in entry.get("source_pages") or [entry["source_url"]]:
@@ -91,6 +93,10 @@ def build_manifest(shard: Mapping[str, Any], render_out: Mapping[str, Any]) -> d
         if record is None or record.get("error"):
             manifest[item["url"]] = {"status": "page_not_accessible",
                                      "reason": (record or {}).get("error", "not_rendered"), "claimResults": []}
+            continue
+        if record.get("http_status") in GONE_STATUSES:
+            # 站点对该地址返回 404/410：页面已不存在，是下架证据
+            manifest[item["url"]] = {"status": "page_not_accessible", "reason": "page_gone", "claimResults": []}
             continue
         texts = record["result"]["texts"]
         if sum(len(t) for t in texts) < MIN_RENDERED_CHARS or is_block_page("\n".join(texts)):

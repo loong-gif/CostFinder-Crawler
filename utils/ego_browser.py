@@ -15,7 +15,8 @@ from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
-from utils.page_title import PAGE_TIMEOUT_MS, TitleUnavailable, choose_title, is_block_page
+from utils.firecrawl_client import GONE_STATUSES
+from utils.page_title import PAGE_TIMEOUT_MS, PageGone, TitleUnavailable, choose_title, is_block_page
 
 EGO_TASK_SPACE = "costfinder page titles"
 
@@ -98,6 +99,7 @@ const info = await page.evaluate(() => ({{
   title: document.title,
   og: document.querySelector('meta[property="og:title"]')?.content || "",
   h1: document.querySelector("h1")?.innerText || "",
+  status: performance.getEntriesByType("navigation")[0]?.responseStatus ?? null,
 }}));
 console.log("EGO_TITLE " + JSON.stringify(info));
 """
@@ -122,4 +124,6 @@ def fetch_page_title(url: str, business_name: str = "") -> str:
     # 只按 \n 分行：JSON.stringify 不转义 U+2028/U+2029，splitlines() 会把标题中间截断
     line = next(l for l in (done.stdout + done.stderr).split("\n") if l.startswith("EGO_TITLE "))
     info = json.loads(line[len("EGO_TITLE "):])
+    if info.get("status") in GONE_STATUSES:
+        raise PageGone("page_gone")
     return choose_title([info["title"], info["og"], info["h1"]], business_name)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from page_extraction_support import (
     BUSINESS,
+    EMPTY_STATE,
+    UPDATED_AT,
     FakeLLM,
     entry_for,
     membership_item,
@@ -74,7 +76,8 @@ def test_membership_missing_from_source_inventory_is_written_without_benefits(tm
                     membership_llm(url, [item], review), tmp_path)
     row = entry_for(plan, kind="membership")
     assert (row["action"], row["membership_price"], row["benefits"]) == ("insert", 199, None)
-    assert row["benefits_review_reason"] == "membership_missing_from_source_inventory"
+    assert row["benefits_reason"] == "membership_missing_from_source_inventory"
+    assert "benefits_quality" not in row and "ocr_status" not in row
 
 
 def test_paraphrased_membership_claim_makes_the_benefit_inventory_incomplete(tmp_path):
@@ -90,7 +93,7 @@ def test_paraphrased_membership_claim_makes_the_benefit_inventory_incomplete(tmp
     row = entry_for(plan, kind="membership")
     # 复核中有一条权益不在页面上：清单不可信，会员照常写入费用，权益不判定为完整
     assert (row["action"], row["membership_price"], row["benefits"]) == ("insert", 199, None)
-    assert row["benefits_review_reason"] == "membership_benefits_unverified"
+    assert row["benefits_reason"] == "membership_benefits_unverified"
     assert row["source_review"]["review"]["unverified_quotes"] == [
         {"membership_claims": {"name": "VIP", "claims": ["Two free peels"]}}]
     # 复核清单完整时同一页面的权益判定为完整
@@ -141,6 +144,42 @@ def test_fee_on_the_line_after_the_plan_name_is_supported_by_the_render():
     # 清单中「名称 $费用」不可见时仍不成立
     rendered["claimResults"][0]["status"] = "not_visible"
     assert not prepare_membership_write(item, evidence, rendered)["accepted"]
+
+
+def _stored_membership_plan(tmp_path, stored_status):
+    url = "https://glow.example/membership"
+    old = {"plan_id": 3, "membership_name": "Glow Club", "membership_price": 99.0, "billing_period": "monthly",
+           "minimum_commitment_months": None, "benefits": ["Old perk"], "updated_at": UPDATED_AT}
+    state = {**EMPTY_STATE, "memberships": {(BUSINESS, "glow.example/membership", "glow club"): old}}
+    manifest = {url: {"status": "page_accessible", "claimResults": [
+        {"recordType": "membership", "claim": "Glow Club", "status": "visible_match"},
+        {"recordType": "membership", "claim": "Glow Club $99", "status": "visible_match"},
+        {"recordType": "membership", "claim": "Old perk", "status": stored_status}]}}
+    llm = membership_llm(url, [membership_item("Glow Club", 99)], membership_review(("Glow Club", [])))
+    plan = plan_for([page(url, "membership")], [scrape(url, "Glow Club $99 per month\n", "Members")], llm, tmp_path,
+                    manifest=manifest, state=state)
+    return plan, manifest
+
+
+def test_stored_benefits_not_visible_in_the_render_are_cleared(tmp_path):
+    from utils.page_extraction import render_apply
+    from utils.visibility_manifest import build_shard
+
+    plan, manifest = _stored_membership_plan(tmp_path, "not_visible")
+    row = entry_for(plan, kind="membership")
+    assert (row["action"], row["benefits"], row["clear_benefits"]) == ("update", None, True)
+    assert row["benefits_reason"] == "membership_benefits_unverified"
+    text = render_apply(plan, manifest)
+    assert "benefits = excluded.benefits" in text and "coalesce(excluded.benefits" not in text
+    # 库中已有的权益进入可见性分片，由渲染核验
+    lines = [c["line"] for item in build_shard(plan, "run")["items"] for c in item["claims"]]
+    assert "Old perk" in lines
+
+
+def test_stored_benefits_visible_in_the_render_are_kept(tmp_path):
+    plan, _ = _stored_membership_plan(tmp_path, "visible_match")
+    row = entry_for(plan, kind="membership")
+    assert (row["action"], row["clear_benefits"]) == ("unchanged", False)
 
 
 def test_membership_fee_not_supported_is_rejected(tmp_path):

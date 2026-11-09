@@ -23,6 +23,8 @@ def _extract_promotion_page(page: Mapping[str, Any], row: Mapping[str, Any], *, 
     """返回 {content,start,end} 或 {reject: code}。标题不在此处理。"""
     if manifest is not None and _visibility_for(manifest, page["url"]) is None:
         return {"reject": "not_in_visibility_manifest"}
+    if manifest is not None and _visibility_for(manifest, page["url"]).get("reason") == "page_gone":
+        return {"reject": "page_gone"}
     evidence = _page_evidence(row)
     review = page["_source_review"]
     if review["page_type"] not in {"promotion", "mixed"}:
@@ -57,9 +59,9 @@ def _extract_promotion_page(page: Mapping[str, Any], row: Mapping[str, Any], *, 
         gate = filter_visible_promotion_content(cards, _visibility_for(manifest, page["url"]))
         if not gate.accepted:
             return {"reject": gate.reason, "source_review": review}
-        # 优惠卡片按完整关系验收，任一张卡片不可见时整页进入复核。
-        if len(gate.content) != len(cards):
-            return {"reject": "promotion_card_not_fully_visible", "source_review": review}
+        # 卡片按整张验收：只写入渲染后整张可见的卡片，看不到的卡片不写入
+        shown = set(gate.content)
+        blocks = [block for block in blocks if (card := merge_content_blocks([block])) and card[0] in shown]
     return {"blocks": blocks, "start": _campaign_date(merged["campaign_start_date"]),
             "end": _campaign_date(merged["campaign_end_date"]), "source_review": review,
             "cards_not_in_source_review": [block[0] for index, block in enumerate(merged["promotion_blocks"])

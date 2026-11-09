@@ -26,6 +26,8 @@ for (const item of shard.items) {
     }
     try { await page.waitForLoadState("load", { timeout: 20000 }); } catch (_) {}
     await page.waitForTimeout(2000);
+    // 主文档的 HTTP 状态码：404/410 说明页面已不存在
+    rec.http_status = await page.evaluate(() => performance.getEntriesByType("navigation")[0]?.responseStatus ?? null);
     rec.final_url = await page.url();
     rec.title = await page.title();
     rec.result = await page.evaluate(async () => {

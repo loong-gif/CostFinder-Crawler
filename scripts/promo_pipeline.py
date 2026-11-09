@@ -64,8 +64,6 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
                          "apply-sql via MCP"),
     "enforce-promotion-rules": ("scripts.enforce_promotion_rules",
                                 "deactivate existing active promotions that break the write rules", "apply-sql via MCP"),
-    "clear-membership-benefits": ("scripts.clear_membership_benefits",
-                                  "set unverified membership benefits to NULL (unknown)", "apply-sql via MCP"),
     "split-offers": ("scripts.split_offers", "split an offer that lists several services under one price into "
                      "independent offers", "apply-sql via MCP"),
     "rename-items": ("scripts.rename_items", "rewrite problematic item_name values of active offers",

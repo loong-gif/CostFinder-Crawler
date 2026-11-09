@@ -138,11 +138,55 @@ def test_visibility_manifest_accepts_whole_visible_cards_and_rejects_invisible_p
     assert entry_for(partial, action="rejected")["reason"] == "no_rendered_visible_promotion_content"
 
 
-def test_one_invisible_card_sends_the_page_to_review(tmp_path):
+def test_invisible_cards_are_dropped_and_visible_cards_written(tmp_path):
     url = "https://glow.example/promo"
     markdown = f"{BOTOX}\nFiller Friday\nSave $100 on filler."
     llm = promo_llm({url: ([promo_item("Botox Bonus", "Save 20% on Botox."), promo_item("Filler Friday", "Save $100 on filler.")],
                            promo_review(("Botox Bonus", ["Save 20% on Botox."]), ("Filler Friday", ["Save $100 on filler."])))})
     plan = plan_for([page(url)], [scrape(url, markdown, "Glow Clinic Botox Promo")], llm, tmp_path,
                     manifest={url: visible(BOTOX)})
-    assert entry_for(plan, kind="promotion")["reason"] == "promotion_card_not_fully_visible"
+    assert entry_for(plan, kind="promotion")["action"] == "insert"
+    assert entry_for(plan, kind="promotion")["content"] == [BOTOX]
+
+
+def _existing_promo_state(url_key="glow.example/promo"):
+    old = {"promotion_id": 7, "promotion_title": "Glow Clinic Botox Promo", "promotion_content": [BOTOX],
+           "campaign_start_date": None, "campaign_end_date": None, "is_active": True, "updated_at": UPDATED_AT}
+    return {**EMPTY_STATE, "promotions": {(BUSINESS, url_key): old}}
+
+
+def test_page_without_visible_promotion_deactivates_the_existing_row(tmp_path):
+    from utils.page_extraction import render_apply
+
+    url = "https://glow.example/promo"
+    llm = promo_llm({url: BOTOX_PAGE})
+    manifest = {url: visible("Save 20% on Botox.")}
+    plan = plan_for([page(url)], [scrape(url, BOTOX, "Glow Clinic Botox Promo")], llm, tmp_path,
+                    state=_existing_promo_state(), manifest=manifest)
+    entry = entry_for(plan, kind="promotion")
+    assert (entry["action"], entry["promotion_id"], entry["reason"]) == (
+        "deactivate", 7, "no_rendered_visible_promotion_content")
+    text = render_apply(plan, manifest)
+    assert "set is_active = false, updated_at = now() where promotion_id = 7 and is_active;" in text
+    assert "stale_plan: promotion 7" in text
+
+
+def test_gone_page_deactivates_the_existing_row(tmp_path):
+    url = "https://glow.example/promo"
+    manifest = {url: {"status": "page_not_accessible", "reason": "page_gone", "claimResults": []}}
+    plan = plan_for([page(url)], [scrape(url, BOTOX, "Glow Clinic Botox Promo")], promo_llm({url: BOTOX_PAGE}),
+                    tmp_path, state=_existing_promo_state(), manifest=manifest)
+    assert (entry_for(plan, kind="promotion")["action"], entry_for(plan, kind="promotion")["reason"]) == (
+        "deactivate", "page_gone")
+    # 拦截页不能证明下架：行保持不变
+    blocked = {url: {"status": "page_not_accessible", "reason": "blank_or_blocked_render", "claimResults": []}}
+    kept = plan_for([page(url)], [scrape(url, BOTOX, "Glow Clinic Botox Promo")], promo_llm({url: BOTOX_PAGE}),
+                    tmp_path, state=_existing_promo_state(), manifest=blocked)
+    assert entry_for(kept, kind="promotion")["action"] == "rejected"
+
+
+def test_rejection_without_removal_evidence_keeps_the_existing_row(tmp_path):
+    url = "https://glow.example/promo"
+    plan = plan_for([page(url)], [scrape(url, BOTOX, "Glow Clinic Botox Promo")], promo_llm({url: BOTOX_PAGE}),
+                    tmp_path, state=_existing_promo_state(), manifest={})
+    assert entry_for(plan, kind="promotion")["action"] == "rejected"
