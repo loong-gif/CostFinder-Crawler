@@ -39,3 +39,12 @@ def test_retry_runs_when_no_monitor_holds_the_lock(tmp_path):
     # 测试目录里没有 .venv，monitor 启动失败；说明锁空闲时没有被跳过
     assert result.returncode != 0
     assert "monitor running, skipped" not in (tmp_path / "logs" / "retry.log").read_text()
+
+
+def test_deploy_leaves_the_server_control_file_alone(monkeypatch):
+    from scripts import deploy_monitor_price_sync as deploy
+    sent = []
+    monkeypatch.setattr(deploy, "remote_python", lambda code, **kwargs: sent.append(code) or "{}")
+    deploy.deploy("firecrawl", False)
+    # 写入只生成待执行 SQL，部署不再暂停写入、不再改写 price_sync_control.json
+    assert len(sent) == 1 and "price_sync_control" not in sent[0] and "write_enabled" not in sent[0]

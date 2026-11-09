@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Deploy the existing monitor task with pending-SQL generation disabled by default.
+"""Deploy the existing monitor task.
 
 File payloads (including explicitly selected credentials) travel over SSH stdin,
 never command arguments or output. This tool performs no database operations; the
 deployed jobs never write the database, they only produce SQL files under
-``$BASE/state/pending_sql/`` that a session pulls back, reviews and runs through the Supabase MCP.
+``$BASE/state/pending_sql/`` that ``pending-sql --pull`` brings back and the session runs through the Supabase MCP.
 """
 from __future__ import annotations
 
@@ -104,10 +104,6 @@ lock=open(state/".monitor.lock","a+")
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 backup.mkdir(parents=True,exist_ok=True)
-control=state/"price_sync_control.json"
-if control.exists(): shutil.copy2(control,backup/"price_sync_control.json")
-# Pause writes before replacing files, while holding the task's shared lock.
-control.write_text(json.dumps({"schema_version":1,"write_enabled":False,"reason":"awaiting_pending_sql_validation"})+"\\n")
 archive=tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.buffer.read())),mode="r:gz")
 count=0
 for member in archive.getmembers():
@@ -123,7 +119,7 @@ for member in archive.getmembers():
 (base/"run_data_quality_daily.sh").chmod(0o755)
 (base/"run_crawl_due.sh").chmod(0o755)
 (base/"run_ocr_service.sh").chmod(0o755)
-print(json.dumps({"files_deployed":count,"backup":str(backup),"write_enabled":False}))
+print(json.dumps({"files_deployed":count,"backup":str(backup)}))
 '''
     print(remote_python(code,stdin=base64.b64encode(stream.getvalue()),host=host))
 

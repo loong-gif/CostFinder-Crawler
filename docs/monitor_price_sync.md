@@ -61,7 +61,7 @@ Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.
 - 抓取失败不记变化，下次到期顺延一个档期；失败页仍由每小时重试任务处理。
 - 文件不存在时，第一次运行从 `evidence/` 的抓取时间和 `events/` 里 `change_type=changed` 的事件重建档案。
 - 每次运行结束，启动脚本调用 `promo_pipeline.py notify-run`，以「小扣」机器人（`FEISHU_APP_ID`）私信
-  `FEISHU_NOTIFY_OPEN_ID`：抓取、档期、事件、写入开关与待执行 SQL、暂停重试和失败页面；没有生成报告时发送日志末尾。
+  `FEISHU_NOTIFY_OPEN_ID`：抓取、档期、事件、待执行 SQL、暂停重试和失败页面；没有生成报告时发送日志末尾。
   小时重试没有抓取页面也没有处理事件时不发送。凭据在服务器 `.env`（`FEISHU_APP_SECRET`）。
 - `promo_pipeline.py monitor-schedule [--pages]` 只读查看各档页面数和今天到期数；
   `monitor --all-pages` 忽略档期抓取全部配置页面。
@@ -85,9 +85,10 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
 每个临时页面都会关闭。WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
 
-`state/price_sync_control.json` 的 `write_enabled` 默认且部署后始终为 `false`。
-关闭时仍会采集、核验、生成保护名单和冻结差异计划，但不生成待执行 SQL；改为 `true` 后，
-通过门禁的冻结计划渲染为 `state/pending_sql/` 下的 SQL 文件。到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。历史 inactive 记录不自动恢复。
+通过门禁的冻结计划直接渲染为 `state/pending_sql/` 下的 SQL 文件；服务器不写库，SQL 只有经 MCP 执行才生效，
+执行本身就是写入的把关，没有另外的写入开关。图片里的 offer 经 OCR 双读核验后照常写入；
+`state/price_sync_control.json` 只保留 `image_write_enabled`，缺省为开启，显式写 `false` 才停止图片 offer 的写入。
+到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。
 服务器只用 `SUPABASE_SECRET_KEY` 或 `SUPABASE_SERVICE_ROLE_KEY` 经 REST 只读，服务名称枚举
 经只读函数 `fn_clinic_service_names()` 读取；服务器不连数据库、不写数据库，也不使用 `DB_URL`。
 所有写入由会话经 Supabase MCP 执行（见下文「待执行 SQL」）。
@@ -104,7 +105,7 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 安装运行依赖使用 `requirements_monitor_price_sync.txt`。更新程序用
 `scripts/deploy_monitor_price_sync.py`，需要同步专用凭据时添加
 `--include-credentials`；传输走 SSH 标准输入，旧文件保存到服务器
-`price_sync_backups`，新部署不会打开写入。
+`price_sync_backups`，部署不改动 `state/` 里的控制文件。
 
 ## 证据与事件
 
@@ -173,7 +174,7 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 
 ## 待执行 SQL
 
-服务器把每个通过门禁（`write_enabled`、图片证据、证据不超过 24 小时）的冻结计划渲染为一个
+服务器把每个通过门禁（图片证据、证据不超过 24 小时）的冻结计划渲染为一个
 DO 块，写入 `state/pending_sql/<UTC 时间戳>_<事件ID>.sql`，事件状态为 `pending_sql`。
 DO 块是一条语句，执行失败整体回滚，不存在部分写入：
 

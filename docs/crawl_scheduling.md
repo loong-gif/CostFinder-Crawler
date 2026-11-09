@@ -42,31 +42,28 @@ python scripts/crawl_report.py                              # 汇总
 
 调度脚本以"只新增文件、不覆盖"的方式放入 `/home/loong/costfinder_monitor`（10 个文件），服务器上已就地运行
 `seed_crawl_schedule.py --apply` 生成 `state/crawl_schedule/`，使用服务器已有的 `.env` 凭据。
-**没有使用 `deploy_monitor_price_sync.py`**：它会把 `price_sync_control.json` 的 `write_enabled` 置为 False
-（10-14 刚发生过一次非预期暂停并已恢复）。如需同步其余代码改动（`raw_file_store`、`supabase_rest` 路由、
-`limit=5000` 修复等），应先确认接受写入暂停，或在部署后立即恢复开关。
+后续代码更新统一用 `deploy_monitor_price_sync.py`，部署不改动 `state/` 里的控制文件。
 
-## 到期抓取闭环（尚未接入任何计划任务）
+## 到期抓取闭环
 
 ```bash
 python scripts/crawl_scheduler.py plan --apply        # 生成 due.json / due_monitor.json
-# 观察模式：独立 state-dir 和独立 control（write_enabled=false），不写数据库
+# 只抓取：独立 state-dir，记录页面变化，不生成计划和待执行 SQL
 python scripts/run_monitor_price_sync.py --config state/crawl_schedule/due_monitor.json \
-    --state-dir state/due_monitor --control state/due_monitor/control.json
+    --state-dir state/due_monitor --capture-only
 python scripts/crawl_record_from_monitor.py --state-dir state/due_monitor --due state/crawl_schedule/due.json \
     --monitors <本次运行的监控名,逗号分隔> --since <运行开始时间 ISO> --out state/crawl_schedule/results.json
 python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.json --apply
 ```
 
 首次运行某个监控只建立基线（不产生变化事件）；`record` 之后 `next_crawl_at` 才会推进。
-接入 Windows 任务前，应先在服务器上用观察模式完整跑一轮并核对 `results.json`。
 
 ## 服务器上的运行（2026-10-15 起）
 
 - 主机 `72.52.161.65`（SSH 别名 `firecrawl`，WSL Ubuntu），目录 `/home/loong/costfinder_monitor`。
 - Windows 任务 `CostFinderCrawlDue`：每天 03:30（服务器太平洋时间）运行 `run_crawl_due.sh`，日志 `logs/crawl_due.log`。
-  流程：`crawl_scheduler.py plan --apply --cap 30` → 观察模式监控（独立 `state/due_monitor/` 与
-  `control.json`，`write_enabled=false`，不写库、不发通知）→ `crawl_record_from_monitor.py` →
+  流程：`crawl_scheduler.py plan --apply --cap 30` → `monitor --capture-only`（独立 `state/due_monitor/`，
+  只抓取，不生成计划和待执行 SQL，不发通知）→ `crawl_record_from_monitor.py` →
   `crawl_scheduler.py record --apply`。单次上限用环境变量 `CRAWL_DUE_CAP` 调整。
 - 该任务只更新 `state/crawl_schedule/`，不会写数据库；每日监控（按页面 7/15/30 天档期抓取，见 `docs/monitor_price_sync.md`）与每小时重试任务不变。
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。

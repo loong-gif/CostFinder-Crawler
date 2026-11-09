@@ -50,30 +50,21 @@ def test_empty_candidates_incomplete_proof_cannot_deactivate_or_change_parent(tm
         assert image_write_block(plan,tmp_path/'journals')=='breakpoint_coverage_incomplete'
 
 
-def test_image_switch_off_prevents_pending_sql_without_leaving_a_file(tmp_path):
+def test_image_writes_are_on_by_default_and_only_an_explicit_switch_off_stops_them(tmp_path):
     plan=rest_plan()
     plan['image_policy']={'depends_on_images':True,'dual_read_verified':True}
+    # 没有控制文件：图片 offer 照常进入双读核验，不因开关停下
+    assert render_pending(plan,{},tmp_path)['category']=='image_dual_read_required'
+    atomic_json(tmp_path/'price_sync_control.json',{'image_write_enabled':False})
     receipt=render_pending(plan,{},tmp_path)
     assert receipt['category']=='image_writes_disabled' and receipt['status']=='review'
     assert not (tmp_path/'pending_sql').exists()
 
 
-def test_global_pause_stops_text_sql_at_the_final_boundary(tmp_path):
-    plan=rest_plan()
-    plan['image_policy']={'depends_on_images':False}
-    atomic_json(tmp_path/'price_sync_control.json',{'write_enabled':False,'image_write_enabled':True})
-    assert render_pending(plan,{},tmp_path)['category']=='writes_disabled'
-    assert not (tmp_path/'pending_sql').exists()
-
-
-def test_pause_after_a_rendered_file_blocks_further_files_and_keeps_the_rendered_one(tmp_path):
+def test_text_plan_renders_pending_sql_without_any_control_file(tmp_path):
     plan=rest_plan();plan['image_policy']={'depends_on_images':False};plan['event_id']='first'
     receipt=render_pending(plan,{},tmp_path)
     assert receipt['status']=='pending_sql' and Path(receipt['sql_path']).is_file()
-    atomic_json(tmp_path/'price_sync_control.json',{'write_enabled':False})
-    second=dict(plan,event_id='second')
-    assert render_pending(second,{},tmp_path)['category']=='writes_disabled'
-    assert [p.name.split('_',1)[1] for p in (tmp_path/'pending_sql').glob('*.sql')]==['first.sql']
 
 
 def test_hidden_iframe_skips_subtree_and_query_failure_stays_partial():

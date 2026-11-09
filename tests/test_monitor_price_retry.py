@@ -7,6 +7,7 @@ import pytest
 
 from scripts import run_monitor_price_sync as runner
 from scripts.firecrawl_self_hosted_monitor import run_monitor
+from utils.monitor_event_queue import retry_failed_scrape_urls
 from utils.monitor_frequency import SCHEDULE_FILE, record_check
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json
@@ -50,21 +51,21 @@ def test_three_failed_runs_pause_hourly_fetch_and_weekly_success_resets(tmp_path
                            timeout=1, limit=None, workers=1, send_notifications=False, catchup=True)
     for count in range(1, 4):
         assert capture()["error"] == 1
-        selected = runner.retry_failed_scrape_urls(tmp_path, CONFIG)
+        selected = retry_failed_scrape_urls(tmp_path, CONFIG)
         assert selected == ({URL} if count < 3 else set())
         assert RetryLimits(tmp_path).get("scrape", URL)["consecutive_failures"] == count
     assert Monitor.calls == 6  # Each failed page run still has two HTTP attempts.
     assert RetryLimits(tmp_path).paused_reviews()[0]["category"] == "retry_limit_reached"
     # The next weekly capture is not filtered by the hourly limit.
     assert capture()["error"] == 1
-    assert runner.retry_failed_scrape_urls(tmp_path, CONFIG) == set()
+    assert retry_failed_scrape_urls(tmp_path, CONFIG) == set()
     Monitor.failing = False
     assert capture()["successful_urls"] == [URL]
-    assert runner.retry_failed_scrape_urls(tmp_path, CONFIG) == set()
+    assert retry_failed_scrape_urls(tmp_path, CONFIG) == set()
     assert not RetryLimits(tmp_path).paused("scrape", URL)
     Monitor.failing = True
     capture()
-    assert runner.retry_failed_scrape_urls(tmp_path, CONFIG) == {URL}
+    assert retry_failed_scrape_urls(tmp_path, CONFIG) == {URL}
     assert RetryLimits(tmp_path).get("scrape", URL)["consecutive_failures"] == 1
 
 
@@ -74,10 +75,10 @@ def test_existing_failure_history_and_fresh_evidence_event_cannot_bypass_scrape_
                     {"url": URL, "captured_at": f"2026-10-11T0{n}:00:00+00:00", "error": "timeout"})
     atomic_json(tmp_path / "events/1.json", {"event_id": "1", "status": "retryable", "url": URL,
                                             "retry_reason": "fresh_scrape_required"})
-    assert runner.retry_failed_scrape_urls(tmp_path, CONFIG) == set()
+    assert retry_failed_scrape_urls(tmp_path, CONFIG) == set()
     # URL spelling changes do not reset the same source's limit.
     alternate = {"monitors": {"daily": {"targets": [{"urls": ["http://www.a.test/specials/"]}]}}}
-    assert runner.retry_failed_scrape_urls(tmp_path, alternate) == set()
+    assert retry_failed_scrape_urls(tmp_path, alternate) == set()
     assert RetryLimits(tmp_path).paused("scrape", "http://www.a.test/specials/")
 
 
@@ -86,14 +87,14 @@ def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_reset
     calls = []
     monkeypatch.setattr(runner, "render_page", lambda *a, **k: calls.append("browser") or {"accessible": False})
     for count in range(1, 4):
-        runner.process_events(tmp_path, SNAPSHOT, write_enabled=False, retryable_only=count > 1)
+        runner.process_events(tmp_path, SNAPSHOT, retryable_only=count > 1)
         assert len(calls) == count
     assert RetryLimits(tmp_path).paused("processing", URL)
     assert json.loads(path.read_text())["status"] == "review"
     # A new event / URL variant must not silently reopen a paused source hourly.
     newer = setup_event(tmp_path, "2", "http://www.a.test/specials/")
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=False)
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=False, retryable_only=True)
+    runner.process_events(tmp_path, SNAPSHOT)
+    runner.process_events(tmp_path, SNAPSHOT, retryable_only=True)
     assert len(calls) == 3 and json.loads(newer.read_text())["status"] == "review"
     fresh = tmp_path / "evidence/fresh.json"
     atomic_json(fresh, {"url": URL, "captured_at": datetime.now(timezone.utc).isoformat(), "markdown": "fresh $12"})
@@ -101,7 +102,7 @@ def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_reset
     seen = []
     monkeypatch.setattr(runner, "extract_evidence", lambda artifact, *a: seen.append(artifact["markdown"]) or {})
     monkeypatch.setattr(runner, "build_plan", lambda *a: {"status": "ready", "operations": [], "review": []})
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=False, retry_probe_urls={URL})
+    runner.process_events(tmp_path, SNAPSHOT, retry_probe_urls={URL})
     assert len(calls) == 4 and seen == ["fresh $12"]
     assert not RetryLimits(tmp_path).paused("processing", URL)
     assert json.loads(newer.read_text())["artifact_path"] == str(fresh)
@@ -145,7 +146,6 @@ def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_p
     ready_path = setup_event(tmp_path, "ready", ready)
     event = json.loads(ready_path.read_text()); event["status"] = "retryable"; atomic_json(ready_path, event)
     config = tmp_path / "config.json"; atomic_json(config, CONFIG)
-    atomic_json(tmp_path / "price_sync_control.json", {"write_enabled": True})
     monkeypatch.setattr(runner, "run_monitor", lambda *a, **k: pytest.fail("Capped page must not be scraped"))
     monkeypatch.setattr(runner, "database_snapshot", lambda: SNAPSHOT)
     monkeypatch.setattr(runner, "prepare_event", lambda path, *a: {"status": "ready", "operations": [], "review": []})
@@ -154,7 +154,7 @@ def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_p
     monkeypatch.setattr("sys.argv", ["sync", "--state-dir", str(tmp_path), "--config", str(config), "--retry-transient-only"])
     assert runner.main() == 0
     report = json.loads((tmp_path / "sync_report.json").read_text())
-    assert writes == ["ready"] and report["write_enabled"] is True
+    assert writes == ["ready"]
     assert {r["retry_stage"] for r in report["paused_retries"]} == {"scrape", "processing"}
     assert any(r.get("category") == "retry_limit_reached" for r in json.loads((tmp_path / "review_queue.json").read_text()))
 
@@ -174,17 +174,17 @@ def test_pending_sql_event_waits_for_its_file_and_is_never_planned_or_rendered_t
     rendered = []
     monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": [], "event_id": "1"})
     monkeypatch.setattr(runner, "render_pending", pending_file_renderer(rendered))
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    runner.process_events(tmp_path, SNAPSHOT)
     assert json.loads(path.read_text())["status"] == "pending_sql" and len(rendered) == 1
     monkeypatch.setattr(runner, "prepare_event", lambda *a: pytest.fail("A pending SQL file owns this source event"))
     monkeypatch.setattr(runner, "render_pending", lambda *a: pytest.fail("Rendered twice"))
     for _ in range(3):
-        report = runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+        report = runner.process_events(tmp_path, SNAPSHOT)
         assert report["selected_events"] == 0
     # The session executed the file and marked it applied: the event completes without another render.
     from utils.pending_sql import mark_applied
     mark_applied(rendered[0])
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    runner.process_events(tmp_path, SNAPSHOT)
     event = json.loads(path.read_text())
     assert event["status"] == "completed" and event["receipt"]["sql_path"] == str(rendered[0])
 
@@ -194,19 +194,10 @@ def test_missing_pending_sql_file_reopens_the_event_for_one_new_render(tmp_path,
     rendered = []
     monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": [], "event_id": "1"})
     monkeypatch.setattr(runner, "render_pending", pending_file_renderer(rendered))
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    runner.process_events(tmp_path, SNAPSHOT)
     rendered[0].unlink()
-    runner.process_events(tmp_path, SNAPSHOT, write_enabled=True)
+    runner.process_events(tmp_path, SNAPSHOT)
     assert len(rendered) == 2 and json.loads(path.read_text())["status"] == "pending_sql"
-
-
-def test_writes_disabled_renders_no_sql_and_leaves_the_event_pending(tmp_path, monkeypatch):
-    path = setup_event(tmp_path)
-    monkeypatch.setattr(runner, "prepare_event", lambda p, *a: {"status": "ready", "operations": [], "review": []})
-    monkeypatch.setattr(runner, "render_pending", lambda *a: pytest.fail("Control file disables SQL generation"))
-    report = runner.process_events(tmp_path, SNAPSHOT, write_enabled=False)
-    assert report["sources"][0]["status"] == "writes_disabled"
-    assert not (tmp_path / "pending_sql").exists()
 
 
 def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_path, monkeypatch):
@@ -239,6 +230,6 @@ def test_processing_counts_for_parallel_sources_are_all_persisted(tmp_path, monk
     snapshot = {**SNAPSHOT, "businesses": [{"business_id": n, "website": f"{n}.test"} for n in range(3)]}
     for n in range(3): setup_event(tmp_path, str(n), f"https://{n}.test/specials")
     monkeypatch.setattr(runner, "render_page", lambda *a, **k: {"accessible": False})
-    runner.process_events(tmp_path, snapshot, write_enabled=False)
+    runner.process_events(tmp_path, snapshot)
     assert len(RetryLimits(tmp_path).state["processing"]) == 3
     assert all(row["consecutive_failures"] == 1 for row in RetryLimits(tmp_path).state["processing"].values())

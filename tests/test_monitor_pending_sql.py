@@ -29,7 +29,7 @@ def test_ready_plan_is_written_as_a_pending_sql_file_with_digest_and_summary(tmp
 
 
 def test_chain_branches_are_rendered_into_one_pending_file(tmp_path):
-    from scripts.run_monitor_price_sync import combine_branch_plans
+    from utils.monitor_source_binding import combine_branch_plans
 
     evidence_path = str(tmp_path / "sync/evt1/evidence.json")
     first = ready_plan(evidence_path=evidence_path)
@@ -47,7 +47,7 @@ def test_chain_branches_are_rendered_into_one_pending_file(tmp_path):
 
 
 def test_one_blocked_branch_holds_back_the_whole_page(tmp_path):
-    from scripts.run_monitor_price_sync import combine_branch_plans
+    from utils.monitor_source_binding import combine_branch_plans
 
     evidence_path = str(tmp_path / "sync/evt1/evidence.json")
     stale = ready_plan(evidence_path=evidence_path,
@@ -60,9 +60,13 @@ def test_one_blocked_branch_holds_back_the_whole_page(tmp_path):
 def test_policy_gates_return_review_without_a_file(tmp_path):
     expired = ready_plan(prepared_at=(datetime.now(timezone.utc) - timedelta(hours=25)).isoformat())
     assert render_pending(expired, {}, tmp_path) == {"status": "review", "category": "evidence_expired_requires_review"}
-    atomic_json(tmp_path / "price_sync_control.json", {"write_enabled": False})
-    assert render_pending(ready_plan(), {}, tmp_path)["category"] == "writes_disabled"
     assert not pending_dir(tmp_path).exists()
+
+
+def test_old_write_switch_in_the_control_file_no_longer_holds_pending_sql(tmp_path):
+    # 写入只生成待执行 SQL，由 MCP 执行把关；服务器上遗留的 write_enabled=false 不再拦截
+    atomic_json(tmp_path / "price_sync_control.json", {"write_enabled": False})
+    assert render_pending(ready_plan(), {}, tmp_path)["status"] == "pending_sql"
 
 
 def test_writer_rejection_is_a_review_category_and_leaves_no_file(tmp_path):

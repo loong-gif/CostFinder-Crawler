@@ -8,7 +8,7 @@ from utils.run_notification import report_message
 
 STARTED = "2026-11-07T08:30:00+00:00"
 REPORT = {
-    "generated_at": "2026-11-07T09:12:00+00:00", "run_type": "full_monitor", "write_enabled": True,
+    "generated_at": "2026-11-07T09:12:00+00:00", "run_type": "full_monitor",
     "monitors": [{"total_pages": 18, "changed": 2, "error": 1,
                   "page_errors": [{"url": "https://down.test/specials", "error": "firecrawl_empty_markdown"}]}],
     "selected_events": 3, "source_status_counts": {"pending_sql": 1, "review": 2},
@@ -25,6 +25,7 @@ def test_summary_lists_captures_events_pending_sql_and_failed_pages():
     assert "7 天 37 页 / 15 天 200 页 / 30 天 0 页；会员页 60 天 120 页 / 90 天 65 页，未建档 17 页" in text
     assert "处理 3 个（pending_sql 1，review 2）" in text
     assert "待执行 SQL 1 个，需经 Supabase MCP 执行" in text and "https://a.test/specials" in text
+    assert "写入开关" not in text
     assert "https://down.test/specials — firecrawl_empty_markdown" in text
 
 
