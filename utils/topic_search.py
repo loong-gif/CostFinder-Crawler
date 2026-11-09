@@ -76,6 +76,31 @@ def match_hits(hits: list[Mapping[str, str]], places: list[Mapping[str, Any]],
     return {"clinics": clinics, "out_of_area": out_of_area, "unmatched": unmatched}
 
 
+def lookup_keyword(root: str, city: str, state: str) -> str:
+    """Google Maps 补查关键词：网站域名主体加城市与州。"""
+    return f"{root.split('.')[0]} {city}, {state}"
+
+
+def match_with_lookups(hits: list[Mapping[str, str]], places: list[Mapping[str, Any]], cities: Iterable[str],
+                       lookup: Callable[[str], list[dict[str, Any]]], *, done: Mapping[str, list[dict[str, Any]]],
+                       save: Callable[[dict[str, list[dict[str, Any]]]], None]
+                       ) -> tuple[dict[str, Any], list[Mapping[str, Any]], dict[str, list[dict[str, Any]]]]:
+    """匹配命中；没有对应诊所的站点逐个在 Google Maps 补查，补查到的地点加入后重新匹配，直至没有未查过的站点。
+    done 是早先的补查结果（不再重复查询），每查完一个站点调用 save 保存全部补查结果。
+    返回 (匹配结果, 全部地点, 全部补查结果)。"""
+    lookups = dict(done)
+    while True:
+        everything = list({str(p["google_place_id"]): p for p in
+                           [*places, *(p for found in lookups.values() for p in found)]}.values())
+        matched = match_hits(hits, everything, cities)
+        pending = [site["root"] for site in matched["unmatched"] if site["root"] not in lookups]
+        if not pending:
+            return matched, everything, lookups
+        for root in pending:
+            lookups[root] = lookup(root)
+            save(dict(lookups))
+
+
 def search_report(hits: list[Mapping[str, str]], matched: Mapping[str, Any]) -> dict[str, Any]:
     """搜索发现的精度：命中里有多少落在目标区域的诊所网站上，其中多少本身就是促销类页面。"""
     clinic_hits = sum(len(c["hits"]) for c in matched["clinics"])

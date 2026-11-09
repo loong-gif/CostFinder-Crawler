@@ -67,3 +67,29 @@ def test_search_runs_each_query_and_keeps_canonical_urls():
     hits = run_topic_search(search, ["q1", "q2"], limit=7, interval=0)
     assert asked == [("q1", 7), ("q2", 7)]
     assert [h["url"] for h in hits] == ["https://oubeauty.com/botox-special"] * 2
+
+
+def test_unmatched_sites_are_looked_up_in_google_maps_until_no_new_site_appears():
+    from utils.topic_search import lookup_keyword, match_with_lookups
+
+    assert lookup_keyword("vixenaesthetics.com", "Los Angeles", "CA") == "vixenaesthetics Los Angeles, CA"
+    found = {"carriespilatesplus.com": [], "vixenaesthetics.com": [
+        {"google_place_id": "v1", "name": "Vixen Aesthetics", "city": "Beverly Hills",
+         "website": "https://vixenaesthetics.com/"}]}
+    asked = []
+
+    def lookup(root):
+        asked.append(root)
+        return found[root]
+
+    saved = []
+    matched, places, lookups = match_with_lookups(HITS, PLACES, CITIES, lookup, done={}, save=saved.append)
+    assert asked == ["carriespilatesplus.com", "vixenaesthetics.com"]
+    assert [c["root"] for c in matched["clinics"]] == ["kalologie.com", "oubeauty.com", "vixenaesthetics.com"]
+    assert [c["root"] for c in matched["unmatched"]] == ["carriespilatesplus.com"]
+    assert "v1" in {p["google_place_id"] for p in places}
+    # 每查完一个站点就保存，命令中断后重新运行不重复查询
+    assert [sorted(s) for s in saved] == [["carriespilatesplus.com"], ["carriespilatesplus.com", "vixenaesthetics.com"]]
+    asked.clear()
+    again, _, _ = match_with_lookups(HITS, PLACES, CITIES, lookup, done=lookups, save=saved.append)
+    assert asked == [] and again == matched
