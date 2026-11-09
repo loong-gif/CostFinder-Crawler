@@ -95,8 +95,9 @@ def _typed(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def load_snapshot(path: Path, expected: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
-    """读取 snapshot.json（snapshot 列的值），核对每张表的 count 与行数一致。"""
+def load_snapshot(path: Path, expected: Iterable[str], *, typed: bool = True) -> dict[str, list[dict[str, Any]]]:
+    """读取 snapshot.json（snapshot 列的值），核对每张表的 count 与行数一致；
+    typed 为真时日期与时间戳列转为 date/datetime，否则保留 JSON 原值。"""
     payload = json.loads(Path(path).read_text())
     missing = sorted(set(expected) - set(payload))
     if missing:
@@ -106,7 +107,7 @@ def load_snapshot(path: Path, expected: Iterable[str]) -> dict[str, list[dict[st
         part = payload[name]
         if part["count"] != len(part["rows"]):
             raise SnapshotIncomplete(f"incomplete_read:{name}: read {len(part['rows'])} of {part['count']}")
-        result[name] = [_typed(dict(row)) for row in part["rows"]]
+        result[name] = [_typed(dict(row)) if typed else dict(row) for row in part["rows"]]
     return result
 
 

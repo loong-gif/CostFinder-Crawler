@@ -44,6 +44,14 @@ def current_capture(evidence: dict | None, url: str, at: datetime) -> bool:
         return False
 
 
+def gone_capture(evidence: dict | None, url: str, at: datetime) -> bool:
+    """24 小时内的复查确认该地址返回 404/410。"""
+    if not evidence or evidence.get("gone") is not True or source_key(evidence.get("url")) != source_key(url):
+        return False
+    stamp = datetime.fromisoformat(evidence["captured_at"].replace("Z", "+00:00"))
+    return timedelta(0) <= at - stamp <= timedelta(hours=24)
+
+
 def complete_capture(evidence: dict | None, url: str, at: datetime) -> bool:
     if not current_capture(evidence, url, at) or not evidence.get("complete"):
         return False

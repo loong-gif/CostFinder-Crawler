@@ -46,4 +46,34 @@ def test_no_deadline_processes_all_entries(tmp_path, no_browser) -> None:
     queue = _queue(2)
     deferred = audit.recheck_catalog_and_memberships(queue, {"memberships": [], "services": []}, tmp_path)
     assert deferred == 0 and len(no_browser) == 2
-    assert all(entry["status"] == "review" and entry["attempts"] == 1 for entry in queue["entries"])
+    # 失败的复查保持 pending，按指数退避在之后的运行中自动重试，没有永久暂停
+    assert all(entry["status"] == "pending" and entry["attempts"] == 1 and entry["retry_after"]
+               for entry in queue["entries"])
+    audit.recheck_catalog_and_memberships(queue, {"memberships": [], "services": []}, tmp_path)
+    assert len(no_browser) == 2
+
+
+def test_apply_reads_the_snapshot_itself_and_needs_no_approved_plan(tmp_path, monkeypatch, capsys) -> None:
+    from utils.data_quality_writer import SNAPSHOT_TABLES
+    from utils.pipeline_db import write_text
+
+    reads = []
+
+    def fake_fresh_snapshot(directory, tables):
+        # 代替 Supabase CLI：按 read_snapshot 的格式写出空快照
+        reads.append(sorted(tables))
+        return write_text(directory / "snapshot.json",
+                          json.dumps({name: {"count": 0, "rows": []} for name in tables}))
+
+    monkeypatch.setattr(audit, "fresh_snapshot", fake_fresh_snapshot)
+    monkeypatch.setattr("sys.argv", ["quality", "--state-dir", str(tmp_path), "--apply"])
+    audit.main()
+    assert reads == [sorted(SNAPSHOT_TABLES)]
+    assert json.loads(capsys.readouterr().out)["issues"] == 0
+
+
+def test_backoff_doubles_and_is_capped():
+    from datetime import datetime, timezone
+    at = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert audit.retry_after(1, at) == "2026-11-03T00:00:00+00:00"
+    assert audit.retry_after(10, at) == "2026-12-01T00:00:00+00:00"

@@ -1,7 +1,8 @@
 """第 5 段：从 promotion_content / benefits 抽取 promo_offer_master + promo_offer_items：
 
   plan [--limit N] [--snapshot F]       读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），调用 LLM 生成 plan.json；
-                                         来源自动选取：尚无 offer 的促销与会员、未激活 offer 已在写入后完成服务关联的来源
+                                         来源自动选取：尚无 offer 的促销与会员、未激活 offer 已在写入后完成服务关联的来源、
+                                         数据质量复查队列中需要重新抽取的来源（--state-dir）
   apply-sql --plan F [--batch-size N]    把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行；--batch-size 拆成多个独立 DO 块
 """
 from __future__ import annotations
@@ -13,6 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from utils import pipeline_db
+from utils.data_quality_audit import reextract_sources
+from utils.monitor_price_store import read_json
 from utils.offer_extraction_llm import build_client_from_env
 from utils.offer_schema import offer_schema, service_name_enum
 from utils.offer_stage import build_plan, dump_plan, snapshot_tables
@@ -28,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="step", required=True)
     plan_parser = sub.add_parser("plan")
     plan_parser.add_argument("--limit", type=int, help="最多处理的源数量")
+    plan_parser.add_argument("--state-dir", type=Path, default=PROJECT_ROOT / "output" / "data_quality_state",
+                             help="数据质量状态目录（读取其中的复查队列）")
     plan_parser.add_argument("--snapshot", type=Path)
     apply_parser = sub.add_parser("apply-sql")
     apply_parser.add_argument("--plan", type=Path, required=True)
@@ -39,8 +44,10 @@ def main(argv: list[str] | None = None) -> int:
         client = build_client_from_env()
         if client is None:
             raise RuntimeError("LLM client not configured (LLM_API_KEY / LLM_MODEL)")
+        # 数据质量审计排入重新抽取的来源（offer 组成问题）一并选入
+        requeued = reextract_sources(read_json(args.state_dir / "data_quality" / "recheck_queue.json", {}))
         snapshot_path = args.snapshot or pipeline_db.fresh_snapshot(
-            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(limit=args.limit))
+            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(requeued, limit=args.limit))
         snapshot = load_snapshot(snapshot_path, snapshot_tables())
         schema = offer_schema(service_name_enum(snapshot["service_enum"]))
         plan = build_plan(snapshot, client, schema, OUTPUT_DIR / "llm_cache")

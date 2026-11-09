@@ -8,12 +8,25 @@ import re
 from zoneinfo import ZoneInfo
 
 from utils.data_quality_evidence import (TABLES, _contains, _protected, _stated_fixed_units, complete_capture,
-                                         current_capture, source_key)
+                                         current_capture, gone_capture, source_key)
 from utils.offer_purchase_semantics import (canonical_offer_semantics, usable_unit_price,
                                            service_supported_by_source, is_generic_offer_scope)
 from utils.offer_evidence_validator import _quantity_supported
 from utils.offer_field_normalize import normalize_service_area
 from utils.promo_offer_items_db import is_blanket_offer_text
+
+# offer 组成问题：按当前来源内容重新抽取即修正，来源 id 由 extract-offers 自动选入（reextract_sources）
+REEXTRACT_RULES = frozenset({"independent_options", "unsupported_quantity", "H_member_nonmember_regular",
+                             "F_from_price_dropped", "blanket_scope_components", "missing_items",
+                             "G_units_in_text_not_delivered"})
+
+
+def reextract_sources(queue: dict) -> dict[str, list[int]]:
+    """复查队列中带重新抽取类原因、尚未解决的来源 id：{promotions, memberships}。"""
+    entries = [e for e in queue.get("entries", []) if e.get("status") != "resolved"
+               and REEXTRACT_RULES & set(e.get("reasons", []))]
+    return {"promotions": sorted({i for e in entries for i in e.get("promotion_ids", [])}),
+            "memberships": sorted({i for e in entries for i in e.get("membership_ids", [])})}
 
 
 def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections: dict | None = None,
@@ -38,9 +51,11 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
         source = parent or row
         url = source.get("source_url", "")
         protected = _protected(snapshot, table, row, protections)
+        route = ("reextract" if rule in REEXTRACT_RULES else "delete_offer_shells" if rule == "I_itemless_offer"
+                 else "review" if rule == "service_scope_evidence" else "recheck")
         issue = {"rule": rule, "table": table, "id": row[pk], "reason": reason,
                  "source_url": url, "business_id": source.get("business_id"),
-                 "status": "protected" if protected else "ready" if values else "review"}
+                 "status": "protected" if protected else "ready" if values else route}
         report["issues"].append(issue)
         if values and not protected:
             patch = {k: v for k, v in values.items() if row.get(k) != v}
@@ -107,6 +122,13 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
                 values = {"benefits": replacement["benefits"]}
             finding("missing_benefits", "clinic_memberships", member, "unknown benefits must not mean verified empty",
                     values=values, kind="membership")
+        if gone_capture(ev, member.get("source_url", ""), at):
+            # 会员页面已不存在（404/410）：该会员的 active offer 停用
+            for offer in snapshot.get("offers", []):
+                if offer.get("membership_plan_id") == member["plan_id"] and offer.get("is_active"):
+                    finding("membership_page_gone", "promo_offer_master", offer, "membership page returns 404/410",
+                            values={"is_active": False}, parent=member, kind="membership")
+            continue
         if complete_capture(ev, member.get("source_url", ""), at) and member["plan_id"] in ev.get("absent_membership_ids", []):
             for offer in snapshot.get("offers", []):
                 if offer.get("membership_plan_id") == member["plan_id"] and offer.get("is_active"):
@@ -217,6 +239,7 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
                 finding("unsupported_quantity", "promo_offer_items", item, "fixed quantity has no delivery evidence", parent=parent, kind=kind)
             mapped = services.get(item.get("service_id"))
             if mapped and not blanket and not service_supported_by_source(mapped.get("service_name"), raw):
+                # 原文措辞与服务名不一致不等于映射错误（neuromodulator → Neurotoxin 等），证据不足以自动清除映射
                 finding("service_scope_evidence", "promo_offer_items", item, "explicit source service or controlled alias needs verification", parent=parent, kind=kind)
     for group in duplicates.values():
         if len(group) < 2:
@@ -231,17 +254,6 @@ def audit_snapshot(snapshot: dict, captures: dict | None = None, *, protections:
             finding("duplicate_offer", "promo_offer_master", row, f"complete commercial equivalent of {survivor['id']}",
                     values=None if protected else {"is_active": False}, parent=parent,
                     kind="membership" if row.get("membership_plan_id") else "promotion")
-    # Detect possible baselines, never infer a regular price from another promotion.
-    for offer in snapshot.get("offers", []):
-        if offer.get("is_active") and offer.get("is_new_customer_required") and offer.get("regular_price") is None:
-            siblings = [o for o in snapshot.get("offers", []) if o.get("is_active") and o["id"] != offer["id"]
-                        and o.get("business_id") == offer.get("business_id") and o.get("promotion_id") == offer.get("promotion_id")
-                        and o.get("membership_plan_id") == offer.get("membership_plan_id")
-                        and o.get("is_new_customer_required") is False and o.get("discount_price") is not None
-                        and {i.get("service_id") for i in items[o["id"]]} == {i.get("service_id") for i in items[offer["id"]]}]
-            if siblings:
-                finding("regular_price_baseline", "promo_offer_master", offer, "same-spec source-stated regular price required; do not borrow another sale",
-                        parent=promotions.get(offer.get("promotion_id")) or memberships.get(offer.get("membership_plan_id")))
     report["rechecks"] = list(queued.values())
     report["counts"] = {key: len(report[key]) for key in ("issues", "repairs", "rechecks")}
     return report
