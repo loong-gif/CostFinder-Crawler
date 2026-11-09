@@ -42,6 +42,22 @@ def pick_next_city(
     return ranked[0][1]
 
 
+def due_for_rediscovery(cities: Mapping[str, Mapping[str, Any]], now: datetime) -> List[str]:
+    """到期需要重新发现的 active 城市，从来没发现过的排最前，其余按到期时间先后。"""
+    due = [key for key, entry in cities.items() if entry.get("status") == "active"
+           and (not entry.get("next_discovery_at") or datetime.fromisoformat(entry["next_discovery_at"]) <= now)]
+    return sorted(due, key=lambda key: (cities[key].get("last_discovery_at") is not None,
+                                        cities[key].get("next_discovery_at") or "", key))
+
+
+def pilot_qualifying(candidates: Mapping[str, Mapping[str, Any]], city: str) -> int:
+    """试点城市里通过过滤线且有网站的地点数（来自 register-businesses 写入的 candidates.json）。"""
+    name = city.strip().casefold()
+    return sum(1 for entry in candidates.values()
+               if str(entry.get("city") or "").strip().casefold() == name
+               and entry.get("passed_filter") and str(entry.get("website") or "").strip())
+
+
 def evaluate_pilot(entry: Mapping[str, Any], qualifying_count: int, now: datetime) -> Dict[str, Any]:
     """Return the entry after a pilot: active when enough businesses qualify, else parked for 90 days."""
     new = dict(entry)

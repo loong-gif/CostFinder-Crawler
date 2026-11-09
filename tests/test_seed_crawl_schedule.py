@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from config.discovery_filters import passes_filter
-from scripts import seed_crawl_schedule as seed
+from utils import crawl_schedule_seed as seed
 from utils.crawl_schedule_state import discovery_interval_days, load_state, save_state
 
 NOW = datetime(2026, 10, 15, tzinfo=timezone.utc)

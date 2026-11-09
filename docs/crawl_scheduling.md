@@ -15,16 +15,28 @@
 ## 命令
 
 ```bash
-python scripts/seed_crawl_schedule.py [--apply]            # 首次/补种：从现有目录数据生成状态
-python scripts/crawl_scheduler.py plan [--cap N] [--apply]  # 今天到期的商户与 URL
-python scripts/crawl_scheduler.py record --results r.json [--apply]  # 回写抓取结果并调整 tier
-python scripts/process_discovery_results.py --input places.json [--city C --state S] [--apply]
-python scripts/select_next_city.py add|pick|pilot ...       # 新城市队列
-python scripts/crawl_report.py                              # 汇总
+python scripts/promo_pipeline.py crawl-schedule plan [--cap N] [--apply]   # 补种新商家与城市，列出今天到期的商户与 URL、到期城市
+python scripts/promo_pipeline.py crawl-schedule record --results r.json [--apply]  # 回写抓取结果并调整 tier
+python scripts/promo_pipeline.py discover-businesses --due [--max-cities N]  # 到期城市重新发现并登记
+python scripts/promo_pipeline.py discover-businesses --city C --state S --out places.json
+python scripts/promo_pipeline.py register-businesses --input places.json [--city C --state S]
+python scripts/promo_pipeline.py select-city add|pick|pilot ...  # 新城市队列
+python scripts/crawl_report.py                                  # 汇总
 ```
 
-所有写入类命令默认 dry-run。`process_discovery_results.py --apply` 只对 `master_business_info`
-做数据插入/刷新，不删除、不降级已有商户。
+读库一律走 read-sql + read-snapshot：命令把只读查询写入 `output/pipeline/<命令>/<UTC 时间戳>/read.sql`，
+用 Supabase CLI（`--linked`）执行得到 `snapshot.json`；也可用 `--snapshot` 指定已有快照。
+
+- `crawl-schedule plan` 每次运行先把 `schedule.json` / `cities.json` 里还没有的商家和城市补种进去
+  （`utils/crawl_schedule_seed.py`），新登记的商家在 apply.sql 执行后的下一次运行自动进入调度。
+- `discover-businesses --due` 按 `cities.json` 选出到期的 active 城市（从未发现过的优先，每次最多 `--max-cities`），
+  逐城抓取并立即登记；没有 `GMAPS_SCRAPER_URL` 时命令自己建立到抓取服务的 SSH 隧道。
+- `register-businesses` 的动作（insert / promote / link / refresh）由过滤线判定、全部渲染；apply.sql 每条语句按
+  `google_place_id` 判重，重复执行同一批地点不会重复登记。同一网站对应多家既有商家时按街道地址匹配；
+  仍无法判定的地点写入运行目录的 `ambiguous.json`，候选标 `match_status=ambiguous`，下一轮发现时重新判定。
+  apply.sql 经 Supabase MCP 执行；不删除、不降级已有商户。
+- `select-city pick` 直接把选中的城市标为 onboarding；`select-city pilot CITY STATE` 从 `candidates.json`
+  统计该城市通过过滤线且有网站的地点数，决定转 active 或搁置。
 
 ## 规则
 
@@ -40,9 +52,8 @@ python scripts/crawl_report.py                              # 汇总
 
 ## 服务器部署（2026-10-15）
 
-调度脚本以"只新增文件、不覆盖"的方式放入 `/home/loong/costfinder_monitor`（10 个文件），服务器上已就地运行
-`seed_crawl_schedule.py --apply` 生成 `state/crawl_schedule/`，使用服务器已有的 `.env` 凭据。
-后续代码更新统一用 `deploy_monitor_price_sync.py`，部署不改动 `state/` 里的控制文件。
+代码更新统一用 `deploy_monitor_price_sync.py`，部署不改动 `state/` 里的控制文件。`crawl-schedule plan` 读库走
+read-snapshot，服务器上需要已登录并 `supabase link` 到生产项目的 Supabase CLI（`supabase/.temp/project-ref`）。
 
 ## 到期抓取闭环
 
@@ -69,8 +80,8 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。
 - 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，只监听该机 `127.0.0.1:8081`，
   Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
-  不需要代理。本机先开隧道 `ssh -f -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl`，`discover-businesses`
-  默认地址 `GMAPS_SCRAPER_URL=http://127.0.0.1:18081`。
+  不需要代理。`discover-businesses` 在本机 18081 端口未监听时自动建立隧道
+  `ssh -f -N -L 127.0.0.1:18081:127.0.0.1:8081 firecrawl`（`utils/monitor_host.ensure_tunnel`）。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 

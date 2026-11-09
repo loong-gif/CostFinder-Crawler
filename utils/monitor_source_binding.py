@@ -22,7 +22,7 @@ def check_promotion_source(url: str, snapshot: dict) -> None:
                 raise RuntimeError("membership_source_requires_review")
 
 
-def _address_key(address) -> str:
+def address_key(address) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(address or "").casefold()))
 
 
@@ -55,7 +55,7 @@ def bind_source(url: str, snapshot: dict) -> list[dict]:
     if not matches:
         raise RuntimeError("source_business_missing")
     if len(matches) > 1 and not by_rows:
-        addresses = {row["business_id"]: _address_key(row.get("address")) for row in snapshot["businesses"]
+        addresses = {row["business_id"]: address_key(row.get("address")) for row in snapshot["businesses"]
                      if row["business_id"] in matches}
         keys = [addresses.get(business_id, "") for business_id in matches]
         if not all(keys) or len(set(keys)) != len(keys):

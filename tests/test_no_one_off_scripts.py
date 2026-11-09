@@ -25,7 +25,7 @@ LEGACY_SCRIPTS = frozenset({
     "rescrape_firecrawl_raw_only_main",
     "run_clinic_services_firecrawl", "run_domain_architecture_pipeline",
     "run_monitor_image_evaluation", "sag_multi_retrieval_eval", "sag_persistent_pilot",
-    "scrape_utils", "seed_clinic_services_botox", "seed_crawl_schedule",
+    "scrape_utils", "seed_clinic_services_botox",
     "sync_replica_catalog", "sync_storage_to_replica", "verify_clinic_service_prices",
 })
 

@@ -51,7 +51,7 @@ def deploy(host: str, include_credentials: bool):
         "scripts/firecrawl_self_hosted_monitor.py","scripts/run_monitor_price_sync.py","scripts/monitor_schedule.py",
         "scripts/notify_monitor_run.py",
         "scripts/run_data_quality_audit.py",
-        "scripts/crawl_scheduler.py","scripts/seed_crawl_schedule.py",
+        "scripts/crawl_scheduler.py","scripts/read_snapshot.py",
         "scripts/process_discovery_results.py","scripts/select_next_city.py","scripts/crawl_report.py",
         "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
         "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",

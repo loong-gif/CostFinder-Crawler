@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,16 @@ def remote_python(code: str, *, stdin: bytes = b"", timeout: int = 60, host: str
     if result.returncode:
         raise RuntimeError("remote_operation_failed:" + result.stderr.decode(errors="replace")[-300:])
     return result.stdout.decode()
+
+
+def ensure_tunnel(local_port: int, remote_port: int, *, host: str = HOST) -> bool:
+    """本机端口没有在监听时，后台建立到监控主机本机端口的 ssh 隧道；返回是否新建了隧道。"""
+    with socket.socket() as probe:
+        if probe.connect_ex(("127.0.0.1", local_port)) == 0:
+            return False
+    subprocess.run(["ssh", "-f", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+                    "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}", host], check=True, timeout=30)
+    return True
 
 
 def _remote_pending(base: str) -> str:
