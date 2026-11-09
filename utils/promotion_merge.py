@@ -11,7 +11,7 @@ from typing import Any, Callable, Mapping
 
 from psycopg.types.json import Jsonb
 
-from utils.page_title import TitleUnavailable
+from utils.page_title import PageGone, TitleUnavailable
 from utils.pipeline_db import (
     LOCK_PROMOTIONS, NEXT_PROMOTION_ID, do_block, expect_updated_at, literal, plan_digest, render,
 )
@@ -82,15 +82,19 @@ def build_plan(snapshot: Mapping[str, list[dict[str, Any]]], fetch_title: Callab
         else:
             start, end = _merged_dates(active_rows or rows)
         losers = [r for r in rows if r is not keeper]
+        is_active, rule_deactivated = bool(active_rows), None
         try:
             title, title_error = fetch_title(target_url, names.get(business_id, "")), None
         except TitleUnavailable as exc:
             # 页面本身取不到可用标题是该组的结果；网络与代码错误直接抛出
             title, title_error = None, f"{type(exc).__name__}: {exc}"
-            if keeper is not None and not active_rows and keeper["promotion_title"]:
-                # 全部成员已 inactive 且页面已不可访问：没有新的页面证据，沿用保留行已有的标题完成合并
-                title = keeper["promotion_title"]
-        is_active, rule_deactivated = bool(active_rows), None
+            existing_title = next((r["promotion_title"] for r in ([keeper] if keeper else []) + rows
+                                   if r["promotion_title"]), None)
+            if isinstance(exc, PageGone) or (keeper is not None and not active_rows):
+                # 页面已不存在（404/410）或全部成员已 inactive：沿用已有标题完成合并，合并后的行为 inactive
+                title = existing_title
+                if isinstance(exc, PageGone) and is_active:
+                    is_active, rule_deactivated = False, "page_gone"
         if title and is_active:
             try:
                 check_promotion(target_url, title, content, is_active=True, campaign_end_date=end)
