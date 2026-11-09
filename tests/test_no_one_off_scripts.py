@@ -20,7 +20,6 @@ LEGACY_SCRIPTS = frozenset({
     "deploy_monitor_price_sync", "discover_clinic_promotions_firecrawl",
     "export_monitor_price_sync", "extract_clinic_promotions_from_scrape_raw",
     "fill_promotion_screenshots", "firecrawl_self_hosted_monitor",
-    "hermes_notification_worker",
     "render_clinic_services_restore_mcp_sql",
     "repair_clinic_memberships_full_table",
     "rescrape_firecrawl_raw_only_main",
