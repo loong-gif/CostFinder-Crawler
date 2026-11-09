@@ -1,20 +1,21 @@
-"""从 offer 识别 service，回填 clinic_services 与 promo_offer_items.service_id。数据库读写经 Supabase MCP：
+"""从 offer 识别 service，回填 clinic_services 与 promo_offer_items.service_id：
 
-  read-sql                  生成只读快照查询 read.sql，经 MCP 执行后把 snapshot 列的值存为 snapshot.json
-  plan --snapshot F         根据快照生成 plan.json（需要时调用 LLM）；--skip-llm 不调用 LLM
+  plan [--business-id N ...] [--snapshot F]
+                            读取只读快照（未给出时自动执行 read.sql 生成 snapshot.json），
+                            生成 plan.json（需要时调用 LLM）
   apply-sql --plan F        把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行
 """
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from utils import pipeline_db
 from utils.offer_extraction_llm import build_client_from_env
-from utils.pipeline_db import load_snapshot, snapshot_query, write_text
+from utils.pipeline_db import load_snapshot, write_text
 from utils.pipeline_run import PROJECT_ROOT
 from utils.service_linking import SNAPSHOT_TABLES, build_plan, dump_plan, render_apply, snapshot_tables
 
@@ -24,29 +25,24 @@ OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "link_services"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="step", required=True)
-    read_parser = sub.add_parser("read-sql")
-    read_parser.add_argument("--business-id", type=int, action="append", help="只处理这些商家（可重复）")
     plan_parser = sub.add_parser("plan")
-    plan_parser.add_argument("--snapshot", type=Path, required=True)
-    plan_parser.add_argument("--skip-llm", action="store_true",
-                             help="不调用 LLM；确定性规则无法识别的 item 仍报错终止，需先处理")
+    plan_parser.add_argument("--business-id", type=int, action="append", help="只处理这些商家（可重复）")
+    plan_parser.add_argument("--snapshot", type=Path)
     apply_parser = sub.add_parser("apply-sql")
     apply_parser.add_argument("--plan", type=Path, required=True)
     apply_parser.add_argument("--batch-size", type=int,
                               help="每批最多关联的 item 数（按店铺整体分批）；写出 apply_01.sql、apply_02.sql ...")
     args = parser.parse_args()
 
-    if args.step == "read-sql":
-        run_dir = OUTPUT_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        print(write_text(run_dir / "read.sql", snapshot_query(snapshot_tables(args.business_id))))
-        return 0
     if args.step == "plan":
         load_dotenv(PROJECT_ROOT / ".env")
-        client = None if args.skip_llm else build_client_from_env()
-        if client is None and not args.skip_llm:
+        client = build_client_from_env()
+        if client is None:
             raise RuntimeError("LLM client is not configured (LLM_API_KEY / LLM_MODEL / LLM_API_URL)")
-        plan = build_plan(load_snapshot(args.snapshot, SNAPSHOT_TABLES), client)
-        out = write_text(args.snapshot.parent / "plan.json", dump_plan(plan))
+        snapshot = args.snapshot or pipeline_db.fresh_snapshot(pipeline_db.run_dir(OUTPUT_DIR),
+                                                               snapshot_tables(args.business_id))
+        plan = build_plan(load_snapshot(snapshot, SNAPSHOT_TABLES), client)
+        out = write_text(snapshot.parent / "plan.json", dump_plan(plan))
         print(f"{out}\n{json.dumps(plan['counts'])} services_to_create={len(plan['services_to_create'])} "
               f"promotions_to_mark={len(plan['promotions_to_mark'])} memberships_to_mark={len(plan['memberships_to_mark'])}")
         return 0

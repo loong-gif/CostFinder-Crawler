@@ -1,9 +1,8 @@
-"""原始爬取结果抽取为 clinic_promotions / clinic_memberships。数据库读写经 Supabase MCP：
+"""原始爬取结果抽取为 clinic_promotions / clinic_memberships：
 
-  read-sql [--decisions F --business-id N --limit N]
-                      按决策文件涉及的商家生成只读快照查询 read.sql，经 MCP 执行后把 snapshot 列的值存为 snapshot.json
-  plan --snapshot F [--decisions F --business-id N --limit N --raw-dir D --visibility-manifest M]
-                      根据快照、原始爬取结果与可见性清单生成 plan.json（调用 LLM）；筛选参数与 read-sql 保持一致
+  plan [--decisions F --business-id N --limit N --raw-dir D --visibility-manifest M --snapshot F]
+                      读取决策文件涉及商家的只读快照（未给出时自动执行 read.sql 生成 snapshot.json），
+                      根据快照、原始爬取结果与可见性清单生成 plan.json（调用 LLM）
   apply-sql --plan F --visibility-manifest M
                       核对可见性清单哈希后把计划渲染为 apply.sql（单个 DO 块），经 MCP 执行
 """
@@ -11,11 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from utils import pipeline_db
 from utils.offer_extraction_llm import build_client_from_env
 from utils.page_extraction import build_plan, render_apply
 from utils.page_extraction_snapshot import (
@@ -25,7 +24,7 @@ from utils.page_extraction_snapshot import (
     snapshot_tables_for_pages,
 )
 from utils.ego_browser import fetch_page_title
-from utils.pipeline_db import load_snapshot, snapshot_query, write_text
+from utils.pipeline_db import load_snapshot, write_text
 from utils.pipeline_run import PROJECT_ROOT
 from utils.raw_file_store import RawFileStore
 
@@ -53,10 +52,9 @@ def main() -> int:
         p.add_argument("--limit", type=int, help="按 URL 排序后只处理前 N 个页面")
         p.add_argument("--business-id", type=int, action="append", help="只处理指定商家，可重复")
 
-    add_selection(sub.add_parser("read-sql"))
     plan_parser = sub.add_parser("plan")
     add_selection(plan_parser)
-    plan_parser.add_argument("--snapshot", type=Path, required=True)
+    plan_parser.add_argument("--snapshot", type=Path)
     plan_parser.add_argument("--raw-dir", type=Path, help="原始爬取结果目录，默认 COSTFINDER_RAW_DIR")
     plan_parser.add_argument("--visibility-manifest", type=Path, help="渲染可见性清单；apply-sql 必须使用同一份")
     apply_parser = sub.add_parser("apply-sql")
@@ -64,12 +62,6 @@ def main() -> int:
     apply_parser.add_argument("--visibility-manifest", type=Path, required=True,
                               help="生成计划时使用的同一份渲染可见性清单")
     args = parser.parse_args()
-
-    if args.step == "read-sql":
-        pages = _selected_pages(args)
-        run_dir = OUTPUT_DIR / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        print(write_text(run_dir / "read.sql", snapshot_query(snapshot_tables_for_pages(pages))))
-        return 0
 
     if args.step == "apply-sql":
         plan = json.loads(args.plan.read_text())
@@ -81,7 +73,9 @@ def main() -> int:
     if llm is None:
         raise RuntimeError("LLM_API_KEY / LLM_MODEL are not configured")
     pages = _selected_pages(args)
-    snapshot = load_snapshot(args.snapshot, snapshot_tables_for_pages(pages))
+    tables = snapshot_tables_for_pages(pages)
+    snapshot_path = args.snapshot or pipeline_db.fresh_snapshot(pipeline_db.run_dir(OUTPUT_DIR), tables)
+    snapshot = load_snapshot(snapshot_path, tables)
     state = database_state(snapshot, sorted({p["business_id"] for p in pages}))
     store = RawFileStore(args.raw_dir) if args.raw_dir else RawFileStore()
     scrapes = latest_scrapes(store.fetch_rows("firecrawl_scrape_raw", "*", filters={"success": "eq.true"}))
@@ -91,6 +85,6 @@ def main() -> int:
         manifest=_load_manifest(args.visibility_manifest) if args.visibility_manifest else None,
         promotion_schema=json.loads((SCHEMA_DIR / "promotion_extraction_schema.json").read_text()),
         membership_schema=json.loads((SCHEMA_DIR / "membership_extraction_schema.json").read_text()))
-    out = write_text(args.snapshot.parent / "plan.json", json.dumps(plan, ensure_ascii=False, indent=2, default=str))
+    out = write_text(snapshot_path.parent / "plan.json", json.dumps(plan, ensure_ascii=False, indent=2, default=str))
     print(f"{out}\n{json.dumps(plan['summary'])}")
     return 0

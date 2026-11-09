@@ -1,7 +1,7 @@
 """流水线不使用 DB_URL，不建立数据库连接。
 
-读：命令生成只读快照查询（read.sql），read_snapshot 用 Supabase CLI（--linked）执行并直接写入 snapshot.json；
-    加载时逐表核对 count 与行数，结果被截断即报错。
+读：命令的 plan 步骤经 fresh_snapshot 生成只读快照查询（read.sql），read_snapshot 用 Supabase CLI（--linked）
+    执行并直接写入 snapshot.json；加载时逐表核对 count 与行数，结果被截断即报错。
 写：命令把计划渲染为单个 DO 块（apply.sql），经 Supabase MCP（execute_sql）执行；块内先核对计划生成后
     数据未变化，再写入，最后执行收尾检查；任何一步失败整体回滚。
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -73,6 +73,16 @@ def read_snapshot(read_sql: Path) -> Path:
     if len(rows) != 1 or set(rows[0]) != {"snapshot"}:
         raise RuntimeError(f"unexpected snapshot result shape: {len(rows)} rows")
     return write_text(Path(read_sql).parent / "snapshot.json", json.dumps(rows[0]["snapshot"], ensure_ascii=False))
+
+
+def run_dir(output_dir: Path) -> Path:
+    """命令的一次运行目录，按 UTC 时间命名。"""
+    return Path(output_dir) / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def fresh_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
+    """在 directory 写入只读快照查询 read.sql 并立即执行，返回 snapshot.json 的路径。"""
+    return read_snapshot(write_text(Path(directory) / "read.sql", snapshot_query(tables)))
 
 
 def _typed(row: dict[str, Any]) -> dict[str, Any]:

@@ -13,9 +13,10 @@ Stages, in order:
   6 link-services                                  offer items -> clinic_services + service_id
 Maintenance: merge-promotions, deactivate-expired, monitor, quality, batch-gate.
 
-Every command runs the script's own ``main()`` with the remaining arguments. No command connects to the
-database: reads come from snapshot files exported through the Supabase MCP (``read-sql``), writes are rendered
-to a single-transaction ``apply.sql`` that is executed through the Supabase MCP (``apply-sql``).
+Every command runs the script's own ``main()`` with the remaining arguments. No command writes the
+database: ``plan`` reads a read-only snapshot automatically (``read.sql`` run by the Supabase CLI, see
+``utils.pipeline_db.fresh_snapshot``), writes are rendered to a single-transaction ``apply.sql`` that is executed
+through the Supabase MCP (``apply-sql``).
 """
 from __future__ import annotations
 
