@@ -1,16 +1,12 @@
 import argparse
 import collections
-import csv
 import json
 import sys
-from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-BUCKET = 50
 
 
 def apply_render_verdicts(decisions: list, deep: dict) -> None:
@@ -37,9 +33,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Final add/skip decisions once the deep render review has run")
     parser.add_argument("--decisions", type=Path, default=PROJECT_ROOT / "state/discovery/monitor_decisions_final.json")
     parser.add_argument("--deep", type=Path, default=PROJECT_ROOT / "state/discovery/render_review/deep/verdicts.json")
-    parser.add_argument("--tiers", type=Path, help="商家分级 CSV（business_id, current_tier）；给出时按新增页面更新 new_tier")
-    parser.add_argument("--out-config", type=Path, default=PROJECT_ROOT / "state/discovery/promo_discovery_monitor_final.json")
-    parser.add_argument("--date", default=date.today().strftime("%Y%m%d"))
     args = parser.parse_args()
 
     payload = json.loads(args.decisions.read_text())
@@ -49,26 +42,9 @@ def main() -> int:
     counts = collections.Counter(r["decision"] for r in payload["decisions"])
     payload["summary"] = dict(counts)
     args.decisions.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-
-    urls = sorted({r["url"] for r in payload["decisions"] if r["decision"] == "add"})
-    monitors = {}
-    for number, start in enumerate(range(0, len(urls), BUCKET), start=1):
-        key = f"costfinder_discovered_{args.date}_{number:02d}"
-        monitors[key] = {"name": key, "status": "active",
-                         "targets": [{"id": f"{key}_scrape", "type": "scrape", "urls": urls[start:start + BUCKET]}]}
-    args.out_config.write_text(json.dumps({"schema_version": 1, "monitors": monitors}, ensure_ascii=False, indent=2) + "\n")
-
-    pages = collections.Counter(str(r["business_id"]) for r in payload["decisions"] if r["decision"] == "add")
-    if args.tiers is not None:
-        rows = list(csv.DictReader(args.tiers.open()))
-        for row in rows:
-            row["pages_found"] = pages.get(row["business_id"], 0)
-            row["new_tier"] = "A" if row["current_tier"] == "A" or row["pages_found"] else row["current_tier"]
-        with args.tiers.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-    print("decisions", dict(counts), "urls", len(urls), "businesses", len(pages))
+    urls = {r["url"] for r in payload["decisions"] if r["decision"] == "add"}
+    businesses = {r["business_id"] for r in payload["decisions"] if r["decision"] == "add"}
+    print("decisions", dict(counts), "urls", len(urls), "businesses", len(businesses))
     return 0
 
 

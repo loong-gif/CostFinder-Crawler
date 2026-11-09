@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping
 
 import requests
 import snowballstemmer
@@ -41,27 +41,6 @@ def item_id(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
 
 
-def build_items(decisions: Iterable[Mapping[str, Any]], done: Optional[Mapping[str, Mapping[str, Any]]] = None
-                ) -> List[Dict[str, Any]]:
-    """Queue entries for kept ``needs_review`` pages; pages already rendered are not queued again."""
-    done = done or {}
-    items: List[Dict[str, Any]] = []
-    seen = set()
-    for record in decisions:
-        url = record["url"]
-        if record.get("decision") == "skip" or record.get("status") != "needs_review" or url in seen:
-            continue
-        seen.add(url)
-        previous = done.get(url)
-        if previous and previous.get("verdict") in ("verified", "not_visible", "manual_review"):
-            continue
-        claims = [{"id": i, "line": line[:240], "anchors": claim_anchors(line)}
-                  for i, line in enumerate(record.get("evidence") or [])]
-        items.append({"id": item_id(url), "url": url, "business_id": record.get("business_id"),
-                      "business": record.get("business"), "claims": claims})
-    return items
-
-
 def shard(items: List[Dict[str, Any]], count: int) -> List[List[Dict[str, Any]]]:
     """Round-robin so every shard gets a similar mix of sites and sizes."""
     shards: List[List[Dict[str, Any]]] = [[] for _ in range(max(1, count))]
@@ -70,46 +49,6 @@ def shard(items: List[Dict[str, Any]], count: int) -> List[List[Dict[str, Any]]]
     return [s for s in shards if s]
 
 
-def page_verdict(record: Mapping[str, Any]) -> Dict[str, Any]:
-    """Collapse the in-page claim results to one verdict for the URL."""
-    if record.get("error") or not record.get("result"):
-        return {"verdict": "page_unavailable", "reason": str(record.get("error") or "no_result")[:160]}
-    claims = [c for c in record["result"].get("claims", []) if c.get("anchors")]
-    if not claims:
-        # The evidence lines carry no price or percent token, so the renderer has nothing to match.
-        # That says nothing about visibility: neither promote nor drop the page.
-        return {"verdict": "manual_review", "reason": "no_price_tokens_to_check"}
-    visible = [c for c in claims if c.get("status") == "visible_match"]
-    hidden = [c for c in claims if c.get("status") == "dom_only_hidden"]
-    ratio = len(visible) / len(claims)
-    if visible and ratio >= VISIBLE_FRACTION:
-        return {"verdict": "verified", "reason": f"{len(visible)}_of_{len(claims)}_claims_visible"}
-    if hidden and not visible:
-        return {"verdict": "not_visible", "reason": "claims_only_in_hidden_elements"}
-    if visible:
-        return {"verdict": "not_visible", "reason": f"only_{len(visible)}_of_{len(claims)}_claims_visible"}
-    return {"verdict": "not_visible", "reason": "claims_not_found_in_rendered_page"}
-
-
-def apply_verdicts(decisions: List[Dict[str, Any]], verdicts: Mapping[str, Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    """Update decisions in place: rendered-verified pages become ``add``, rendered-hidden ones are skipped."""
-    for record in decisions:
-        verdict = verdicts.get(record["url"])
-        if not verdict or record.get("status") != "needs_review":
-            continue
-        record["render_review"] = {k: verdict.get(k) for k in ("verdict", "reason", "checked_at", "final_url", "screenshot")}
-        if verdict.get("verdict") == "verified" and record.get("decision") != "skip":
-            record["decision"] = "add"
-            record.setdefault("reasons", []).append("render_verified")
-        elif verdict.get("verdict") == "not_visible":
-            record["decision"] = "skip"
-            record.setdefault("reasons", []).append("rendered_not_visible")
-        # page_unavailable keeps add_with_review and is retried (up to MAX_ATTEMPTS);
-        # manual_review keeps add_with_review and waits for a person
-    return decisions
-
-
-# ---- deep review: expanded panels and image text ----
 LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 MIN_SUBSTANTIVE_WORDS = 4
 
