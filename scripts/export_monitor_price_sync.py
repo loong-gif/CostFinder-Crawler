@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from scripts.deploy_monitor_price_sync import remote_python
+from utils.monitor_host import remote_python
 from utils.monitor_price_store import atomic_bytes
 
 

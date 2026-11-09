@@ -89,7 +89,8 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "read-snapshot": ("scripts.read_snapshot",
                       "run a command's read.sql with the Supabase CLI and save snapshot.json", "no (read only)"),
     "pending-sql": ("scripts.pending_sql",
-                    "list pending SQL files from the monitor host; --mark-applied FILE after MCP execution",
+                    "--pull pending SQL files from the monitor host; --mark-applied FILE after MCP execution "
+                    "(locally and on the monitor host)",
                     "no (moves files)"),
 }
 

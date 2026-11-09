@@ -13,23 +13,16 @@ import base64
 import io
 import json
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "/home/loong/costfinder_monitor"
+sys.path.insert(0, str(ROOT))
 
-
-def remote_python(code: str, *, stdin: bytes = b"", timeout: int = 60, host: str = "firecrawl"):
-    encoded = base64.b64encode(code.encode()).decode()
-    command = 'wsl -e python3 -c "import base64;exec(base64.b64decode(\'' + encoded + '\'))"'
-    result = subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",host,command],
-                            input=stdin,capture_output=True,timeout=timeout)
-    if result.returncode:
-        raise RuntimeError("remote_operation_failed:" + result.stderr.decode(errors="replace")[-300:])
-    return result.stdout.decode()
+from utils.monitor_host import BASE, remote_python  # noqa: E402
 
 
 def monitor_launcher(log: str, run_type: str, extra_args: str, *, yield_to_running: bool = False) -> bytes:
