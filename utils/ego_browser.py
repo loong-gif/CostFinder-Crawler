@@ -22,9 +22,19 @@ EGO_TASK_SPACE = "costfinder page titles"
 
 NON_CONTENT_TAGS = ["script", "style", "noscript", "svg", "iframe", "template"]
 EGO_PROCESS_TIMEOUT_S = 240
+# 网站请求定位等浏览器权限时，ego-lite 弹出提示并把整个任务空间交给用户，此后该空间的所有脚本都失败。
+# 打开网站之前经页面拒绝这些权限：不带 origin 的设置作用于所有网站，被拒绝的请求不再弹出提示
+# （task.cdp 不支持 Browser.setPermission）。三个 ego 脚本（抓取、标题、监控渲染桥接）共用这一段。
+DENY_PERMISSIONS_JS = """
+for (const name of ["geolocation", "notifications", "camera", "microphone", "midi", "clipboard-read",
+                    "display-capture", "local-fonts", "window-management", "storage-access"]) {
+  await page.cdp("Browser.setPermission", { permission: { name }, setting: "denied" });
+}
+"""
 EGO_SCRIPT = """
 const task = await taskSpace({space});
 const page = task.page("p1");
+{deny}
 await page.goto({url}, {{ timeout: {timeout} }});
 await page.waitForTimeout(6000);
 const info = await page.evaluate(() => ({{
@@ -95,6 +105,7 @@ def chunked_result(output: str) -> dict[str, Any]:
 
 def ego_scrape(url: str) -> dict[str, Any]:
     script = EGO_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS,
+                               deny=DENY_PERMISSIONS_JS,
                                chunk=EGO_CHUNK_CHARS)
     command = ego_command()
     try:
@@ -116,6 +127,7 @@ def ego_scrape(url: str) -> dict[str, Any]:
 EGO_TITLE_SCRIPT = """
 const task = await taskSpace({space});
 const page = task.page("p1");
+{deny}
 await page.goto({url}, {{ timeout: {timeout} }});
 await page.waitForTimeout(6000);
 const info = await page.evaluate(() => ({{
@@ -133,7 +145,8 @@ def fetch_page_title(url: str, business_name: str = "") -> str:
 
     导航失败、页面卡住与没有可用标题都是该页面的结果，记为 TitleUnavailable。
     """
-    script = EGO_TITLE_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS)
+    script = EGO_TITLE_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS,
+                                     deny=DENY_PERMISSIONS_JS)
     command = ego_command()
     try:
         # 与 ego_scrape 共用同一个任务空间和页面

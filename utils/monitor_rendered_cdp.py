@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 
-from utils.ego_browser import ego_command
+from utils.ego_browser import DENY_PERMISSIONS_JS, ego_command
 
 ROOT = Path(__file__).resolve().parents[1]
 EGO_RENDER_SPACE = "costfinder monitor render"
@@ -143,6 +143,7 @@ def ego_cdp_page(deadline: float):
     try:
         port = _free_port()
         script = ((ROOT / "scripts/monitor_ego_bridge.js").read_text(encoding="utf-8")
+                  .replace("__DENY_PERMISSIONS__", DENY_PERMISSIONS_JS)
                   .replace("__SPACE__", json.dumps(f"{EGO_RENDER_SPACE} {slot}"))
                   .replace("__PORT__", str(port)))
         process = subprocess.Popen([ego_command(), "nodejs", "-e", script], stdout=subprocess.PIPE,

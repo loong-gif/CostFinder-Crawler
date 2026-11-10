@@ -7,6 +7,7 @@ const http = await import("node:http");
 const task = await taskSpace(__SPACE__);
 const page = (await task.pages())[0] ?? await task.newPage();
 await page.events(); // 清掉上一次渲染留下的协议事件
+__DENY_PERMISSIONS__
 // 窗口最小化时 Chromium 拒绝截图（服务器上断开远程桌面后窗口常处于最小化），恢复为普通窗口
 const { windowId, bounds } = await task.cdp("Browser.getWindowForTarget", { targetId: page.targetId });
 if (bounds.windowState === "minimized") await task.cdp("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
