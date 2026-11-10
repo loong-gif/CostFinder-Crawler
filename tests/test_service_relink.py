@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -113,7 +114,8 @@ def test_relink_apply_sql_checks_the_current_mapping(tmp_path, monkeypatch):
     unlink = next(line for line in text.splitlines() if "set service_id = null" in line)
     assert "i.service_id = r.current_id" in unlink and "[[103, 13]]" in text
     # 保留的映射不写库；blanket 检查只覆盖本批新关联的 item
-    assert "101" not in text and "any('{102}'" in text
+    # 只按完整数字匹配：文本里的 plan sha256 每次不同，可能含有字符 101
+    assert not re.search(r"\b101\b", text) and "any('{102}'" in text
 
 
 def test_relink_keeps_the_generic_service_when_the_page_does_not_name_the_brand(tmp_path, monkeypatch):
