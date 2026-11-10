@@ -31,9 +31,9 @@ def server(tmp_path):
 def fake_ssh(calls, *, fail=False):
     def run(cmd, input=b"", capture_output=True, timeout=None):
         calls.append(cmd)
-        assert cmd[:6] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "firecrawl"]
-        assert cmd[6].startswith('wsl -e python3 -c "import base64;exec(base64.b64decode(')
-        code = base64.b64decode(re.search(r"b64decode\('([^']+)'\)", cmd[6]).group(1)).decode()
+        assert cmd[:-1] == ["ssh", *monitor_host.SSH_OPTIONS, "firecrawl"]
+        assert cmd[-1].startswith('wsl -e python3 -c "import base64;exec(base64.b64decode(')
+        code = base64.b64decode(re.search(r"b64decode\('([^']+)'\)", cmd[-1]).group(1)).decode()
         if fail:
             return subprocess.CompletedProcess(cmd, 255, b"", b"ssh: connect to host firecrawl: timed out")
         return REAL_RUN([sys.executable, "-c", code], input=input, capture_output=True, timeout=timeout)

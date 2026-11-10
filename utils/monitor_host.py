@@ -13,12 +13,15 @@ HOST = "firecrawl"
 BASE = "/home/loong/costfinder_monitor"
 # 每次 ssh 调用取回的文件内容上限（字节）
 PULL_BATCH_BYTES = 1_000_000
+# 监控主机（Windows OpenSSH）连续新建连接时握手常超时：同一批调用复用一条连接，空闲 5 分钟后关闭
+SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=30", "-o", "ControlMaster=auto",
+               "-o", "ControlPath=~/.ssh/cm-%C", "-o", "ControlPersist=300"]
 
 
 def remote_python(code: str, *, stdin: bytes = b"", timeout: int = 60, host: str = HOST) -> str:
     encoded = base64.b64encode(code.encode()).decode()
     command = 'wsl -e python3 -c "import base64;exec(base64.b64decode(\'' + encoded + '\'))"'
-    result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command],
+    result = subprocess.run(["ssh", *SSH_OPTIONS, host, command],
                             input=stdin, capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError("remote_operation_failed:" + result.stderr.decode(errors="replace")[-300:])

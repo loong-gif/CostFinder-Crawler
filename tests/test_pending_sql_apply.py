@@ -36,7 +36,7 @@ def server(tmp_path):
 
 def local_ssh(cmd, input=b"", capture_output=True, timeout=None):
     """ssh 换成在本机执行同一段远程程序。"""
-    code = base64.b64decode(re.search(r"b64decode\('([^']+)'\)", cmd[6]).group(1)).decode()
+    code = base64.b64decode(re.search(r"b64decode\('([^']+)'\)", cmd[-1]).group(1)).decode()
     return REAL_RUN([sys.executable, "-c", code], input=input, capture_output=True, timeout=timeout)
 # 与生产 admin_audit_log 相同的列；prices 代表待执行 SQL 写入的业务表
 SCHEMA = """
