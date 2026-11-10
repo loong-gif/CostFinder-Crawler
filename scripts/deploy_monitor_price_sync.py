@@ -4,7 +4,7 @@
 File payloads (including explicitly selected credentials) travel over SSH stdin,
 never command arguments or output. This tool performs no database operations; the
 deployed jobs never write the database, they only produce SQL files under
-``$BASE/state/pending_sql/`` that ``pending-sql`` pulls back and the session runs through the Supabase MCP.
+``$BASE/state/pending_sql/`` that ``pending-sql --apply`` on this Mac runs through the Supabase MCP.
 """
 from __future__ import annotations
 
