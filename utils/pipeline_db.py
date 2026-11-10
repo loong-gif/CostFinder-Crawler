@@ -74,10 +74,14 @@ def read_snapshot(read_sql: Path) -> Path:
         if done.returncode == 0:
             break
     done.check_returncode()
-    rows = json.loads(done.stdout)["rows"]
+    return write_snapshot(Path(read_sql).parent, json.loads(done.stdout)["rows"])
+
+
+def write_snapshot(directory: Path, rows: list[dict[str, Any]]) -> Path:
+    """快照查询的结果行（唯一一行，唯一一列 snapshot）写入 directory/snapshot.json。"""
     if len(rows) != 1 or set(rows[0]) != {"snapshot"}:
         raise RuntimeError(f"unexpected snapshot result shape: {len(rows)} rows")
-    return write_text(Path(read_sql).parent / "snapshot.json", json.dumps(rows[0]["snapshot"], ensure_ascii=False))
+    return write_text(Path(directory) / "snapshot.json", json.dumps(rows[0]["snapshot"], ensure_ascii=False))
 
 
 def run_dir(output_dir: Path) -> Path:

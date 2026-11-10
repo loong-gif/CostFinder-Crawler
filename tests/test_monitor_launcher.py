@@ -41,6 +41,16 @@ def test_retry_runs_when_no_monitor_holds_the_lock(tmp_path):
     assert "monitor running, skipped" not in (tmp_path / "logs" / "retry.log").read_text()
 
 
+def test_host_env_carries_the_read_only_token_and_no_rest_credentials():
+    from scripts.deploy_monitor_price_sync import host_env
+    values = {"SUPABASE_READONLY_TOKEN": "ro", "SUPABASE_URL": "u", "SUPABASE_SECRET_KEY": "s",
+              "SUPABASE_SERVICE_ROLE_KEY": "r", "FEISHU_APP_ID": "f", "LLM_MODEL": ""}
+    assert host_env(values).decode() == 'SUPABASE_READONLY_TOKEN="ro"\nFEISHU_APP_ID="f"\n'
+    # 部署整体替换主机 .env：本机缺少只读令牌时直接终止，避免主机丢失令牌
+    with pytest.raises(KeyError, match="SUPABASE_READONLY_TOKEN"):
+        host_env({"FEISHU_APP_ID": "f"})
+
+
 def test_deploy_leaves_the_server_control_file_alone(monkeypatch):
     from scripts import deploy_monitor_price_sync as deploy
     sent = []

@@ -12,7 +12,7 @@ cd "$BASE"
 PY="$BASE/.venv/bin/python"
 SINCE="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
 
-"$PY" scripts/promo_pipeline.py crawl-schedule plan --rest --apply --cap "$CAP"
+"$PY" scripts/promo_pipeline.py crawl-schedule plan --management-api --apply --cap "$CAP"
 NAMES="$("$PY" -c "import json;print(','.join(json.load(open('state/crawl_schedule/due_monitor.json'))['monitors']))")"
 if [ -z "$NAMES" ]; then
   echo "nothing due"

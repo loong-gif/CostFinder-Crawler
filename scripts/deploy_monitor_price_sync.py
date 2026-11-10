@@ -45,7 +45,8 @@ def monitor_launcher(log: str, run_type: str, extra_args: str, *, yield_to_runni
 
 
 def data_quality_launcher() -> bytes:
-    """Daily deactivate-expired and quality; the host has no Supabase CLI, so quality reads its snapshot over REST.
+    """Daily deactivate-expired and quality; the host has no Supabase CLI, so quality runs its read.sql through
+    the Supabase Management API read-only endpoint.
 
     Triggered hourly in server (Pacific) time; only the 09:00 Shanghai hour runs, so DST cannot shift it.
     """
@@ -55,7 +56,20 @@ def data_quality_launcher() -> bytes:
         'export PYTHONUNBUFFERED=1\n'
         '"$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" deactivate-expired --out-dir "$BASE/state/pending_sql"\n'
         'exec "$BASE/.venv/bin/python" "$BASE/scripts/promo_pipeline.py" quality '
-        '--state-dir "$BASE/state" --rest --recheck\n').encode()
+        '--state-dir "$BASE/state" --management-api --recheck\n').encode()
+
+
+# 主机 .env 由部署整体替换：只读令牌必须存在，其余凭据存在才写入
+REQUIRED_KEYS = ("SUPABASE_READONLY_TOKEN",)
+OPTIONAL_KEYS = ("FIRECRAWL_SELF_HOSTED_API_KEY",
+                 "LLM_API_KEY", "LLM_API_URL", "LLM_API_BASE", "LLM_MODEL", "LLM_BACKEND", "GEMINI_API_KEY",
+                 "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_NOTIFY_OPEN_ID")
+
+
+def host_env(values) -> bytes:
+    lines = [key+"="+json.dumps(values[key]) for key in REQUIRED_KEYS]
+    lines += [key+"="+json.dumps(values[key]) for key in OPTIONAL_KEYS if values.get(key)]
+    return ("\n".join(lines)+"\n").encode()
 
 
 def deploy(host: str, include_credentials: bool):
@@ -73,12 +87,7 @@ def deploy(host: str, include_credentials: bool):
         "service_name_dict.json","service_mapping_confirmations.json")]
     payload = {str(path.relative_to(ROOT)):path.read_bytes() for path in files}
     if include_credentials:
-        values = dotenv_values(ROOT / ".env")
-        keys = ("SUPABASE_URL","SUPABASE_SECRET_KEY","SUPABASE_SERVICE_ROLE_KEY",
-                "FIRECRAWL_SELF_HOSTED_API_KEY",
-                "LLM_API_KEY","LLM_API_URL","LLM_API_BASE","LLM_MODEL","LLM_BACKEND","GEMINI_API_KEY",
-                "FEISHU_APP_ID","FEISHU_APP_SECRET","FEISHU_NOTIFY_OPEN_ID")
-        payload[".env"] = ("\n".join(key+"="+json.dumps(values[key]) for key in keys if values.get(key))+"\n").encode()
+        payload[".env"] = host_env(dotenv_values(ROOT / ".env"))
     payload["run_crawl_due.sh"] = (ROOT / "scripts/run_crawl_due.sh").read_bytes()
     payload["run_monitor_validation.sh"] = monitor_launcher("monitor.log", "full_monitor", "")
     payload["run_monitor_retry.sh"] = monitor_launcher("retry.log", "failure_retry", " --retry-transient-only",

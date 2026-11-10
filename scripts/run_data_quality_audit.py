@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 from utils.data_quality_audit import audit_snapshot, source_key
 from utils.data_quality_writer import SNAPSHOT_TABLES, render_audit
-from utils.monitor_database_snapshot import rest_snapshot
+from utils.monitor_database_snapshot import api_snapshot
 from utils.monitor_price_store import atomic_json, manual_protections, now, read_json, run_lock
 from utils.pipeline_db import fresh_snapshot, load_snapshot
 
@@ -174,8 +174,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=ROOT / "output/data_quality_state")
     parser.add_argument("--snapshot", type=Path, help="Saved snapshot.json (read_snapshot format) instead of reading now")
-    parser.add_argument("--rest", action="store_true",
-                        help="Read the snapshot over Supabase REST (the monitor host has no Supabase CLI)")
+    parser.add_argument("--management-api", action="store_true",
+                        help="Run read.sql through the Supabase Management API read-only endpoint "
+                             "(the monitor host has no Supabase CLI)")
     parser.add_argument("--captures", type=Path, help="Verified capture manifest for offline regression/audit")
     parser.add_argument("--apply", action="store_true",
                         help="Render frozen ready repairs as <state-dir>/pending_sql/*.sql (never writes the database)")
@@ -187,16 +188,17 @@ def main():
     args = parser.parse_args()
     if args.snapshot and args.recheck:
         parser.error("offline snapshots cannot trigger external rechecks")
-    if args.snapshot and args.rest:
-        parser.error("--rest reads the database now; it cannot be combined with --snapshot")
+    if args.snapshot and args.management_api:
+        parser.error("--management-api reads the database now; it cannot be combined with --snapshot")
     load_dotenv(ROOT / ".env")
     root = args.state_dir
     with run_lock(root):
         protections = manual_protections(read_json(root / "manual_protections.json", {}))
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         directory = root / "data_quality/runs" / stamp
-        # 只读快照：本机由 Supabase CLI（--linked）执行 read.sql；监控主机（--rest）经 REST 整表读取；逐表核对行数
-        read = rest_snapshot if args.rest else fresh_snapshot
+        # 只读快照：本机由 Supabase CLI（--linked）执行 read.sql；监控主机（--management-api）经 Management API 执行
+        # 同一 read.sql；逐表核对行数
+        read = api_snapshot if args.management_api else fresh_snapshot
         snapshot_path = args.snapshot or read(directory, SNAPSHOT_TABLES)
         snapshot = load_snapshot(snapshot_path, SNAPSHOT_TABLES, typed=False)
         captures = read_json(args.captures) if args.captures else load_captures(root)

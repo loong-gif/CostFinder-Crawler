@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,31 +65,21 @@ def test_plan_reads_the_catalogue_with_read_snapshot(tmp_path, monkeypatch):
     assert "public.master_business_info" in queries[0] and "public.clinic_memberships" in queries[0]
 
 
-class PagedRest:
-    """Supabase REST 的分页读取：按 limit/offset 返回内存中的表。"""
-    def __init__(self, tables):
-        self.tables, self.calls = tables, []
-
-    def fetch_rows(self, table, select, *, limit, offset, order):
-        self.calls.append((table, select, offset, order))
-        return self.tables[table][offset:offset + limit]
-
-
-def test_plan_on_the_monitor_host_reads_the_catalogue_over_rest(tmp_path, monkeypatch):
-    businesses = [{"business_id": i, "website": f"b{i}.test", "city": "Reno",
-                   "address": f"{i} Main St, Reno, NV 89501"} for i in range(1, 702)]
-    rest = PagedRest({"master_business_info": businesses, "clinic_promotions": [], "clinic_services": [],
-                      "clinic_memberships": []})
-    monkeypatch.setattr("utils.monitor_database_snapshot.rest_client", lambda: rest)
+@pytest.mark.skipif(not os.getenv("SUPABASE_READONLY_TOKEN"),
+                    reason="export SUPABASE_READONLY_TOKEN to read the production database")
+def test_plan_on_the_monitor_host_reads_the_catalogue_over_the_management_api(tmp_path, monkeypatch):
     monkeypatch.setattr("utils.pipeline_db.read_snapshot", lambda read_sql: pytest.fail("Supabase CLI used"))
-    assert run(monkeypatch, crawl_scheduler, "plan", "--rest", "--apply") == 0
-    assert len(load_state("schedule")) == 701
-    assert ("master_business_info", "business_id,website,city,address", 500, "business_id.asc") in rest.calls
+    monkeypatch.setattr(crawl_scheduler, "OUTPUT_DIR", tmp_path / "runs")
+    assert run(monkeypatch, crawl_scheduler, "plan", "--management-api", "--apply") == 0
+    run_dir = next((tmp_path / "runs").iterdir())
+    snapshot = json.loads((run_dir / "snapshot.json").read_text())
+    assert "public.master_business_info" in (run_dir / "read.sql").read_text()
+    assert len(load_state("schedule")) == snapshot["businesses"]["count"] > 0
 
 
-def test_scheduled_crawl_on_the_monitor_host_plans_with_the_rest_read():
+def test_scheduled_crawl_on_the_monitor_host_plans_over_the_management_api():
     launcher = (Path(__file__).resolve().parents[1] / "scripts" / "run_crawl_due.sh").read_text()
-    assert "crawl-schedule plan --rest --apply" in launcher
+    assert "crawl-schedule plan --management-api --apply" in launcher
 
 
 def test_register_renders_every_action_and_repeated_places_are_skipped_in_sql():

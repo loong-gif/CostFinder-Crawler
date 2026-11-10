@@ -250,22 +250,3 @@ def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path):
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan["status"] == "ready",plan
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
-
-
-def test_database_snapshot_reads_service_names_through_the_read_only_rpc(monkeypatch):
-    import utils.monitor_database_snapshot as runner
-    class Client:
-        calls=[]
-        def __init__(self,*args): pass
-        def fetch_rows(self,table,columns,**kwargs): return []
-        def rpc_read(self,name):
-            Client.calls.append(name)
-            return SERVICE_NAMES
-    monkeypatch.setenv("SUPABASE_URL","https://kdlpkjzcnbkjcvwsvlwn.supabase.co")
-    monkeypatch.setattr(runner,"SupabaseRestClient",Client)
-    monkeypatch.setattr(runner,"get_supabase_secret_key",lambda:"key")
-    snapshot=runner.database_snapshot()
-    assert Client.calls==["fn_clinic_service_names"] and snapshot["service_names"]==SERVICE_NAMES
-    Client.rpc_read=lambda self,name:[]
-    with pytest.raises(RuntimeError,match="service_names_unavailable"):
-        runner.database_snapshot()

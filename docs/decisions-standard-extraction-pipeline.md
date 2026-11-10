@@ -53,7 +53,7 @@
 
 18. **读取自动完成，写入走 Supabase MCP**：Python 不写数据库，不使用 `DB_URL`，任何直接写库路径（REST 写、rpc 写、psycopg）由 `utils/pipeline_run.forbid_direct_write` 拒绝。写库命令分两步：`plan` 生成只读快照查询 read.sql，由 `utils.pipeline_db.fresh_snapshot` 用 Supabase CLI（`--linked`）自动执行并保存为 snapshot.json（加载时逐表核对 count 与行数），再生成计划（`--snapshot` 用已保存的快照重新生成计划）；`apply-sql` 把计划渲染为单个 DO 块，块内核对计划生成后数据未变化、写入、写后核对，经 MCP 执行，失败整体回滚。
     理由：数据库凭据只保留在 MCP 授权中；每次写入都是可审阅的 SQL 文件。
-19. **监控主机只生成待执行 SQL**：无人值守的 monitor、数据质量、停用过期任务把 SQL 写入 `state/pending_sql/`，不写库；`pending-sql` 自动拉回并列出，会话经 MCP 执行，`--mark-applied` 同时登记本地与监控主机。监控主机只读需要的服务枚举经 REST 调用只读函数 `fn_clinic_service_names()`。
+19. **监控主机只生成待执行 SQL**：无人值守的 monitor、数据质量、停用过期任务把 SQL 写入 `state/pending_sql/`，不写库；`pending-sql` 自动拉回并列出，会话经 MCP 执行，`--mark-applied` 同时登记本地与监控主机。监控主机经 Management API 只读端点执行与本机相同的快照查询，服务枚举随快照读取。
     理由：无人值守任务无法调用 MCP，写入改为会话中可审阅的步骤。
 
 ## 待定问题

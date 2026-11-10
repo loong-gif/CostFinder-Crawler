@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plan and record scheduled re-crawls from ``state/crawl_schedule`` (no database writes).
 
-``plan``   reads the catalogue with read-sql + read-snapshot (``--rest`` on the monitor host, or ``--snapshot``), adds schedule and city entries
+``plan``   reads the catalogue with read-sql + read-snapshot (``--management-api`` on the monitor host, or ``--snapshot``), adds schedule and city entries
            for businesses registered since the last run, lists businesses due now (bounded by ``--cap``) and cities
            due for re-discovery; with ``--apply`` writes the state files, ``due.json`` and monitor-style buckets.
 ``record`` applies crawl results (JSON list of ``{business_id, ok, changed}``) to the schedule.
@@ -28,7 +28,7 @@ from utils.crawl_scheduler_logic import (  # noqa: E402
     select_due,
 )
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
-from utils.monitor_database_snapshot import rest_snapshot  # noqa: E402
+from utils.monitor_database_snapshot import api_snapshot  # noqa: E402
 from utils.pipeline_db import fresh_snapshot, load_snapshot  # noqa: E402
 
 DEFAULT_CAP = 150
@@ -59,7 +59,7 @@ def monitor_config(buckets: list[list[str]], now: datetime) -> dict:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
-    read = rest_snapshot if args.rest else fresh_snapshot
+    read = api_snapshot if args.management_api else fresh_snapshot
     path = args.snapshot or read(OUTPUT_DIR / now.strftime("%Y%m%dT%H%M%SZ"), SEED_TABLES)
     snapshot = load_snapshot(path, SEED_TABLES)
     schedule, cities = seed(snapshot, load_state("schedule"), load_state("cities"), now)
@@ -120,8 +120,8 @@ def main() -> int:
     plan = sub.add_parser("plan")
     plan.add_argument("--cap", type=int, default=DEFAULT_CAP)
     plan.add_argument("--snapshot", type=Path, help="snapshot.json of the read-only query; default: read it now")
-    plan.add_argument("--rest", action="store_true",
-                      help="monitor host: read the catalogue over Supabase REST (no Supabase CLI there)")
+    plan.add_argument("--management-api", action="store_true",
+                      help="monitor host: run read.sql through the Supabase Management API (no Supabase CLI there)")
     plan.add_argument("--apply", action="store_true")
     plan.set_defaults(func=cmd_plan)
     record = sub.add_parser("record")

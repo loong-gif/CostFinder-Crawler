@@ -156,12 +156,6 @@ class SupabaseRestClient:
         response.raise_for_status()
         return response.json()
 
-    def rpc_read(self, function: str) -> Any:
-        """调用只读（stable）数据库函数；不经写入守卫。"""
-        response = self.session.get(f"{self.base_url}/rpc/{function}", timeout=90)
-        response.raise_for_status()
-        return response.json()
-
     def rpc(self, function: str, payload: Optional[Dict[str, Any]] = None) -> Any:
         self.assert_write_project()
         response = self.session.post(

@@ -1,71 +1,57 @@
-"""监控主机上的只读数据库快照：经 Supabase REST 读取（监控主机没有 Supabase CLI，read-snapshot 只在本机运行）。"""
 from __future__ import annotations
 
-import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
 
+import requests
 from dotenv import load_dotenv
 
 from utils.monitor_price_writer_plan import SERVICE_COLUMNS
-from utils.pipeline_db import write_text
-from utils.supabase_rest import SupabaseRestClient, get_supabase_secret_key
+from utils.offer_schema import service_name_enum
+from utils.pipeline_db import SERVICE_NAME_ENUM_SNAPSHOT, load_snapshot, snapshot_query, write_snapshot, write_text
+from utils.supabase_rest import PRODUCTION_PROJECT_REF
 
-PROJECT_ID = "kdlpkjzcnbkjcvwsvlwn"
+# 监控主机没有 Supabase CLI：经 Management API 的只读端点执行与本机 read_snapshot 相同的 read.sql
+QUERY_URL = f"https://api.supabase.com/v1/projects/{PRODUCTION_PROJECT_REF}/database/query/read-only"
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-PAGE_SIZE = 500
-PRIMARY_KEYS = {"clinic_promotions": "promotion_id", "promo_offer_items": "offer_item_id",
-                "master_business_info": "business_id", "clinic_services": "service_id",
-                "promo_offer_terms": "offer_id", "clinic_memberships": "plan_id"}
+STATE_DIR = Path(__file__).resolve().parents[1] / "state" / "database_snapshot"
+MONITOR_TABLES = {
+    "promotions": ("clinic_promotions", "*", "true"),
+    "offers": ("promo_offer_master", "*", "true"),
+    "items": ("promo_offer_items", "*", "true"),
+    "businesses": ("master_business_info", "*", "true"),
+    "services": ("clinic_services", SERVICE_COLUMNS, "true"),
+    "terms": ("promo_offer_terms", "*", "true"),
+    # 只读来源归属，不读会员费用与权益
+    "memberships": ("clinic_memberships", "plan_id, business_id, source_url", "true"),
+    "service_enum": SERVICE_NAME_ENUM_SNAPSHOT,
+}
 
 
-def rest_client() -> SupabaseRestClient:
-    # 主机上的启动脚本不导出数据库地址与密钥，从部署目录的 .env 读取
+def run_read_only(query: str) -> list[dict[str, Any]]:
+    """在只读事务中执行查询并返回结果行；写入语句由数据库拒绝（SQLSTATE 25006）。"""
+    # 主机上的启动脚本不导出令牌，从部署目录的 .env 读取
     load_dotenv(ENV_FILE)
-    base = os.getenv("SUPABASE_URL", "")
-    if urlsplit(base).hostname != PROJECT_ID + ".supabase.co":
-        raise RuntimeError("database_project_mismatch")
-    return SupabaseRestClient(base, get_supabase_secret_key())
+    session = requests.Session()
+    session.trust_env = False
+    response = session.post(QUERY_URL, json={"query": query}, timeout=600,
+                            headers={"Authorization": f"Bearer {os.environ['SUPABASE_READONLY_TOKEN']}"})
+    response.raise_for_status()
+    return response.json()
 
 
-def all_rows(client: Any, table: str, columns: str = "*") -> list[dict]:
-    values, offset = [], 0
-    order = f"{PRIMARY_KEYS.get(table, 'id')}.asc"
-    while True:
-        rows = client.fetch_rows(table, columns, limit=PAGE_SIZE, offset=offset, order=order)
-        values.extend(rows)
-        if len(rows) < PAGE_SIZE:
-            return values
-        offset += len(rows)
-
-
-def rest_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
-    """监控主机上代替 pipeline_db.fresh_snapshot：同样的表定义经 REST 整表读取，按 read_snapshot 的格式
-    写 directory/snapshot.json 并返回其路径。where 是 SQL 条件，REST 无法执行，Python 也不解析 SQL，
-    所以只接受整表（where 为 true），其他条件直接终止。"""
-    client = rest_client()
-    payload = {}
-    for name, (source, columns, where) in tables.items():
-        if where != "true":
-            raise ValueError(f"rest_read_needs_whole_table: {name} where {where}")
-        rows = all_rows(client, source, columns.replace(" ", ""))
-        payload[name] = {"count": len(rows), "rows": rows}
-    return write_text(Path(directory) / "snapshot.json", json.dumps(payload, ensure_ascii=False))
+def api_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
+    """监控主机上代替 pipeline_db.fresh_snapshot：写入 directory/read.sql 并执行，返回 snapshot.json 的路径。"""
+    read_sql = write_text(Path(directory) / "read.sql", snapshot_query(tables))
+    return write_snapshot(directory, run_read_only(read_sql.read_text()))
 
 
 def database_snapshot() -> dict:
-    client = rest_client()
-    snapshot = {name: all_rows(client, table) for name, table in {
-        "promotions": "clinic_promotions", "offers": "promo_offer_master", "items": "promo_offer_items",
-        "businesses": "master_business_info"}.items()}
-    snapshot["services"] = all_rows(client, "clinic_services", SERVICE_COLUMNS)
-    snapshot["terms"] = all_rows(client, "promo_offer_terms")
-    # Read only source ownership, never membership fees or benefits.
-    snapshot["memberships"] = all_rows(client, "clinic_memberships", "plan_id,business_id,source_url")
-    names = client.rpc_read("fn_clinic_service_names")
-    if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
-        raise RuntimeError("service_names_unavailable")
-    snapshot["service_names"] = names
+    # 调用方自行保存需要留存的快照；read.sql 与 snapshot.json 只在本次读取期间存在，并发任务各用各的目录
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=STATE_DIR) as directory:
+        snapshot = load_snapshot(api_snapshot(Path(directory), MONITOR_TABLES), MONITOR_TABLES, typed=False)
+    snapshot["service_names"] = service_name_enum(snapshot.pop("service_enum"))
     return snapshot
