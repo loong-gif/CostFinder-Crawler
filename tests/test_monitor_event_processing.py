@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from monitor_health_support import monitor_services  # noqa: F401
 from scripts.run_monitor_price_sync import main, process_events
 from utils.monitor_price_store import atomic_json
 
@@ -60,7 +61,7 @@ def test_membership_source_is_excluded_from_promotion_monitoring_and_never_selec
     assert process_events(tmp_path,snapshot)["selected_events"] == 0
 
 
-def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,monkeypatch):
+def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,monkeypatch,monitor_services):
     class Monitor:
         def __init__(self,*args): pass
         def scrape(self,url):

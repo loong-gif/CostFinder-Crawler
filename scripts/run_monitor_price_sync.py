@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
-from requests import HTTPError
 from scripts.firecrawl_self_hosted_monitor import load_config, run_monitor
 from utils.monitor_capture import capture, capture_urls
 from utils.monitor_database_snapshot import database_snapshot
@@ -28,12 +27,14 @@ from utils.monitor_image_gate import capture_is_current, image_writes_enabled
 from utils.monitor_rendered_checks import confirmed_not_found
 from utils.monitor_queue import build_config, config_urls
 from utils.monitor_price_retry import RetryLimits
-from utils.monitor_review_policy import NETWORK_ERRORS, event_status, gate_status, needs_review
+from utils.monitor_review_policy import event_status, failure_item, gate_status, needs_review
 from utils.monitor_price_visual_receipts import stored_browser
 from utils.monitor_event_queue import (
     data_quality_recheck_urls, enqueue_data_quality_rechecks, enqueue_expired_campaign_checks,
-    expired_active_promotion_urls, verified_batch_results,
+    expired_active_promotion_urls, fresh_evidence, verified_batch_results,
 )
+from utils.monitor_health import service_failures
+from utils.monitor_remediation import remediate
 from utils.monitor_source_binding import (
     bind_source, check_promotion_source, combine_branch_plans, not_found_plan, redirect_stays_with_business,
     snapshot_business_graph,
@@ -50,20 +51,9 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
         # Scope checks precede the cache: old ready plans must not bypass them.
         sources = bind_source(event["url"], snapshot)
         if event.get("retry_reason") == "fresh_scrape_required":
-            threshold = datetime.fromisoformat(event["fresh_evidence_after"].replace("Z", "+00:00"))
-            newest = None
-            for artifact_path in (root / "evidence").glob("*.json"):
-                artifact = read_json(artifact_path)
-                if normalize_source_url(artifact["url"]) != normalize_source_url(event["url"]):
-                    continue
-                captured = datetime.fromisoformat(artifact["captured_at"].replace("Z", "+00:00"))
-                if captured > threshold and datetime.now(timezone.utc) - captured <= timedelta(hours=24):
-                    if newest is None or captured > newest[0]:
-                        newest = (captured, artifact_path)
-            if newest is None:
-                raise RuntimeError("fresh_scrape_required")
-            event["artifact_path"] = str(newest[1])
-            event["artifact_id"] = newest[1].stem
+            newest = fresh_evidence(root, event["url"], event["fresh_evidence_after"])
+            event["artifact_path"] = str(newest)
+            event["artifact_id"] = newest.stem
         if plan_path.exists():
             cached = read_json(plan_path)
             if event.get("receipt", {}).get("resume_required"):
@@ -122,17 +112,8 @@ def prepare_event(path: Path, snapshot: dict, protections: dict, root: Path) -> 
                 branch["review"].append({"reason":branch["image_retry_reason"],"blocking":False})
         plan = branch_plans[0] if len(branch_plans) == 1 else combine_branch_plans(event["url"], branch_plans)
     except Exception as exc:
-        # Exception text can contain credential-bearing request URLs; export
-        # only our own categories or the exception class, never raw HTTP text.
-        category = str(exc) if isinstance(exc, RuntimeError) and str(exc).replace("_", "").isalnum() else type(exc).__name__
-        if isinstance(exc,RuntimeError) and (str(exc).startswith("Gemini HTTP 429") or str(exc).startswith("LLM HTTP 429")):
-            category = "extraction_rate_limited"
-        if isinstance(exc, HTTPError) and exc.response is not None:
-            category = {402:"extraction_quota_exhausted",429:"extraction_rate_limited",
-                        401:"extraction_credentials_rejected",403:"extraction_credentials_rejected"}.get(exc.response.status_code,category)
-        item = {"reason":category, **({"transient":True} if isinstance(exc, NETWORK_ERRORS) else {})}
         plan = {"schema_version":1,"status":"review", "source":{"url":event["url"]},
-                "operations":[],"review":[item],"event_id":event["event_id"],"prepared_at":now()}
+                "operations":[],"review":[failure_item(exc)],"event_id":event["event_id"],"prepared_at":now()}
     if plan_path.exists() and not archived:
         attempt = int(event.get("attempt", 0)) + 1
         atomic_json(directory / f"plan_attempt_{attempt}.json", read_json(plan_path))
@@ -199,6 +180,11 @@ def process_events(root: Path, snapshot: dict, *, event_limit: int | None = None
                     event.update(status="retryable", retry_reason="fresh_scrape_required",
                                  fresh_evidence_after=limits.get("processing", event["url"])["last_failed_at"])
                     atomic_json(path, event)
+                elif event.get("status") == "review" and canonical in probes:
+                    # 审查事件随来源按档期的抓取取得新证据，再由监控自身的规则重新判定
+                    event.update(status="retryable", retry_reason="fresh_scrape_required",
+                                 fresh_evidence_after=read_json(Path(event["plan_path"]))["prepared_at"])
+                    atomic_json(path, event)
                 futures[executor.submit(prepare_event,path,snapshot,protections,root)] = path
         for future in as_completed(futures):
             path = futures[future]
@@ -216,7 +202,8 @@ def process_events(root: Path, snapshot: dict, *, event_limit: int | None = None
     for path, plan in plans:
         event = read_json(path)
         if plan["status"] != "ready":
-            results.append({"url":event["url"],"status":event.get("status","review"), "review":plan.get("review",[])})
+            results.append({"url":event["url"],"status":event.get("status","review"), "review":plan.get("review",[]),
+                            "plan_path":event.get("plan_path")})
             continue
         receipt = render_pending(plan, protections, root)
         event.update(status=receipt["status"], receipt=receipt)
@@ -271,6 +258,10 @@ def main() -> int:
                 extra = quality_urls - configured_urls
                 if extra:
                     config["monitors"]["data_quality"] = {"targets":[{"urls":sorted(extra)}]}
+            # 健康检查失败时本轮的失败记为基础设施故障，不计入来源的站点失败天数
+            health = [] if args.capture_only else service_failures()
+            # 抓取前已暂停的来源不属于「上一次抓取成功」的来源，不进入基础设施故障的比例
+            paused_before = RetryLimits(root).paused_urls()
             started = datetime.now(timezone.utc)
             selected_urls = capture_urls(root, config, quality_urls, retry_only=args.retry_transient_only,
                                          capture_all=args.recheck_data_quality_only or args.all_pages or args.capture_only,
@@ -300,6 +291,9 @@ def main() -> int:
         report["scrape_failed_pages"] = sum(row["error"] for row in reports)
         report["failure_scope"] = "page_or_source_only"
         report["paused_retries"] = RetryLimits(root).paused_sources()
+        if reports:
+            report["remediation"] = remediate(root, reports=reports, sources=report["sources"], health=health,
+                                              at=started, paused=paused_before)
         report["run_type"] = ("event_processing" if args.skip_scrape else
                               "failure_retry" if args.retry_transient_only else "full_monitor")
         # Hourly retry reports must not erase the evidence of the weekly run.

@@ -12,9 +12,12 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from utils.monitor_remediation_policy import REMOVAL_DAYS, classify
+
 FEISHU_API = "https://open.feishu.cn/open-apis"
 RUN_NAMES = {"full_monitor": "每日监控", "failure_retry": "失败重试", "event_processing": "事件处理"}
 MAX_LISTED = 5
+MAX_HUMAN_LISTED = 2
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
@@ -51,14 +54,44 @@ def report_message(report: Mapping[str, Any], *, started_at: str, exit_code: int
                  + ("，需经 Supabase MCP 执行" if pending else ""))
     for row in pending[:MAX_LISTED]:
         lines.append(f"  · {row['url']}")
-    paused = report.get("paused_retries", [])
-    if paused:
-        lines.append(f"暂停小时重试：{len(paused)} 个来源（每日任务继续重试）")
+    lines.extend(remediation_lines(report))
     errors = [error for row in monitors for error in row.get("page_errors", [])]
     if errors:
         lines.append(f"抓取失败页面（列出 {min(len(errors), MAX_LISTED)}/{len(errors)}）：")
         lines.extend(f"  · {error['url']} — {error['error']}" for error in errors[:MAX_LISTED])
     return "\n".join(lines)
+
+
+def remediation_lines(report: Mapping[str, Any]) -> list[str]:
+    """本轮自动处理：移出、恢复、复查、等待人工决定、基础设施故障、站点失败计数与按原因分组的流水线问题。"""
+    remediation = report.get("remediation")
+    if remediation is None:
+        return []
+    awaiting = remediation["awaiting_human"]
+    lines = [f"自动处理：移出监控 {len(remediation['removed'])}，恢复监控 {len(remediation['restored'])}，"
+             f"复查未恢复 {len(remediation['recheck_failed'])}，等待人工决定 {len(awaiting)}，"
+             f"已解决 {len(remediation['resolved'])}"]
+    if awaiting:
+        lines.append(f"等待人工决定（列出 {min(len(awaiting), MAX_HUMAN_LISTED)}/{len(awaiting)}）：")
+        lines.extend(f"  · {row['url']} — {', '.join(row['reasons'])}" for row in awaiting[:MAX_HUMAN_LISTED])
+    if remediation["infra_faults"]:
+        faults = [f"{fault['service']} 健康检查失败 {fault['error']}" if "service" in fault
+                  else f"{fault['reason']} {fault['count']}/{fault['total']} 页" for fault in remediation["infra_faults"]]
+        lines.append("基础设施故障（不计入来源天数）：" + "；".join(faults))
+    if remediation["site_failures"]:
+        lines.append(f"站点无法访问：{len(remediation['site_failures'])} 个来源在计数，"
+                     f"最长 {remediation['site_failures'][0]['days']}/{REMOVAL_DAYS} 天")
+    generated = datetime.fromisoformat(report["generated_at"])
+    groups: dict[str, list[int]] = {}
+    for row in report.get("paused_retries", []):
+        if classify(row["last_reason"]) == "pipeline":
+            days = (generated - datetime.fromisoformat(row["first_failed_at"])).days
+            groups.setdefault(row["last_reason"], []).append(days)
+    if groups:
+        ordered = sorted(groups.items(), key=lambda pair: (-len(pair[1]), pair[0]))
+        lines.append("流水线问题（每日自动重试，不移出监控）：" + "，".join(
+            f"{reason} {len(days)} 个（最长 {max(days)} 天）" for reason, days in ordered))
+    return lines
 
 
 def crash_message(*, run_type: str, started_at: str, exit_code: int, log_tail: Sequence[str]) -> str:

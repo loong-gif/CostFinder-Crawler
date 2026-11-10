@@ -62,7 +62,8 @@ Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.
 - 抓取失败不记变化，下次到期顺延一个档期；失败页仍由每小时重试任务处理。
 - 文件不存在时，第一次运行从 `evidence/` 的抓取时间和 `events/` 里 `change_type=changed` 的事件重建档案。
 - 每次运行结束，启动脚本调用 `promo_pipeline.py notify-run`，以「小扣」机器人（`FEISHU_APP_ID`）私信
-  `FEISHU_NOTIFY_OPEN_ID`：抓取、档期、事件、待执行 SQL、暂停重试和失败页面；没有生成报告时发送日志末尾。
+  `FEISHU_NOTIFY_OPEN_ID`：抓取、档期、事件、待执行 SQL、自动处理（见下文「自动处理」）和失败页面；
+  没有生成报告时发送日志末尾。
   小时重试没有抓取页面也没有处理事件时不发送。凭据在服务器 `.env`（`FEISHU_APP_SECRET`）。
 - `promo_pipeline.py monitor-schedule [--pages]` 只读查看各档页面数和今天到期数；
   `monitor --all-pages` 忽略档期抓取全部配置页面。
@@ -75,8 +76,9 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 不会被每小时重新打开。
 数据质量审计入口为 `run_data_quality_daily.sh`，需另建每小时触发的 Windows 任务
 `CostFinderDataQualityDaily`；脚本只在上海时间 **09** 点执行，其余小时直接退出，因此不受太平洋
-夏令时影响。它运行 `promo_pipeline.py quality --rest --recheck`：监控主机没有 Supabase CLI，快照经
-Supabase REST 整表读取（`utils/monitor_database_snapshot.py`，同样存为运行目录的 `snapshot.json`）；
+夏令时影响。它运行 `promo_pipeline.py quality --management-api --recheck`：监控主机没有 Supabase CLI，同一条只读快照
+查询 `read.sql` 经 Supabase Management API 的只读端点执行（`utils/monitor_database_snapshot.py`，同样存为运行目录的
+`snapshot.json` 并逐表核对行数）；
 只读审计并定向重抓到期、缺权益和超过七天未成功核验的来源，不带 `--apply`，也共享 `.monitor.lock`。
 同一来源的抓取和浏览器/提取分别累计连续失败，达到 **3 轮**后暂停该阶段的
 小时重试，事件保持 `retryable`，不进入审查清单；每日主任务每天把暂停的页面加入抓取，自动续跑。
@@ -86,13 +88,14 @@ Supabase REST 整表读取（`utils/monitor_database_snapshot.py`，同样存为
 
 事件状态由 `utils/monitor_review_policy.py` 决定，只有证据无法判定的情形进入审查清单 `review_queue.json`：
 用户手工保护、无法唯一对应的 Source/Offer 身份（`ambiguous_offer_match`、`ambiguous_item_match`、
-没有既有行且地址相同的 `source_business_ambiguous`）、跨域跳到第三方网站、401/403 凭据被拒绝，以及用户显式关闭的
-图片写入。网络异常（含 `SSLError`、`ReadTimeout`）与渲染失败是临时故障，等待重试。页面被拦截或为空、模型输出
+没有既有行且地址相同的 `source_business_ambiguous`）、跨域跳到第三方网站，以及用户显式关闭的
+图片写入。网络异常（含 `SSLError`、`ReadTimeout`）、渲染失败与 401/403 凭据被拒绝是临时故障，等待重试。页面被拦截或为空、模型输出
 未通过校验、截图或渲染证据不全、证据超过 24 小时等未确认情形不改动现有记录，事件标为
 `retryable`、`retry_reason=fresh_scrape_required`，由下一次抓取（Firecrawl 取不到正文时用 ego-lite）取得新证据后重新处理。
 确认 404（文档请求返回 404 且渲染出截图）时停用该来源的全部有效促销及其 offer，没有有效促销则不改动。
 跳转到商家自己登记的网站（`master_business_info.website`）按网站迁移继续处理。
 已有促销或服务行指向同一页面的多家商家各出一份计划；没有对应商家的来源标为 `excluded`。
+站点一侧的长期失败、基础设施故障、审查事件的重新处理与存档见 [`monitor_auto_remediation.md`](monitor_auto_remediation.md)。
 运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文；服务器已有的
 Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
 每个临时页面都会关闭。WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
@@ -101,11 +104,13 @@ Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存
 执行本身就是写入的把关，没有另外的写入开关。图片里的 offer 经 OCR 双读核验后照常写入；
 `state/price_sync_control.json` 只保留 `image_write_enabled`，缺省为开启，显式写 `false` 才停止图片 offer 的写入。
 到期活动只在当天抓取成功后创建一次核验事件；未知年份保存 NULL，不阻断更新。
-服务器只用 `SUPABASE_SECRET_KEY` 或 `SUPABASE_SERVICE_ROLE_KEY` 经 REST 只读，服务名称枚举
-经只读函数 `fn_clinic_service_names()` 读取；服务器不连数据库、不写数据库，也不使用 `DB_URL`。
+服务器只用 `.env` 中的 `SUPABASE_READONLY_TOKEN` 经 Management API 只读端点
+（`/v1/projects/{ref}/database/query/read-only`，查询在只读事务中执行，写入语句以 SQLSTATE 25006 失败）执行与本机
+相同的快照查询，服务名称枚举随快照从 `clinic_service_name_enum` 读取；服务器不连数据库、不写数据库，也不使用 `DB_URL`。
+`crawl-schedule plan --management-api` 与每日 monitor 的数据库快照同样经该端点读取。
 所有写入由会话经 Supabase MCP 执行（见 `monitor_pending_sql.md`）。
-OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；401/403 凭据被拒绝
-时进入审查。失败不能作为改价或移除证据，不通过自动购买额度解决。
+OCR/提取服务返回 402 额度耗尽、429 限流或 401/403 凭据被拒绝时保留待重试事件；凭据被拒绝记为基础设施故障。
+失败不能作为改价或移除证据，不通过自动购买额度解决。
 写入门禁按来源及候选判断：部分抓取失败、其他来源待审查和小时任务返回 2，均不阻止独立、
 证据明确的来源继续同步。来源内存在不确定候选时，明确的兄弟优惠
 可以更新，但保留审查项和 `is_offer_extracted=false`，不据此停用未匹配的优惠。
@@ -135,7 +140,10 @@ OCR/提取服务返回 402 额度耗尽或 429 限流时保留待重试事件；
 | `sync/<事件ID>/plan.json`、`plan_attempt_*.json` | 冻结计划和保留的旧版计划 |
 | `manual_protections.json` | 手工追加的保护条目和 ID 列表 |
 | `review_queue.json`、`sync_report.json` | 来源审查清单与运行报告 |
-| `retry_limits.json` | 按来源和阶段保存连续失败次数、最后原因及暂停状态；报告的 `paused_retries` 列出达到上限的项目 |
+| `retry_limits.json` | 按来源和阶段（`scrape`、`processing`）保存连续失败次数、首次与最后失败时间、最后原因；报告的 `paused_retries` 列出达到上限的项目 |
+| `site_failure_days.json` | 正在计数的站点失败来源及其失败日期 |
+| `monitor_removals.json` | 移出监控的来源、原因、移出时间与下次复查时间 |
+| `remediation_log.jsonl` | 自动处理的只追加存档 |
 | `runs/*_full_monitor.json`、`runs/*_failure_retry.json` | 历次完整运行和失败重试报告，小时报告不覆盖周报告 |
 | `pending_sql/*.sql` | 待执行的写入：每个冻结计划一个 DO 块，文件头含计划 ID、plan sha256、来源 URL、业务 ID 与各表操作数 |
 | `pending_sql/applied/` | 已经 MCP 执行并标记的文件 |

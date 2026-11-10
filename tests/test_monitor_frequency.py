@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+from monitor_health_support import monitor_services  # noqa: F401
 from utils.monitor_frequency import SCHEDULE_FILE, due_urls, record_check, seed_schedule
 from utils.monitor_price_store import atomic_json
 
@@ -64,7 +65,7 @@ def test_seed_rebuilds_frequency_from_existing_captures_and_price_change_events(
     assert "https://never.test" not in schedule
 
 
-def test_daily_monitor_run_captures_only_due_pages_and_records_the_result(tmp_path, monkeypatch):
+def test_daily_monitor_run_captures_only_due_pages_and_records_the_result(tmp_path, monkeypatch, monitor_services):
     import scripts.run_monitor_price_sync as sync
 
     due, fresh = "https://due.test/specials", "https://fresh.test/specials"

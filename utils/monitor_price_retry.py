@@ -8,6 +8,7 @@ from utils.monitor_price_store import atomic_json, now, read_json
 from utils.monitor_price_writer_plan import normalize_source_url
 
 MAX_CONSECUTIVE_FAILURES = 3
+STAGES = ("scrape", "processing")
 
 
 class RetryLimits:
@@ -16,8 +17,12 @@ class RetryLimits:
         self.path = root / "retry_limits.json"
         self.state = read_json(self.path, {"schema_version": 1})
         self.state["max_consecutive_failures"] = MAX_CONSECUTIVE_FAILURES
-        for stage in ("scrape", "processing", "recovery"):
-            self.state.setdefault(stage, {})
+        # 已没有代码写入的 recovery 阶段：读取时丢弃，下次保存即从文件中清除
+        self.state.pop("recovery", None)
+        for stage in STAGES:
+            # 早于记录首次失败时间的条目：已知最早的失败就是最后一次失败
+            for value in self.state.setdefault(stage, {}).values():
+                value.setdefault("first_failed_at", value["last_failed_at"])
 
     def save(self):
         atomic_json(self.path, self.state)
@@ -31,18 +36,19 @@ class RetryLimits:
     def failed(self, stage, url, reason):
         key = normalize_source_url(url)
         previous = self.state[stage].get(key, {})
+        failed_at = now()
         self.state[stage][key] = {"url": url,
             "consecutive_failures": previous.get("consecutive_failures", 0) + 1,
-            "last_reason": reason, "last_failed_at": now()}
+            "last_reason": reason, "first_failed_at": previous.get("first_failed_at", failed_at),
+            "last_failed_at": failed_at}
         self.save()
 
     def succeeded(self, stage, url):
         if self.state[stage].pop(normalize_source_url(url), None) is not None:
             self.save()
 
-    def refresh_scrapes(self, configured):
-        """Count failed page runs since last success, not the two HTTP attempts."""
-        urls = {normalize_source_url(url): url for url in configured}
+    def capture_history(self, urls):
+        """每个来源的最后成功时间与全部失败记录。"""
         successes, failures = {}, {}
         for directory, failed in (("evidence", False), ("failed_evidence", True)):
             for path in (self.root / directory).glob("*.json"):
@@ -58,6 +64,12 @@ class RetryLimits:
                         successes[key] = when
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
+        return successes, failures
+
+    def refresh_scrapes(self, configured):
+        """Count failed page runs since last success, not the two HTTP attempts."""
+        urls = {normalize_source_url(url): url for url in configured}
+        successes, failures = self.capture_history(urls)
         states = {}
         for key, attempts in failures.items():
             remaining = [(when, item) for when, item in attempts
@@ -66,6 +78,7 @@ class RetryLimits:
                 when, item = max(remaining, key=lambda pair: pair[0])
                 states[key] = {"url": urls[key], "consecutive_failures": len(remaining),
                                "last_reason": item.get("error") or "scrape_failed",
+                               "first_failed_at": min(pair[0] for pair in remaining).isoformat(),
                                "last_failed_at": when.isoformat()}
         self.state["scrape"] = states
         self.save()
@@ -73,7 +86,7 @@ class RetryLimits:
     def paused_sources(self):
         """暂停小时重试的来源（通知用）；它们由每日任务继续抓取重试，不进入审查。"""
         return [{**value, "retry_stage": stage, "hourly_retry_paused": True}
-                for stage in ("scrape", "processing", "recovery")
+                for stage in STAGES
                 for value in self.state[stage].values()
                 if value["consecutive_failures"] >= MAX_CONSECUTIVE_FAILURES]
 

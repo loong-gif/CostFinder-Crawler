@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from monitor_health_support import monitor_services  # noqa: F401
 from scripts import run_monitor_price_sync as runner
 from scripts.firecrawl_self_hosted_monitor import run_monitor
 from utils.monitor_event_queue import retry_failed_scrape_urls
@@ -108,7 +109,7 @@ def test_render_failure_limit_survives_new_events_and_weekly_fresh_success_reset
     assert json.loads(newer.read_text())["artifact_path"] == str(fresh)
 
 
-def test_failed_weekly_capture_does_not_reopen_processing_pause(tmp_path, monkeypatch):
+def test_failed_weekly_capture_does_not_reopen_processing_pause(tmp_path, monkeypatch, monitor_services):
     from scripts.firecrawl_self_hosted_monitor import ScrapeFailure
     limits = RetryLimits(tmp_path)
     for _ in range(3): limits.failed("processing", URL, "page_not_accessible")
@@ -131,7 +132,7 @@ def test_failed_weekly_capture_does_not_reopen_processing_pause(tmp_path, monkey
     assert RetryLimits(tmp_path).get("processing", URL)["consecutive_failures"] == 3
 
 
-def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_path, monkeypatch):
+def test_hourly_main_skips_capped_page_but_writes_independent_ready_source(tmp_path, monkeypatch, monitor_services):
     ready = "https://ready.test/specials"
     for n in range(3):
         atomic_json(tmp_path / "failed_evidence" / f"{n}.json",
@@ -201,7 +202,7 @@ def test_missing_pending_sql_file_reopens_the_event_for_one_new_render(tmp_path,
     assert len(rendered) == 2 and json.loads(path.read_text())["status"] == "pending_sql"
 
 
-def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_path, monkeypatch):
+def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_path, monkeypatch, monitor_services):
     limits = RetryLimits(tmp_path)
     for _ in range(3): limits.failed("processing", URL, "page_not_accessible")
     event_path = setup_event(tmp_path)
@@ -225,6 +226,27 @@ def test_weekly_main_success_rechecks_paused_processing_with_new_artifact(tmp_pa
     assert seen == ["Fresh Botox $12/unit"]
     assert not RetryLimits(tmp_path).paused("processing", URL)
     assert json.loads(event_path.read_text())["status"] == "superseded"
+
+
+def test_stale_recovery_stage_is_dropped_and_first_failure_time_is_kept(tmp_path):
+    stale = {"url": URL, "consecutive_failures": 5, "last_reason": "request_rejected", "last_failed_at": "2026-10-01"}
+    atomic_json(tmp_path / "retry_limits.json", {"schema_version": 1, "processing": {},
+                                                 "recovery": {"a.test/specials": stale},
+                                                 "scrape": {"b": {**stale, "url": "https://b.test"}}})
+    limits = RetryLimits(tmp_path)
+    assert [row["first_failed_at"] for row in limits.paused_sources()] == ["2026-10-01"]
+    limits.state["scrape"] = {}
+    for _ in range(3):
+        limits.failed("processing", URL, "image_capture_incomplete")
+    saved = json.loads((tmp_path / "retry_limits.json").read_text())
+    assert "recovery" not in saved
+    row, = RetryLimits(tmp_path).paused_sources()
+    assert row["first_failed_at"] < row["last_failed_at"]
+    for n in range(3):
+        atomic_json(tmp_path / "failed_evidence" / f"{n}.json",
+                    {"url": URL, "captured_at": f"2026-10-1{n}T00:00:00+00:00", "error": "ego_scrape_failed"})
+    limits.refresh_scrapes({URL})
+    assert limits.get("scrape", URL)["first_failed_at"] == "2026-10-10T00:00:00+00:00"
 
 
 def test_processing_counts_for_parallel_sources_are_all_persisted(tmp_path, monkeypatch):

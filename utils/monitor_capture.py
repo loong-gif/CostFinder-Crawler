@@ -10,22 +10,28 @@ from utils.monitor_event_queue import retry_failed_scrape_urls
 from utils.monitor_frequency import due_urls, load_schedule, record_reports
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json, now
+from utils.monitor_price_writer_plan import normalize_source_url
 from utils.monitor_queue import config_kinds, config_urls
+from utils.monitor_remediation import rechecks_due, removed_until_recheck
 from utils.service_endpoints import FIRECRAWL_URL
 
 
 def capture_urls(root: Path, config: dict, quality_urls: set[str], *, retry_only: bool,
                  capture_all: bool, started: datetime) -> set[str] | None:
-    """None 表示抓取配置里的全部页面。"""
+    """None 表示抓取配置里的全部页面。移出监控的来源到复查时间才抓取。"""
     if retry_only:
-        return retry_failed_scrape_urls(root, config)
-    if capture_all:
+        selected = retry_failed_scrape_urls(root, config)
+    elif capture_all:
         return None
-    # 每天运行：抓轮询到期的页面、到期活动与数据质量复查要求的页面，以及暂停小时重试的页面（每天续跑一次）
-    configured = set(config_urls(config))
-    schedule = load_schedule(root, configured, started, config_kinds(config))
-    paused = RetryLimits(root).paused_urls() & configured
-    return due_urls(schedule, configured, started) | quality_urls | paused
+    else:
+        # 每天运行：抓轮询到期的页面、到期活动与数据质量复查要求的页面，以及暂停小时重试的页面（每天续跑一次）
+        configured = set(config_urls(config))
+        schedule = load_schedule(root, configured, started, config_kinds(config))
+        paused = RetryLimits(root).paused_urls() & configured
+        rechecks = {url for url in configured if normalize_source_url(url) in rechecks_due(root, started)}
+        selected = due_urls(schedule, configured, started) | quality_urls | paused | rechecks
+    removed = removed_until_recheck(root, started)
+    return {url for url in selected if normalize_source_url(url) not in removed}
 
 
 def capture(root: Path, config: dict, names: list[str], selected_urls: set[str] | None, *, limit: int | None,

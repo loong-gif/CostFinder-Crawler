@@ -80,7 +80,8 @@ def test_live_same_domain_membership_redirect_stops_before_extraction(tmp_path,m
 @pytest.mark.parametrize("code,reason,status",[
     (402,"extraction_quota_exhausted","retryable"),
     (429,"extraction_rate_limited","retryable"),
-    (401,"extraction_credentials_rejected","review"),
+    # 凭据被拒是本系统的基础设施故障：等待重试，不进入人工审查
+    (401,"extraction_credentials_rejected","retryable"),
 ])
 def test_extraction_http_failures_preserve_queue_with_safe_categories(tmp_path,monkeypatch,code,reason,status):
     from requests import HTTPError,Response

@@ -29,6 +29,39 @@ def test_summary_lists_captures_events_pending_sql_and_failed_pages():
     assert "https://down.test/specials — firecrawl_empty_markdown" in text
 
 
+def test_summary_reports_the_day_of_automatic_remediation():
+    remediation = {"removed": ["https://gone.test/specials"], "restored": [], "recheck_failed": ["https://r.test/x"],
+                   "awaiting_human": [{"url": f"https://h{n}.test/specials", "reasons": ["ambiguous_offer_match"]}
+                                      for n in range(3)],
+                   "resolved": ["https://fixed.test/specials"],
+                   "infra_faults": [{"service": "ocr", "error": "HTTP 503"},
+                                    {"reason": "page_not_accessible", "count": 40, "total": 120}],
+                   "site_failures": [{"url": "https://b.test/specials", "days": 9, "reason": "ego_scrape_failed"},
+                                     {"url": "https://c.test/specials", "days": 2, "reason": "page_not_accessible"}]}
+    paused = [{"url": "https://i1.test", "retry_stage": "processing", "last_reason": "image_capture_incomplete",
+               "first_failed_at": "2026-11-02T08:00:00+00:00"},
+              {"url": "https://i2.test", "retry_stage": "processing", "last_reason": "image_capture_incomplete",
+               "first_failed_at": "2026-11-06T08:00:00+00:00"},
+              {"url": "https://n.test", "retry_stage": "scrape", "last_reason": "ConnectionError",
+               "first_failed_at": "2026-11-07T08:00:00+00:00"},
+              {"url": "https://s.test", "retry_stage": "scrape", "last_reason": "ego_scrape_failed",
+               "first_failed_at": "2026-11-01T08:00:00+00:00"}]
+    text = report_message({**REPORT, "remediation": remediation, "paused_retries": paused},
+                          started_at=STARTED, exit_code=0, tiers=None)
+    assert "自动处理：移出监控 1，恢复监控 0，复查未恢复 1，等待人工决定 3，已解决 1" in text
+    assert "等待人工决定（列出 2/3）：" in text
+    assert "  · https://h1.test/specials — ambiguous_offer_match" in text and "https://h2.test" not in text
+    assert "基础设施故障（不计入来源天数）：ocr 健康检查失败 HTTP 503；page_not_accessible 40/120 页" in text
+    assert "站点无法访问：2 个来源在计数，最长 9/14 天" in text
+    assert "流水线问题（每日自动重试，不移出监控）：image_capture_incomplete 2 个（最长 5 天），ConnectionError 1 个（最长 0 天）" in text
+    assert "暂停小时重试" not in text
+
+
+def test_summary_without_remediation_has_no_remediation_lines():
+    text = report_message(REPORT, started_at=STARTED, exit_code=0, tiers=None)
+    assert "自动处理" not in text and "基础设施故障" not in text and "流水线问题" not in text
+
+
 def run(tmp_path, monkeypatch, capsys, *, run_type, exit_code, report=None):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"schema_version": 1, "monitors": {"daily": {"targets": [{"urls": ["https://a.test"]}]}}}))

@@ -1,12 +1,29 @@
 """监控事件入队：到期活动核验、数据质量复查、失败页面的小时重试选择，以及已核验批次的回读确认。"""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from utils.monitor_price_retry import RetryLimits
 from utils.monitor_price_store import atomic_json, digest, now, read_json
 from utils.monitor_price_writer_plan import normalize_source_url
+
+
+def fresh_evidence(root: Path, url: str, after: str) -> Path:
+    """同一来源晚于 after、24 小时内的最新抓取证据；没有即该事件仍需新抓取。"""
+    threshold = datetime.fromisoformat(after.replace("Z", "+00:00"))
+    newest = None
+    for path in (root / "evidence").glob("*.json"):
+        artifact = read_json(path)
+        if normalize_source_url(artifact["url"]) != normalize_source_url(url):
+            continue
+        captured = datetime.fromisoformat(artifact["captured_at"].replace("Z", "+00:00"))
+        if captured > threshold and datetime.now(timezone.utc) - captured <= timedelta(hours=24):
+            if newest is None or captured > newest[0]:
+                newest = (captured, path)
+    if newest is None:
+        raise RuntimeError("fresh_scrape_required")
+    return newest[1]
 
 
 def verified_batch_results(root: Path, snapshot: dict) -> list[dict]:
