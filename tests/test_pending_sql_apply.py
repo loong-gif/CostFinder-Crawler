@@ -261,6 +261,40 @@ def test_missing_keychain_item_fails_fast_with_instructions():
     assert f"security add-generic-password -U -a costfinder -s {service} -w" in str(error.value)
 
 
+def test_session_connects_directly_even_when_the_shell_sets_a_proxy(monkeypatch):
+    # 本机代理会中断 Python 的 TLS 握手，launchd 任务也没有代理变量：手动与定时运行都直连 MCP 服务
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    received = []
+
+    class Unauthorized(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.headers["Authorization"])
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Unauthorized)
+    Thread(target=server.serve_forever, daemon=True).start()
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    async def go():
+        async with apply.supabase_session("token", url=f"http://127.0.0.1:{server.server_port}/mcp"):
+            pass
+
+    with pytest.raises(BaseException):
+        asyncio.run(go())
+    server.shutdown()
+    assert received and received[0] == "Bearer token"
+
+
 def test_launchd_agent_runs_the_apply_hourly_at_minute_50_with_logs_in_the_repository():
     path = ROOT / "config" / "launchd" / f"{apply.LAUNCHD_LABEL}.plist"
     assert subprocess.run(["plutil", "-lint", str(path)], capture_output=True).returncode == 0

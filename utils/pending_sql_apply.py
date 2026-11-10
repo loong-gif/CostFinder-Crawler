@@ -10,9 +10,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
+import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared._httpx_utils import create_mcp_http_client
+from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 from pglast import ast, parse_sql
 
 from utils.monitor_host import BASE, HOST, mark_applied_remote, mark_rejected_remote, pull_pending
@@ -46,7 +47,9 @@ def keychain_token(service: str = KEYCHAIN_SERVICE) -> str:
 
 @asynccontextmanager
 async def supabase_session(token: str, url: str = SUPABASE_MCP_URL) -> AsyncIterator[Client]:
-    http = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
+    # 直连 MCP 服务：本机代理会中断 Python 的 TLS 握手，launchd 任务也没有代理变量，手动与定时运行走同一条路
+    http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, trust_env=False,
+                              timeout=httpx2.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT))
     async with http, Client(streamable_http_client(url, http_client=http)) as client:
         yield client
 
