@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Plan and record scheduled re-crawls from ``state/crawl_schedule`` (no database writes).
 
-``plan``   lists businesses due now (bounded by ``--cap``) and compares their URLs with the
-           static monitor config; with ``--apply`` writes ``due.json`` and monitor-style buckets.
+``plan``   reads the catalogue with read-sql + read-snapshot (``--management-api`` on the monitor host, or ``--snapshot``), adds schedule and city entries
+           for businesses registered since the last run, lists businesses due now (bounded by ``--cap``) and cities
+           due for re-discovery; with ``--apply`` writes the state files, ``due.json`` and monitor-style buckets.
 ``record`` applies crawl results (JSON list of ``{business_id, ok, changed}``) to the schedule.
 """
 from __future__ import annotations
@@ -17,6 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.city_selection import due_for_rediscovery  # noqa: E402
+from utils.crawl_schedule_seed import SEED_TABLES, seed  # noqa: E402
 from utils.crawl_schedule_state import load_state, save_state  # noqa: E402
 from utils.crawl_scheduler_logic import (  # noqa: E402
     apply_result,
@@ -25,18 +28,17 @@ from utils.crawl_scheduler_logic import (  # noqa: E402
     select_due,
 )
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url  # noqa: E402
-from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
+from utils.monitor_database_snapshot import api_snapshot  # noqa: E402
+from utils.pipeline_db import fresh_snapshot, load_snapshot  # noqa: E402
 
-MONITOR_CONFIG = PROJECT_ROOT / "config" / "firecrawl_monitor_migration.json"
 DEFAULT_CAP = 150
+OUTPUT_DIR = PROJECT_ROOT / "output" / "pipeline" / "crawl_schedule"
 
 
-def monitor_urls() -> set[str]:
-    config = json.loads(MONITOR_CONFIG.read_text(encoding="utf-8"))
-    found: set[str] = set()
-    for monitor in config.get("monitors", {}).values():
-        for target in monitor.get("targets", []):
-            found.update(canonical_scrape_url(url) for url in target.get("urls", []))
+def monitor_urls(snapshot: dict) -> set[str]:
+    """The monitor queue: source URLs of clinic_promotions and clinic_memberships."""
+    found = {canonical_scrape_url(str(row.get("source_url") or ""))
+             for table in ("promotions", "memberships") for row in snapshot[table]}
     found.discard("")
     return found
 
@@ -55,37 +57,34 @@ def monitor_config(buckets: list[list[str]], now: datetime) -> dict:
     return {"schema_version": 1, "generated_at": now.isoformat(), "monitors": monitors}
 
 
-def load_business_urls() -> dict[int, set[str]]:
-    client = load_supabase_client(PROJECT_ROOT, role="service")
-    businesses = fetch_all_rows(client, "master_business_info", "business_id,website", order="business_id.asc")
-    promotions = fetch_all_rows(client, "clinic_promotions", "promotion_id,business_id,source_url", order="promotion_id.asc")
-    services = fetch_all_rows(client, "clinic_services", "service_id,business_id,source_url", order="service_id.asc")
-    memberships = fetch_all_rows(client, "clinic_memberships", "plan_id,business_id,source_url", order="plan_id.asc")
-    return collect_business_urls(businesses, promotions, services, memberships)
-
-
 def cmd_plan(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
-    schedule = load_state("schedule")
-    if not schedule:
-        print("schedule.json is empty; run scripts/seed_crawl_schedule.py --apply first", file=sys.stderr)
-        return 2
-    urls_by_business = load_business_urls()
+    read = api_snapshot if args.management_api else fresh_snapshot
+    path = args.snapshot or read(OUTPUT_DIR / now.strftime("%Y%m%dT%H%M%SZ"), SEED_TABLES)
+    snapshot = load_snapshot(path, SEED_TABLES)
+    schedule, cities = seed(snapshot, load_state("schedule"), load_state("cities"), now)
+    added = len(schedule) - len(load_state("schedule"))
+    urls_by_business = collect_business_urls(snapshot["businesses"], snapshot["promotions"],
+                                             snapshot["services"], snapshot["memberships"])
     due = select_due(schedule, now, args.cap, urls_by_business)
     due_urls = [url for item in due for url in item["urls"]]
-    covered = set(due_urls) & monitor_urls()
-    print(f"due_businesses={len(due)} due_urls={len(set(due_urls))} already_in_monitor={len(covered)}")
+    covered = set(due_urls) & monitor_urls(snapshot)
+    print(f"seeded_businesses={added} due_businesses={len(due)} due_urls={len(set(due_urls))} "
+          f"already_in_monitor={len(covered)}")
     by_tier: dict[str, int] = {}
     for item in due:
         by_tier[item["tier"]] = by_tier.get(item["tier"], 0) + 1
     print(f"by_tier={by_tier} cap={args.cap}")
+    print(f"cities due for re-discovery: {len(due_for_rediscovery(cities, now))} (discover-businesses --due)")
     if args.apply:
+        save_state("schedule", schedule)
+        save_state("cities", cities)
         buckets = build_buckets(due_urls)
         save_state("due", {"generated_at": now.isoformat(), "businesses": due, "buckets": buckets})
         save_state("due_monitor", monitor_config(buckets, now))
-        print(f"wrote due.json and due_monitor.json with {len(buckets)} bucket(s)")
+        print(f"wrote schedule.json, cities.json, due.json and due_monitor.json with {len(buckets)} bucket(s)")
     else:
-        print("dry run: pass --apply to write due.json")
+        print("dry run: pass --apply to write the state files")
     return 0
 
 
@@ -120,6 +119,9 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     plan = sub.add_parser("plan")
     plan.add_argument("--cap", type=int, default=DEFAULT_CAP)
+    plan.add_argument("--snapshot", type=Path, help="snapshot.json of the read-only query; default: read it now")
+    plan.add_argument("--management-api", action="store_true",
+                      help="monitor host: run read.sql through the Supabase Management API (no Supabase CLI there)")
     plan.add_argument("--apply", action="store_true")
     plan.set_defaults(func=cmd_plan)
     record = sub.add_parser("record")

@@ -1,6 +1,7 @@
 """停用 campaign_end_date 已过的促销（下游 offer 由数据库触发器一并停用）。
 
-生成 apply.sql，经 Supabase MCP 执行；监控主机上的每日任务只生成该文件，由会话审阅后执行。
+生成 apply.sql（固定语句，判定在数据库函数内），经 Supabase MCP 执行；监控主机上的每日任务只生成该文件，
+由 pending-sql 拉回后执行。
 """
 from __future__ import annotations
 

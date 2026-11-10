@@ -29,29 +29,6 @@ def test_run_full_audit_flags_membership_commitment_gap() -> None:
     assert "missing_commitment_months" in types
 
 
-def test_run_full_audit_flags_promotion_markdown_residue() -> None:
-    report = run_full_audit(
-        services=[],
-        memberships=[],
-        promotions=[
-            {
-                "promotion_id": 2,
-                "business_id": 10,
-                "promotion_title": "Shop",
-                "source_url": "https://example.com/specials",
-                "promotion_content": ["Regular price $12", "Sale price $10"],
-                "is_active": True,
-            }
-        ],
-        offers=[],
-        offer_items=[],
-        businesses=[{"business_id": 10, "name": "Example Spa"}],
-        scrape_urls=["https://example.com/specials"],
-        search_urls=[],
-    )
-    assert any(issue.issue_type == "MARKDOWN_OR_SHOPIFY_RESIDUE" for issue in report.issues)
-
-
 def test_run_full_audit_flags_non_promo_in_master() -> None:
     report = run_full_audit(
         services=[],

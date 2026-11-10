@@ -19,7 +19,7 @@
           },
           "promotion_content": {
             "type": "array",
-            "description": "promotion_content 每条必须是源页原文（完整原文行或段落，不得改写、摘要或补充说明）。必须包含标题/supporting 价格行、会员/非会员价、套餐组成等所有支持该活动的原文；不得只填 promotion_title 本身。",
+            "description": "promotion_content 每条是一个能在源页面上追溯的事实：允许改写，但服务、价格、原价、折扣、数量、日期和条件都必须出现在页面上，并且属于这一个优惠。必须包含标题与支持价格的行、会员/非会员价、套餐组成等支持该活动的内容；不得只填 promotion_title 本身。不得合并页面上不同位置的内容，不得加入说明、推断、计算出的数值，不得包含链接、图片标记或网址。",
             "items": {
               "type": "string",
               "minLength": 1

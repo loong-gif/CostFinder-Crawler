@@ -1,12 +1,17 @@
-"""File policy checked at the pending-SQL rendering boundary (the control file lives next to pending_sql/)."""
+"""File policy checked at the pending-SQL rendering boundary (the image control file lives next to pending_sql/)."""
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from utils.monitor_price_store import read_json
+from utils.monitor_rendered_browser import BREAKPOINT_NAMES
 from utils.monitor_image_evidence import compare_reads, critical_fields, source_tokens
 
 
 def capture_is_current(browser):
+    """24 小时内、且按现行宽度集合渲染的结果才可复用；宽度集合不同的旧渲染（例如三宽度时期的）需要重新渲染。"""
+    coverage = browser.get("breakpoint_coverage")
+    if coverage is not None and set(coverage) != BREAKPOINT_NAMES:
+        return False
     try:
         captured = datetime.fromisoformat(browser["captured_at"].replace("Z", "+00:00"))
         age = datetime.now(timezone.utc) - captured
@@ -15,11 +20,13 @@ def capture_is_current(browser):
         return False
 
 
+def image_writes_enabled(state_dir) -> bool:
+    """图片 offer 经 OCR 双读核验后照常写入；只有 price_sync_control.json 显式写 image_write_enabled=false 才停用。"""
+    return read_json(Path(state_dir) / "price_sync_control.json", {}).get("image_write_enabled", True) is not False
+
+
 def image_write_block(plan, journal_dir):
     policy = plan.get("image_policy")
-    control = read_json(Path(journal_dir).parent / "price_sync_control.json", {})
-    if control.get("write_enabled") is False:
-        return "writes_disabled"
     evidence_path = plan.get("evidence_path")
     evidence = read_json(Path(evidence_path), {}) if evidence_path else {}
     browser = read_json(Path(evidence_path).parent / "browser.json", {}) if evidence_path else {}
@@ -44,7 +51,7 @@ def image_write_block(plan, journal_dir):
                             or op["table"] == "promo_offer_master" and op["values"].get("is_active") is False
                             for op in plan.get("operations", []))
     coverage = browser.get("breakpoint_coverage")
-    if evidence_path and requires_complete and (not coverage or set(coverage) != {"desktop", "tablet", "mobile"}
+    if evidence_path and requires_complete and (not coverage or set(coverage) != BREAKPOINT_NAMES
             or not all(row.get("complete") is True for row in coverage.values())):
         return "breakpoint_coverage_incomplete"
     for offer in evidence.get("offers", []):
@@ -55,7 +62,7 @@ def image_write_block(plan, journal_dir):
     if policy is not None:
         if not policy.get("depends_on_images"):
             return None
-        if control.get("image_write_enabled") is not True:
+        if not image_writes_enabled(Path(journal_dir).parent):
             return "image_writes_disabled"
         if policy.get("dual_read_verified") is not True:
             return "image_dual_read_required"

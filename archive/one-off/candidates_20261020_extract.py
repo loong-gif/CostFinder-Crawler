@@ -15,7 +15,7 @@ from markdown_it import MarkdownIt
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.run_domain_architecture_pipeline import llm_extract
+from utils.domain_pipeline_search import llm_extract
 from utils.direct_public_scrape import html_to_text
 from utils.monitor_price_store import atomic_json, now, run_lock
 from utils.offer_extraction_llm import build_client_from_env

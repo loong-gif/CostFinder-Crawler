@@ -14,6 +14,10 @@ def test_canonical_scrape_url_strips_www_and_trailing_slash() -> None:
     )
 
 
+def test_canonical_scrape_url_collapses_repeated_slashes_in_the_path() -> None:
+    assert canonical_scrape_url("https://oubeauty.com//specials/") == "https://oubeauty.com/specials"
+
+
 def test_scrape_fingerprint_stable_for_same_url() -> None:
     a = scrape_request_fingerprint("https://www.example.com/a/")
     b = scrape_request_fingerprint("https://example.com/a")

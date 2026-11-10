@@ -5,22 +5,25 @@ from datetime import datetime, timezone
 import pytest
 import requests
 
-from scripts.extract_clinic_promotions_from_scrape_raw import (
-    ProxySafeOpenAICompatibleClient,
-    _output_path,
-    batch_utc_bounds,
+from scripts.extract_clinic_promotions_from_scrape_raw import run
+from utils.promo_extraction import (
     campaign_date_range_from_url,
-    is_promotion_page_url,
     llm_extract_promotions,
-    load_batch_scrapes,
     merge_promotion_items,
-    normalize_llm_api_url,
-    persist_page_promotion,
-    resolve_local_llm_api_key,
-    run,
     split_evidence_for_llm,
     strip_embedded_images_for_llm,
 )
+from utils.promo_paths import (
+    is_promotion_url_loose as is_promotion_page_url,
+    sanitized_output_path as _output_path,
+)
+from utils.scrape_raw_promotion_llm import (
+    ProxySafeOpenAICompatibleClient,
+    normalize_llm_api_url,
+    resolve_local_llm_api_key,
+)
+from utils.scrape_raw_promotion_loading import batch_utc_bounds, load_batch_scrapes
+from utils.scrape_raw_promotion_persistence import persist_page_promotion
 
 
 VISIBLE_PROMOTION_EVIDENCE = {

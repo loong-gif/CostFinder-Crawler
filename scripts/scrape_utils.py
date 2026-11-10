@@ -68,7 +68,7 @@ try:
 except ImportError:  # pragma: no cover
     raise ImportError("httpx required: pip install httpx")
 
-# Same shape as verify_clinic_service_prices.PRICE_RE, trimmed to "does this
+# Same shape as utils.service_price_verify_hits.PRICE_RE, trimmed to "does this
 # text contain a price" (no unit capture needed for container detection).
 PRICE_RE = re.compile(r"(?:USD\s*)?\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?", re.I)
 

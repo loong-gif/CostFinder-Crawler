@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from utils.monitor_price_store import atomic_json, read_json
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 
 def reviewed_browser(root: Path, artifact: dict, directory: Path) -> dict | None:
@@ -29,3 +29,24 @@ def reviewed_browser(root: Path, artifact: dict, directory: Path) -> dict | None
         atomic_json(directory / "browser.json", browser)
         return browser
     return None
+
+
+def stored_browser(root: Path, artifact: dict, artifact_path: str, directory: Path) -> dict | None:
+    """抓取时保存的渲染结果；没有时复用对同一次抓取做过的 Ego Lite 核验（截图仍在才算），保留原始时间。"""
+    rendered_path = artifact.get("rendered", {}).get("browser_path")
+    browser = read_json(Path(rendered_path), {}) if rendered_path else None
+    if browser:
+        return browser
+    verified = reviewed_browser(root, artifact, directory)
+    if not verified:
+        return None
+    receipt = next(r for r in read_json(root / "visual_verifications.json", [])
+                   if r.get("url") == artifact.get("url") and r.get("artifact_captured_at") == artifact.get("captured_at")
+                   and r.get("artifact_markdown") == artifact.get("markdown"))
+    if not all(Path(f).is_file() for f in receipt.get("screenshots_viewed", [])):
+        return None
+    coverage = receipt.get("breakpoint_coverage")
+    return {**verified, "captured_at": artifact["captured_at"], "verified_capture": True,
+            "url": artifact["url"], "visual_receipt_path": str(root / "visual_verifications.json"),
+            "verified_artifact_path": artifact_path, "breakpoint_coverage": coverage,
+            "complete": bool(coverage and all(v.get("complete") for v in coverage.values()))}

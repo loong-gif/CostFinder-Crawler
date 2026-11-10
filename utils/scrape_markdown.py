@@ -46,6 +46,47 @@ def _trim_leading_chrome(text: str) -> str:
     return text
 
 
+_BANNER_PROMO = re.compile(r"\d+(?:\.\d+)?\s*%\s*off\b|\$\s?\d[\d,]*(?:\.\d+)?\s*off\b|\bsave\s+(?:up\s+to\s+)?\$?\d",
+                           re.IGNORECASE)
+_HEADING_LINE = re.compile(r"^\s*#{1,6}\s+(\S.*)$")
+
+
+def banner_offer_line(line: str) -> bool:
+    """横幅里写明折扣的那一行（% off、$ off、save $）。"""
+    return bool(_BANNER_PROMO.search(line))
+
+
+def site_banner_blocks(raw_markdown: str) -> list[str]:
+    """正文第一个一级标题之前（导航、通知卡片等页头区域）带折扣措辞的横幅块：以小标题开头，到下一个标题为止，
+    原样保留其中的文字与条款链接；同一横幅重复出现时只保留一次。促销中心页用它补回被 _trim_leading_chrome 删掉的全站横幅。"""
+    match = re.search(r"(?m)^#\s+\S", raw_markdown)
+    prefix = raw_markdown[: match.start()] if match else ""
+    blocks: list[str] = []
+    seen: set[str] = set()
+    heading, lines = None, []
+
+    def flush() -> None:
+        body = [line for line in lines if line]
+        if heading and any(banner_offer_line(line) for line in body):
+            key = re.sub(r"[^0-9a-z%$]+", "", " ".join([heading, *body]).casefold())
+            if key not in seen:
+                seen.add(key)
+                blocks.append("\n\n".join([f"### {heading}", *body]))
+
+    for raw in prefix.splitlines():
+        found = _HEADING_LINE.match(raw)
+        if found:
+            flush()
+            heading, lines = found.group(1).strip(), []
+            continue
+        line = raw.strip()
+        # 卡片里的图片不是文字内容；列表符号属于导航结构
+        if heading is not None and not line.startswith(("![", "* ![", "+ ![")):
+            lines.append(line.lstrip("*+ ").strip() if line[:2] in ("* ", "+ ") else line)
+    flush()
+    return blocks
+
+
 def _cut_trailing_widget_blocks(text: str) -> str:
     lower = text.lower()
     cut_at = len(text)

@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--strategies", default="vector,multi")
     parser.add_argument("--query", default="", help="Optional single query to execute after indexing")
-    parser.add_argument("--llm-model", default="gemini-3.5-flash-lite")
+    parser.add_argument("--llm-model", default="gemini-2.5-flash-lite")
     parser.add_argument("--embedding-model", default="text-embedding-004")
     parser.add_argument("--result-dir", type=Path, default=PROJECT_ROOT / "output" / "results")
     return parser.parse_args()

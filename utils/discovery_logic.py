@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from config.discovery_filters import CONSECUTIVE_PASSES_TO_PROMOTE, passes_filter
+from utils.monitor_source_binding import address_key
 
 
 def website_host(url: Any) -> str:
@@ -37,7 +38,10 @@ def match_master(
     host = website_host(place.get("website"))
     if host:
         same_host = [m for m in unlinked if website_host(m.get("website")) == host]
-        if len(same_host) == 1 and place_hosts.get(host, 0) == 1:
+        # 同一网站、不同城市的是连锁品牌的另一家分店，不能按网站把这个地点挂到它上面
+        city = str(place.get("city") or "").strip().casefold()
+        if (len(same_host) == 1 and place_hosts.get(host, 0) == 1
+                and str(same_host[0].get("city") or "").strip().casefold() == city):
             return same_host[0], "host"
     key = _name_key(place.get("name"), place.get("city"))
     if key:
@@ -45,8 +49,18 @@ def match_master(
         if len(same_name) == 1:
             return same_name[0], "name_city"
     if host and any(website_host(m.get("website")) == host for m in unlinked):
+        # 同一网站的多家商家：街道地址相同的那一家就是这个地点
+        street = _street_key(place.get("address"))
+        same_street = [m for m in unlinked if website_host(m.get("website")) == host
+                       and street and _street_key(m.get("address")) == street]
+        if len(same_street) == 1:
+            return same_street[0], "host_address"
         return None, "ambiguous"
     return None, ""
+
+
+def _street_key(address: Any) -> str:
+    return address_key(str(address or "").split(",")[0])
 
 
 def classify_places(
@@ -95,7 +109,8 @@ def classify_places(
 
         master = master_by_place_id.get(place_id)
         if master is None and unlinked:
-            row, reason = match_master(place, [m for m in unlinked if m["business_id"] not in claimed], place_hosts)
+            open_masters = [m for m in unlinked if m["business_id"] not in claimed]
+            row, reason = match_master(place, open_masters, place_hosts)
             if row is not None:
                 claimed.add(row["business_id"])
                 actions["link"].append({"business_id": row["business_id"], "google_place_id": place_id,
@@ -105,9 +120,15 @@ def classify_places(
                 entry["promoted_business_id"] = row["business_id"]
                 continue
             if reason == "ambiguous":
+                # 证据不足以判定是哪一家：不插入、不挂接，记在候选里，下一轮发现时重新判定
+                host = website_host(place.get("website"))
+                entry["match_status"] = "ambiguous"
                 actions["ambiguous"].append({"google_place_id": place_id, "name": place.get("name"),
-                                             "website": place.get("website")})
+                                             "address": place.get("address"), "website": place.get("website"),
+                                             "business_ids": sorted(m["business_id"] for m in open_masters
+                                                                    if website_host(m.get("website")) == host)})
                 continue
+            entry.pop("match_status", None)
         if master is not None:
             entry["promoted_business_id"] = master.get("business_id")
             changed = {

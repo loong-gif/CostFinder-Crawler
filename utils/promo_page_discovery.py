@@ -18,7 +18,7 @@ MEMBERSHIP_TOKENS = frozenset({"club", "vip"})
 PRICING_TOKENS = frozenset({"price", "prices", "pricing", "rate", "rates", "cost", "costs", "menu", "fees", "fee"})
 EXCLUDED_PATH_RE = re.compile(
     r"/(tag|category|author|feed|wp-content|wp-json|cart|checkout|account|login|privacy|terms|careers?|jobs?|"
-    r"sitemap|cdn-cgi|rsvp|registration|terms[a-z-]*|conditions|policy|policies)(/|$)|"
+    r"sitemap|cdn-cgi|rsvp|registration|[a-z-]*terms[a-z-]*|conditions|policy|policies)(/|$)|"
     r"(?:rsvp|registration|terms-and-conditions)[a-z-]*$|\.(pdf|jpe?g|png|gif|webp|svg|css|js|xml|zip|mp4)$", re.I)
 BLOG_PATH_RE = re.compile(r"/(blog|news|articles?|press|journal|post|posts)(/|$)", re.I)
 
@@ -149,6 +149,8 @@ def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str 
     lines = [re.sub(r"\s+", " ", ln).strip() for ln in str(markdown or "").splitlines()]
     lines = [ln for ln in lines if ln]
     evidence: List[str] = []
+    # 同一句话在导航、横幅与正文中重复出现时只差空格、脚注符号或 markdown 转义，按字母数字与 %、$ 去重
+    seen_keys: set = set()
     discount = monthly = unit = False
     for line in lines:
         amounts = [a for a in _amounts(line) if MIN_PLAUSIBLE_AMOUNT <= a <= MAX_PLAUSIBLE_AMOUNT]
@@ -167,7 +169,9 @@ def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str 
         discount |= has_percent or has_off
         monthly |= has_monthly
         unit |= has_unit
-        if line not in evidence:
+        key = re.sub(r"[^0-9a-z%$]+", "", line.casefold())
+        if key not in seen_keys:
+            seen_keys.add(key)
             evidence.append(line[:240])
     if not evidence:
         reasons.append("no_discount_or_price_evidence")
@@ -287,7 +291,7 @@ import datetime as _dt  # noqa: E402
 AGGREGATOR_HOSTS = frozenset({
     "groupon.com", "yelp.com", "facebook.com", "instagram.com", "tiktok.com", "twitter.com", "x.com",
     "youtube.com", "pinterest.com", "google.com", "maps.google.com", "linkedin.com", "reddit.com",
-    "realself.com", "healthgrades.com", "yellowpages.com", "mapquest.com", "bbb.org", "nextdoor.com",
+    "realself.com", "healthgrades.com", "zocdoc.com", "yellowpages.com", "mapquest.com", "bbb.org", "nextdoor.com",
     "trustpilot.com", "wellnessliving.com", "mindbodyonline.com", "booksy.com", "vagaro.com",
     "fresha.com", "styleseat.com", "podium.com", "weebly.com", "wixsite.com",
 })
@@ -345,7 +349,7 @@ END_DATE_RE = re.compile(
 
 
 def extract_end_dates(text: str, today: Optional[_dt.date] = None) -> List[str]:
-    """ISO dates the page says an offer ends on. A missing year is the next occurrence within 60 days of past."""
+    """页面写明的活动结束日期（ISO 格式）。月日没有年份时取当前年份。"""
     today = today or _dt.date.today()
     found: Set[str] = set()
     for match in END_DATE_RE.finditer(str(text or "")):
@@ -362,11 +366,7 @@ def extract_end_dates(text: str, today: Optional[_dt.date] = None) -> List[str]:
                 month = _MONTHS[tokens[0][:3]]
                 day = int(tokens[1])
                 year = int(tokens[2]) if len(tokens) > 2 and len(tokens[2]) == 4 else None
-            explicit = year is not None
-            candidate = _dt.date(year or today.year, month, day)
-            if not explicit and candidate < today - _dt.timedelta(days=60):
-                candidate = _dt.date(today.year + 1, month, day)
-            found.add(candidate.isoformat())
+            found.add(_dt.date(year or today.year, month, day).isoformat())
         except (ValueError, KeyError, IndexError):
             continue
     return sorted(found)

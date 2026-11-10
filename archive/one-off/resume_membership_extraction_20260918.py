@@ -14,11 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.repair_clinic_memberships_full_table import (
-    build_dry_run,
-    extract_one,
-    EXTRACTION_SCHEMA,
-)
+from utils.membership_repair_extraction import EXTRACTION_SCHEMA, extract_one
+from utils.membership_repair_plan import build_dry_run
 from utils.offer_extraction_llm import build_client_from_env
 
 

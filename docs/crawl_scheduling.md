@@ -15,16 +15,28 @@
 ## 命令
 
 ```bash
-python scripts/seed_crawl_schedule.py [--apply]            # 首次/补种：从现有目录数据生成状态
-python scripts/crawl_scheduler.py plan [--cap N] [--apply]  # 今天到期的商户与 URL
-python scripts/crawl_scheduler.py record --results r.json [--apply]  # 回写抓取结果并调整 tier
-python scripts/process_discovery_results.py --input places.json [--city C --state S] [--apply]
-python scripts/select_next_city.py add|pick|pilot ...       # 新城市队列
-python scripts/crawl_report.py                              # 汇总
+python scripts/promo_pipeline.py crawl-schedule plan [--cap N] [--apply]   # 补种新商家与城市，列出今天到期的商户与 URL、到期城市
+python scripts/promo_pipeline.py crawl-schedule record --results r.json [--apply]  # 回写抓取结果并调整 tier
+python scripts/promo_pipeline.py discover-businesses --due [--max-cities N]  # 到期城市重新发现并登记
+python scripts/promo_pipeline.py discover-businesses --city C --state S --out places.json
+python scripts/promo_pipeline.py register-businesses --input places.json [--city C --state S]
+python scripts/promo_pipeline.py select-city add|pick|pilot ...  # 新城市队列
+python scripts/crawl_report.py                                  # 汇总
 ```
 
-所有写入类命令默认 dry-run。`process_discovery_results.py --apply` 只对 `master_business_info`
-做数据插入/刷新，不删除、不降级已有商户。
+读库一律走 read-sql + read-snapshot：命令把只读查询写入 `output/pipeline/<命令>/<UTC 时间戳>/read.sql`，
+用 Supabase CLI（`--linked`）执行得到 `snapshot.json`；也可用 `--snapshot` 指定已有快照。
+
+- `crawl-schedule plan` 每次运行先把 `schedule.json` / `cities.json` 里还没有的商家和城市补种进去
+  （`utils/crawl_schedule_seed.py`），新登记的商家在 apply.sql 执行后的下一次运行自动进入调度。
+- `discover-businesses --due` 按 `cities.json` 选出到期的 active 城市（从未发现过的优先，每次最多 `--max-cities`），
+  逐城抓取并立即登记；没有 `GMAPS_SCRAPER_URL` 时命令自己建立到抓取服务的 SSH 隧道。
+- `register-businesses` 的动作（insert / promote / link / refresh）由过滤线判定、全部渲染；apply.sql 每条语句按
+  `google_place_id` 判重，重复执行同一批地点不会重复登记。同一网站对应多家既有商家时按街道地址匹配；
+  仍无法判定的地点写入运行目录的 `ambiguous.json`，候选标 `match_status=ambiguous`，下一轮发现时重新判定。
+  apply.sql 经 Supabase MCP 执行；不删除、不降级已有商户。
+- `select-city pick` 直接把选中的城市标为 onboarding；`select-city pilot CITY STATE` 从 `candidates.json`
+  统计该城市通过过滤线且有网站的地点数，决定转 active 或搁置。
 
 ## 规则
 
@@ -35,51 +47,49 @@ python scripts/crawl_report.py                              # 汇总
   首次发现即达标的新商户直接插入；低于线后上升的需连续 2 次达标才晋升。
 - 新城市：每周一个，最多 2 个同时 onboarding；评分 = 3×同州活跃城市数(上限 5) + 2×注册用户数 + 预期供给/10 − 5×失败试点；
   试点达标商户 ≥15 才转 active，否则搁置 90 天。
-- `config/firecrawl_monitor_migration.json` 里的 cron 为迁移遗留值，执行器不读取；实际节奏取决于服务器 Windows 任务。
+- 主监控的页面队列由 `clinic_promotions` / `clinic_memberships` 的 source_url 动态生成，见 `docs/monitor_price_sync.md`「监控队列」；
+  页面轮询节奏由 `utils/monitor_frequency.py` 的页面档位决定（促销页 7/15/30 天，会员页 60/90 天），实际运行时间取决于服务器 Windows 任务。
 
 ## 服务器部署（2026-10-15）
 
-调度脚本以"只新增文件、不覆盖"的方式放入 `/home/loong/costfinder_monitor`（10 个文件），服务器上已就地运行
-`seed_crawl_schedule.py --apply` 生成 `state/crawl_schedule/`，使用服务器已有的 `.env` 凭据。
-**没有使用 `deploy_monitor_price_sync.py`**：它会把 `price_sync_control.json` 的 `write_enabled` 置为 False
-（10-14 刚发生过一次非预期暂停并已恢复）。如需同步其余代码改动（`raw_file_store`、`supabase_rest` 路由、
-`limit=5000` 修复等），应先确认接受写入暂停，或在部署后立即恢复开关。
+代码更新统一用 `deploy_monitor_price_sync.py`，部署不改动 `state/` 里的控制文件。`crawl-schedule plan` 读库走
+read-snapshot，服务器上需要已登录并 `supabase link` 到生产项目的 Supabase CLI（`supabase/.temp/project-ref`）。
 
-## 到期抓取闭环（尚未接入任何计划任务）
+## 到期抓取闭环
 
 ```bash
 python scripts/crawl_scheduler.py plan --apply        # 生成 due.json / due_monitor.json
-# 观察模式：独立 state-dir 和独立 control（write_enabled=false），不写数据库
+# 只抓取：独立 state-dir，记录页面变化，不生成计划和待执行 SQL
 python scripts/run_monitor_price_sync.py --config state/crawl_schedule/due_monitor.json \
-    --state-dir state/due_monitor --control state/due_monitor/control.json
+    --state-dir state/due_monitor --capture-only
 python scripts/crawl_record_from_monitor.py --state-dir state/due_monitor --due state/crawl_schedule/due.json \
     --monitors <本次运行的监控名,逗号分隔> --since <运行开始时间 ISO> --out state/crawl_schedule/results.json
 python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.json --apply
 ```
 
 首次运行某个监控只建立基线（不产生变化事件）；`record` 之后 `next_crawl_at` 才会推进。
-接入 Windows 任务前，应先在服务器上用观察模式完整跑一轮并核对 `results.json`。
 
 ## 服务器上的运行（2026-10-15 起）
 
 - 主机 `72.52.161.65`（SSH 别名 `firecrawl`，WSL Ubuntu），目录 `/home/loong/costfinder_monitor`。
 - Windows 任务 `CostFinderCrawlDue`：每天 03:30（服务器太平洋时间）运行 `run_crawl_due.sh`，日志 `logs/crawl_due.log`。
-  流程：`crawl_scheduler.py plan --apply --cap 30` → 观察模式监控（独立 `state/due_monitor/` 与
-  `control.json`，`write_enabled=false`，不写库、不发通知）→ `crawl_record_from_monitor.py` →
+  流程：`crawl_scheduler.py plan --apply --cap 30` → `monitor --capture-only`（独立 `state/due_monitor/`，
+  只抓取，不生成计划和待执行 SQL，不发通知）→ `crawl_record_from_monitor.py` →
   `crawl_scheduler.py record --apply`。单次上限用环境变量 `CRAWL_DUE_CAP` 调整。
-- 该任务只更新 `state/crawl_schedule/`，不会写数据库；现有每周监控与每小时重试任务不变。
+- 该任务只更新 `state/crawl_schedule/`，不会写数据库；每日监控（按页面 7/15/30 天档期抓取，见 `docs/monitor_price_sync.md`）与每小时重试任务不变。
 - 停用：`schtasks /delete /tn CostFinderCrawlDue /f`。
-- 抓取服务（google-maps-scraper）在 `192.168.1.68:8081`（SSH 别名 `thinkbook`，容器
-  `google-maps-scraper-api-8081`），出网必须经代理：设置 `GMAPS_SCRAPER_PROXIES=http://x:x@127.0.0.1:7890`。
+- 抓取服务（google-maps-scraper v1.18.1）在 Firecrawl 服务器 `72.52.161.65` 上，监听 `0.0.0.0:8081`（服务器防火墙只放行项目 IP），
+  Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
+  不需要代理。`discover-businesses` 与 `topic-search` 直接调用 `utils.service_endpoints` 中的地址（`http://72.52.161.65:8081`）。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 
 ```bash
-python scripts/discover_new_promo_pages.py --city "Newport Beach" --limit 15 --workers 3 \
-    --out state/discovery/new_promo_pages.json     # 或 --business-id N（可重复）
+python scripts/promo_pipeline.py discover-pages --city "Newport Beach" --limit 15 --workers 3 \
+    --batch-dir state/discovery/newport_beach     # 或 --business-id N（可重复）
 ```
 
-流程（`scripts/discover_new_promo_pages.py` + `utils/promo_page_discovery.py`，只读数据库）：
+流程（`utils/page_discovery_run.py` + `utils/promo_page_discovery.py`，经只读快照读取数据库，结果写入批次目录的 `discovered.json`）：
 
 1. `POST {FIRECRAWL_SELF_HOSTED_API_URL}/v1/map` 取站点链接；只返回首页时用首页渲染后的链接兜底。
 2. 路径按**整词**匹配（special/promo/offer/deal/discount/package/membership/vip/rewards/black-friday/

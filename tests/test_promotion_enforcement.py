@@ -27,15 +27,9 @@ def test_rule_review_deactivates_price_page_and_expired_campaign():
     plan = build_plan(SNAPSHOT)
     assert [(v["promotion_id"], v["rule"]) for v in plan["violations"]] == [
         (2, "price_page_without_discount"), (3, "expired_campaign")]
-
-
-def test_manual_deactivation_only_touches_listed_promotions():
-    plan = build_plan(SNAPSHOT, {1: "offers not visible on rendered page"})
-    assert [(v["promotion_id"], v["rule"], v["active_offers"]) for v in plan["violations"]] == [
-        (1, "manual: offers not visible on rendered page", 1)]
     validate_do_block(render_apply(plan))
 
 
-def test_manual_deactivation_of_inactive_promotion_fails():
-    with pytest.raises(ValueError, match="not active"):
-        build_plan(SNAPSHOT, {99: "gone"})
+def test_rule_review_has_no_manual_deactivation_mode():
+    with pytest.raises(TypeError):
+        build_plan(SNAPSHOT, {1: "offers not visible on rendered page"})

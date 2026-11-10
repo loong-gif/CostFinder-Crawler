@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from scripts.run_monitor_price_sync import database_snapshot, prepare_event
 from utils.monitor_price_store import atomic_json, manual_protections, now, read_json, run_lock
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 root = Path('/home/loong/costfinder_monitor/state')
 load_dotenv(root.parent / '.env')

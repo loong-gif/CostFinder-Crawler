@@ -3,58 +3,16 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 
-from utils.clinic_promotions_db import upsert_promotion
-from utils.promo_offer_items_db import build_item_from_offer_fields, upsert_offer_items
-from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS, TABLE_PROMO_OFFER_MASTER, offer_item_name
-
-if TYPE_CHECKING:
-    from utils.offer_extraction_llm import StructuredLLMClient
+from utils.promo_offer_items_db import build_item_from_offer_fields
+from utils.schema_contract import TABLE_CLINIC_MEMBERSHIPS
 
 _VALID_BILLING_PERIODS = {"monthly", "annual", "weekly"}
 _PER_UNIT_OFFER_SIGNAL = re.compile(
     r"(?:/|per)\s*(?:u(?:nit)?s?)\b|\ba\s+unit\b",
     re.IGNORECASE,
 )
-
-def build_membership_extraction_messages(row: Dict[str, Any], page_content: str) -> List[Dict[str, str]]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract aesthetic clinic membership plans from page text. "
-                "Return strict JSON with a single top-level key membership_plans (array). "
-                "Each plan must include tier_name, plan_name, monthly_fee, annual_fee, billing_period, "
-                "benefits (non-priced perks), source_claims (an independent verbatim inventory of credits, included services, gifts, discounts, frequency, term, rollover, cancellation, exclusions and eligibility), "
-                "and priced_offers (services with member pricing). Keep each entitlement tied to its plan and preserve quantities and conditions. "
-                "Do not invent values not supported by the text."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Domain: {row.get('domain_name', '')}\n"
-                f"Page: {row.get('subpage_url', '')}\n\n"
-                "Output JSON shape:\n"
-                '{"membership_plans":[{"tier_name":"TRU SIGNATURE","plan_name":"TRU SIGNATURE $199 MONTH",'
-                '"monthly_fee":199.0,"annual_fee":null,"billing_period":"monthly",'
-                '"benefits":[{"type":"free_treatment","desc":"1 free treatment/month"}],'
-                '"source_claims":["1 free treatment/month"],'
-                '"priced_offers":[{"service_name":"botox","price":11.5,"unit_type":"unit",'
-                '"regular_price":13.5,"members_only":true}]}]}\n\n'
-                "Rules:\n"
-                "- tier_name must be a human-readable tier (Platinum, VIP, Essentials).\n"
-                "- If no tier name exists, use Standard or plan_name.\n"
-                "- benefits: perks without standalone service SKU pricing.\n"
-                "- source_claims: independently enumerate every benefit and membership restriction verbatim; do not derive this list from benefits.\n"
-                "- priced_offers: concrete service + price rows for promo_offer_master.\n"
-                "- billing_period: monthly | annual | weekly.\n\n"
-                f"Text:\n{page_content}"
-            ),
-        },
-    ]
 
 
 def _parse_fee(value: Any) -> Optional[float]:
@@ -109,17 +67,6 @@ def normalize_membership_payload(payload: Any) -> List[Dict[str, Any]]:
     if not isinstance(plans, list):
         return []
     return [normalize_membership_plan(item) for item in plans if isinstance(item, dict)]
-
-
-def _serialize_perks(benefits: Any) -> Optional[str]:
-    if not benefits:
-        return None
-    if isinstance(benefits, str):
-        return benefits.strip() or None
-    try:
-        return json.dumps(benefits, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(benefits)
 
 
 def _membership_price(plan: Dict[str, Any]) -> Optional[float]:
@@ -240,22 +187,6 @@ def membership_offer_fingerprint(
     )
 
 
-def extract_membership_plans_for_row(
-    row: Dict[str, Any],
-    *,
-    client: Optional["StructuredLLMClient"] = None,
-    page_content: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    content = (page_content if page_content is not None else row.get("page_content") or "").strip()
-    if not content:
-        return []
-    if client is None:
-        return []
-    messages = build_membership_extraction_messages(row, content)
-    payload = client.create_json_response(messages)
-    return normalize_membership_payload(payload)
-
-
 def _is_pure_membership_offer(offer: Dict[str, Any]) -> bool:
     service_name = str(offer.get("service_name") or "").lower()
     offer_raw = str(offer.get("offer_raw_text") or "").lower()
@@ -265,53 +196,6 @@ def _is_pure_membership_offer(offer: Dict[str, Any]) -> bool:
         if not re.search(r"\b(botox|filler|tox|unit|syringe)\b", offer_raw):
             return True
     return False
-
-
-def find_stale_membership_offer_ids(
-    client: Any,
-    promotion_id: int,
-    *,
-    exclude_ids: Optional[Set[str]] = None,
-) -> List[str]:
-    """Find promo_offer_master rows that look like mis-filed membership plans."""
-    exclude_ids = exclude_ids or set()
-    filters = {"promotion_id": f"eq.{promotion_id}", "is_active": "eq.true"}
-    rows = client.fetch_rows(
-        TABLE_PROMO_OFFER_MASTER,
-        "id,offer_raw_text,membership_plan_id,promo_offer_items(item_name)",
-        filters=filters,
-        limit=500,
-    )
-    stale: List[str] = []
-    for row in rows:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id or row_id in exclude_ids:
-            continue
-        if row.get("membership_plan_id"):
-            continue
-        check_row = {**row, "service_name": offer_item_name(row)}
-        if _is_pure_membership_offer(check_row):
-            stale.append(row_id)
-    return stale
-
-
-def end_offer_ids(client: Any, offer_ids: Iterable[str], *, dry_run: bool = False) -> int:
-    ended = 0
-    for offer_id in offer_ids:
-        if dry_run:
-            ended += 1
-            continue
-        client.update_row(
-            TABLE_PROMO_OFFER_MASTER,
-            {"id": f"eq.{offer_id}"},
-            {"is_active": False},
-        )
-        ended += 1
-    return ended
-
-
-def _normalize_source_url(url: Any) -> str:
-    return str(url or "").strip().rstrip("/")
 
 
 def infer_tier_name_from_offer(offer: Dict[str, Any]) -> str:
@@ -427,40 +311,6 @@ def can_migrate_offer_to_plan(offer: Dict[str, Any]) -> bool:
     return plan.get("monthly_fee") is not None or plan.get("annual_fee") is not None
 
 
-def staging_context_from_offer(
-    offer: Dict[str, Any],
-    staging_row: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    source_url = str(offer.get("source_url") or "").strip()
-    if staging_row:
-        return {
-            "domain_name": str(staging_row.get("domain_name") or offer.get("source_name") or "").strip().lower(),
-            "subpage_url": str(staging_row.get("subpage_url") or source_url).strip(),
-            "promo_website_id": staging_row.get("promo_website_id"),
-            "business_id": staging_row.get("business_id") if staging_row.get("business_id") is not None else offer.get("business_id"),
-            "crawl_timestamp": staging_row.get("crawl_timestamp"),
-        }
-    domain_name = str(offer.get("source_name") or "").strip().lower()
-    if not domain_name and source_url:
-        from urllib.parse import urlparse
-
-        domain_name = urlparse(source_url).netloc.replace("www.", "").lower()
-    return {
-        "domain_name": domain_name,
-        "subpage_url": source_url,
-        "business_id": offer.get("business_id"),
-    }
-
-
-def build_membership_plan_insert_row_from_offer(
-    offer: Dict[str, Any],
-    staging_row: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    plan = offer_row_to_membership_plan(offer)
-    ctx = staging_context_from_offer(offer, staging_row)
-    return build_membership_plan_insert_row(plan, ctx)
-
-
 def find_existing_plan_id(
     client: Any,
     business_id: int,
@@ -481,171 +331,3 @@ def find_existing_plan_id(
         if normalize_plan_name(row.get("membership_name")) == name_norm:
             return int(row["plan_id"])
     return None
-
-
-def persist_membership_extraction(
-    client: Any,
-    staging_row: Dict[str, Any],
-    plans: List[Dict[str, Any]],
-    *,
-    dry_run: bool = False,
-    promotion_id: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Insert membership plans + priced offers; soft-end stale membership offers."""
-    from utils.clinic_promotions_db import upsert_promotion
-
-    inserted_plans = 0
-    inserted_offers = 0
-    quarantined_offers = 0
-    ended_offers = 0
-    kept_offer_ids: Set[str] = set()
-    plan_rows: List[Dict[str, Any]] = []
-
-    business_id = staging_row.get("business_id")
-    source_url = str(staging_row.get("subpage_url") or staging_row.get("source_url") or "").strip()
-    if promotion_id is None and business_id is not None and source_url:
-        try:
-            promotion_id = upsert_promotion(
-                client,
-                business_id=int(business_id),
-                source_url=source_url,
-            )
-        except Exception:
-            promotion_id = None
-
-    for plan in plans:
-        plan_row = build_membership_plan_insert_row(plan, staging_row)
-        if dry_run:
-            plan_id = -(inserted_plans + 1)
-            inserted_plans += 1
-        else:
-            from utils.extraction_persist import persist_membership_item
-            result = persist_membership_item(
-                client, business_id=int(business_id), item=plan_row,
-                source_url=source_url,
-                evidence=str(staging_row.get("page_content") or ""),
-                rendered_visibility=staging_row.get("rendered_visibility"),
-            )
-            if not result.get("accepted"):
-                continue
-            plan_id = int(result["plan_id"])
-            if result.get("action") == "inserted":
-                inserted_plans += 1
-
-        seen_fingerprints: Set[str] = set()
-        for priced_offer in plan.get("priced_offers") or []:
-            offer_row = build_priced_offer_insert_row(
-                priced_offer,
-                membership_plan_id=plan_id,
-                staging_row=staging_row,
-            )
-            item_payload = offer_row.pop("_item", None)
-            if offer_row.get("price_model") == "per_unit" and offer_row.get("discount_price") is None:
-                quarantined_offers += 1
-                continue
-            if item_payload and business_id is not None:
-                from utils.clinic_service_extraction import resolve_service_row_for_name
-
-                service = resolve_service_row_for_name(
-                    client,
-                    business_id=int(business_id),
-                    service_name=str(item_payload.get("item_name") or ""),
-                )
-                if service is None:
-                    quarantined_offers += 1
-                    continue
-                item_payload["service_id"] = int(service["service_id"])
-            service_name = str((item_payload or {}).get("item_name") or "")
-            fingerprint = membership_offer_fingerprint(
-                membership_plan_id=plan_id,
-                service_name=service_name,
-                unit_type=str((item_payload or {}).get("unit_type") or ""),
-                discount_price=offer_row.get("discount_price"),
-            )
-            if fingerprint in seen_fingerprints:
-                continue
-            seen_fingerprints.add(fingerprint)
-            offer_row["offer_fingerprint"] = fingerprint
-            if promotion_id is not None:
-                offer_row["promotion_id"] = promotion_id
-
-            if dry_run:
-                inserted_offers += 1
-                continue
-            inserted_offer = client.insert_rows(TABLE_PROMO_OFFER_MASTER, [offer_row])
-            if inserted_offer:
-                offer_id = int(inserted_offer[0]["id"])
-                kept_offer_ids.add(str(offer_id))
-                if item_payload:
-                    upsert_offer_items(client, offer_id, [item_payload])
-                    client.update_row(
-                        TABLE_PROMO_OFFER_MASTER,
-                        {"id": f"eq.{offer_id}"},
-                        {"is_active": True, "updated_at": datetime.now(timezone.utc).isoformat()},
-                    )
-                inserted_offers += 1
-
-        plan_rows.append({"plan_id": plan_id, **plan_row})
-
-    stale_ids: List[str] = []
-    if promotion_id is not None:
-        stale_ids = find_stale_membership_offer_ids(
-            client, promotion_id, exclude_ids=kept_offer_ids
-        )
-    ended_offers = end_offer_ids(client, stale_ids, dry_run=dry_run)
-
-    return {
-        "plans_inserted": inserted_plans,
-        "offers_inserted": inserted_offers,
-        "offers_quarantined": quarantined_offers,
-        "offers_ended": ended_offers,
-        "plans": plan_rows,
-        "stale_offer_ids": stale_ids,
-        "promotion_id": promotion_id,
-    }
-
-
-def link_offers_to_membership_plans(
-    offers: List[Dict[str, Any]],
-    membership_plans: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Attach membership_plan_index hints from priced_offer_indices when present."""
-    linked = [dict(offer) for offer in offers]
-    for plan_index, plan in enumerate(membership_plans):
-        indices = plan.get("priced_offer_indices") or []
-        if not isinstance(indices, list):
-            continue
-        for raw_index in indices:
-            try:
-                offer_index = int(raw_index)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= offer_index < len(linked):
-                linked[offer_index]["membership_plan_index"] = plan_index
-    return linked
-
-
-def normalize_membership_plan_refs(
-    membership_plans: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
-    for plan in membership_plans:
-        if not isinstance(plan, dict):
-            continue
-        item = normalize_membership_plan(plan)
-        indices = plan.get("priced_offer_indices") or []
-        if isinstance(indices, list):
-            item["priced_offer_indices"] = [
-                int(value) for value in indices if str(value).isdigit()
-            ]
-        normalized.append(item)
-    return normalized
-
-
-def normalize_offer_with_membership(
-    record: Dict[str, Any],
-    allowed_indexes: set[int],
-) -> Dict[str, Any]:
-    from utils.offer_extraction_llm import normalize_offer_record
-
-    return normalize_offer_record(record, allowed_indexes)

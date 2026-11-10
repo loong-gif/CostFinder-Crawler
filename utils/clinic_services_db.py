@@ -1,7 +1,7 @@
 """Supabase read/write helpers for clinic_services."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -9,7 +9,6 @@ from utils.clinic_services_botox import BotoxServiceFields
 from utils.clinic_services_from_offers import ClinicServiceFromOfferFields
 from utils.clinic_service_taxonomy import service_name_enum_hint
 from utils.schema_contract import CLINIC_SERVICE_SELECT, TABLE_CLINIC_SERVICES
-from utils.supabase_access import fetch_all_rows
 from utils.supabase_rest import SupabaseRestClient
 
 TABLE = TABLE_CLINIC_SERVICES
@@ -50,45 +49,6 @@ def fetch_service_row_by_enum(
         limit=1,
     )
     return rows[0] if rows else None
-
-
-def fetch_rows_for_refresh(
-    client: SupabaseRestClient,
-    *,
-    service_name: str,
-    older_than_days: Optional[int] = None,
-    business_id: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    filters: Dict[str, str] = {"service_name": f"eq.{service_name}"}
-    if business_id is not None:
-        filters["business_id"] = f"eq.{business_id}"
-    rows = fetch_all_rows(
-        client,
-        TABLE,
-        CLINIC_SERVICE_SELECT,
-        filters=filters,
-        order="business_id.asc,service_id.asc",
-    )
-    if older_than_days is None:
-        return rows
-    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-    out: List[Dict[str, Any]] = []
-    for row in rows:
-        if row.get("regular_price") is None:
-            out.append(row)
-            continue
-        updated_raw = row.get("updated_at")
-        if not updated_raw:
-            out.append(row)
-            continue
-        try:
-            updated_at = datetime.fromisoformat(str(updated_raw).replace("Z", "+00:00"))
-        except ValueError:
-            out.append(row)
-            continue
-        if updated_at < cutoff:
-            out.append(row)
-    return out
 
 
 def seed_skeleton(

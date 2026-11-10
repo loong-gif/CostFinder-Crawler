@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from utils.monitor_price_store import atomic_json, manual_protections, now
-from utils.monitor_price_writer import normalize_source_url
+from utils.monitor_price_writer_plan import normalize_source_url
 
 OUT = ROOT / "output/monitor_price_sync/apply_20261011"
 BASE = ROOT / "output/monitor_price_sync/dryrun_20261010"

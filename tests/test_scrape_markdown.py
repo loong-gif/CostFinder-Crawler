@@ -1,4 +1,55 @@
-from utils.scrape_markdown import denoise_scrape_markdown, prepare_scrape_markdown, truncate_scrape_markdown
+from utils.scrape_markdown import (denoise_scrape_markdown, prepare_scrape_markdown, site_banner_blocks,
+                                   truncate_scrape_markdown)
+
+LASERAWAY_HEADER = """* [Laser Treatments](/services/laser-hair-removal/)
+
+  The Black Friday Sale
+
+  75% OFF LASER HAIR REMOVAL ǂ
+
+  [Claim Offer](https://www.laseraway.com/book-now/)
+* ![](https://res.cloudinary.com/laseraway-com/notification-campaign-d.jpg)
+
+  ### The Black Friday Sale
+
+  75% OFF LASER HAIR REMOVALǂ
+
+  [Claim Offer](https://www.laseraway.com/book-now/)
+
+  ǂ
+  Select packages. Subject to
+  [Offer Terms](https://www.laseraway.com/offer-terms/#lhr75)
+
+  ![](https://res.cloudinary.com/laseraway-com/promotions-card-1)
+
+  ### Promotions
+
+  OUR FAVORITE WAYS TO SAVE
+* ![](https://res.cloudinary.com/laseraway-com/notification-campaign-d.jpg)
+
+  ### The Black Friday Sale
+
+  75% OFF LASER HAIR REMOVALǂ
+
+  [Claim Offer](https://www.laseraway.com/book-now/)
+
+  ǂ
+  Select packages. Subject to
+  [Offer Terms](https://www.laseraway.com/offer-terms/#lhr75)
+
+# Promotions
+
+### Your First Botox Treatment Is $10 Per Unit
+"""
+
+
+def test_site_banner_blocks_keep_each_discount_banner_from_the_header_once() -> None:
+    blocks = site_banner_blocks(LASERAWAY_HEADER)
+    # 只取页头区域、以小标题开头且写明折扣的块；图片与没有折扣的「Promotions」卡片不取；重复的通知卡片只保留一次
+    assert blocks == ["### The Black Friday Sale\n\n75% OFF LASER HAIR REMOVALǂ\n\n"
+                      "[Claim Offer](https://www.laseraway.com/book-now/)\n\nǂ\n\nSelect packages. Subject to\n\n"
+                      "[Offer Terms](https://www.laseraway.com/offer-terms/#lhr75)"]
+    assert site_banner_blocks("# Promotions\n\n### 20% off Botox\n\nThis week only") == []
 
 
 def test_denoise_removes_growth99_and_tracking_debug() -> None:

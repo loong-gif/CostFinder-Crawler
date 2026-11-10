@@ -2,7 +2,7 @@
 from copy import deepcopy
 from datetime import date, timedelta
 
-from scripts.run_monitor_price_sync import (
+from utils.monitor_event_queue import (
     data_quality_recheck_urls,
     enqueue_data_quality_rechecks,
     enqueue_expired_campaign_checks,
@@ -11,37 +11,53 @@ from scripts.run_monitor_price_sync import (
 from utils.monitor_price_extract import extract_evidence, visible_variant_offers
 from utils.monitor_price_plan import build_plan
 from utils.monitor_price_store import atomic_json, now
-from utils.monitor_rendered_browser import combine_breakpoint_reports, render_page
+from utils.monitor_rendered_browser import BREAKPOINTS, combine_breakpoint_reports, render_page
 from utils.rendered_visibility_gate import current_page_manifest, filter_visible_membership_benefits
-from test_monitor_price_plan import SOURCE, RAW, _graph, _evidence, _offer
+from monitor_price_plan_support import SOURCE, RAW, _graph, _evidence, _offer
 from test_monitor_price_pipeline import FakeLLM
 
 SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
 
 
 def coverage(complete=True):
-    return {name:{'width':width,'complete':complete,'accessible':True} for name,width in [('desktop',1440),('tablet',768),('mobile',390)]}
+    return {name:{'width':width,'complete':complete,'accessible':True} for name,width,_ in BREAKPOINTS}
 
 
-def test_breakpoint_union_keeps_mobile_only_offer_and_incomplete_port_blocks_absence():
-    reports=[{'breakpoint':name,'width':width,'accessible':True,'complete':True,'text':text,'scroll_complete':True}
-             for name,width,text in [('desktop',1440,'Header'),('tablet',768,'Header'),('mobile',390,RAW)]]
+def test_only_the_desktop_viewport_is_rendered():
+    assert [(name, width) for name, width, _ in BREAKPOINTS] == [('desktop', 1440)]
+
+
+def test_breakpoint_union_keeps_offer_text_and_incomplete_port_blocks_absence():
+    reports=[{'breakpoint':name,'width':width,'accessible':True,'complete':True,'text':RAW,'scroll_complete':True}
+             for name,width,_ in BREAKPOINTS]
     combined=combine_breakpoint_reports(SOURCE['url'],reports)
     assert RAW in combined['text'] and combined['complete']
-    reports[1]['complete']=False
+    reports[0]['complete']=False
     combined=combine_breakpoint_reports(SOURCE['url'],reports)
     assert RAW in combined['text'] and not combined['complete']
+    # 证据里出现不在 BREAKPOINTS 中的宽度（旧版三宽度渲染的结果）时覆盖不算完整
+    legacy=reports+[{'breakpoint':'mobile','width':390,'accessible':True,'complete':True,'text':'Header','scroll_complete':True}]
+    legacy[0]['complete']=True
+    assert not combine_breakpoint_reports(SOURCE['url'],legacy)['complete']
 
 
-def test_renderer_visits_three_breakpoints_without_changing_visible_union(tmp_path,monkeypatch):
+def test_a_recent_render_with_another_breakpoint_set_is_rendered_again():
+    from utils.monitor_image_gate import capture_is_current
+    current={'captured_at':now(),'breakpoint_coverage':coverage()}
+    assert capture_is_current(current)
+    legacy={'captured_at':now(),'breakpoint_coverage':{**coverage(),'tablet':{'complete':True},'mobile':{'complete':True}}}
+    assert not capture_is_current(legacy)
+
+
+def test_renderer_visits_every_configured_breakpoint_once(tmp_path,monkeypatch):
     visits=[]
     def capture(url,directory,**options):
         visits.append(options['width'])
         return {'url':url,'accessible':True,'complete':True,'text':str(options['width']),'captured_at':now(),'scroll_complete':True}
     monkeypatch.setattr('utils.monitor_rendered_browser._render_page',capture)
     report=render_page(SOURCE['url'],tmp_path)
-    assert visits==[1440,768,390] and report['complete']
-    assert len(report['breakpoint_coverage'])==3
+    assert visits==[width for _,width,_ in BREAKPOINTS] and report['complete']
+    assert set(report['breakpoint_coverage'])=={name for name,_,_ in BREAKPOINTS}
 
 
 def test_complete_empty_page_flows_through_extractor_then_retires_existing_offer(tmp_path):
@@ -69,7 +85,7 @@ def test_expired_campaign_is_retired_only_when_current_identity_and_coverage_mat
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan['status']=='ready',plan
     assert any(op['table']=='clinic_promotions' and op['values'].get('is_active') is False for op in plan['operations'])
-    evidence['breakpoint_coverage']['mobile']['complete']=False
+    evidence['breakpoint_coverage']['desktop']['complete']=False
     plan=build_plan(SOURCE,graph,evidence,{})
     assert not any(op['values'].get('is_active') is False for op in plan['operations'])
 
@@ -190,13 +206,13 @@ def test_direct_from_price_preserves_lower_bound_but_cannot_erase_other_variants
     assert plan['evidence_summary']['complete'] is False
     assert not any(op['values'].get('is_active') is False for op in plan['operations'])
     parents=[op for op in plan['operations'] if op['table']=='clinic_promotions']
-    assert parents and parents[0]['values']['is_offer_extracted'] is False
+    assert all('is_offer_extracted' not in op['values'] for op in parents)
 
 
 def test_complete_image_review_can_create_dom_grounded_parent_without_image_offers(tmp_path):
     from utils.monitor_image_gate import image_write_block
     from utils.monitor_price_store import read_json
-    from test_monitor_image_accuracy import proof_plan
+    from monitor_image_support import proof_plan
     plan,proof=proof_plan(tmp_path)
     browser=read_json(tmp_path/'browser.json');browser['text']=RAW
     atomic_json(tmp_path/'browser.json',browser)

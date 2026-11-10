@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
-from utils.promo_page_discovery import assess_offer_page, candidate_urls
+from utils.promo_page_discovery import assess_offer_page, candidate_urls, search_candidates
 
 FILLER = "Our medspa offers a full range of aesthetic services for every patient in town. " * 6
 
@@ -30,6 +28,15 @@ def test_percent_and_amount_off_with_service_is_valid_promotion() -> None:
     result = assess_offer_page(md, _html("<p>Botox $11 per unit this month</p><p>20% off all laser hair removal packages</p>"))
     assert result.valid and result.kind == "promotion" and not result.needs_review
     assert any("20% off" in e for e in result.evidence)
+
+
+def test_banner_repeated_with_footnote_spacing_counts_as_one_evidence_line() -> None:
+    md = ("75% OFF LASER HAIR REMOVAL ǂ\n\n75% OFF LASER HAIR REMOVALǂ\n\n"
+          "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*\n\n### Your First Botox Treatment Is $10 Per Unit‡‡")
+    result = assess_offer_page(md, None)
+    assert list(result.evidence) == ["75% OFF LASER HAIR REMOVAL ǂ",
+                                     "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*",
+                                     "### Your First Botox Treatment Is $10 Per Unit‡‡"]
 
 
 def test_monthly_price_is_membership() -> None:
@@ -131,57 +138,6 @@ def test_hub_detection_needs_a_promo_page_without_price() -> None:
     assert not is_hub_page(priced, "promotion")
 
 
-class _FakeFirecrawl:
-    def __init__(self, pages):
-        self.pages, self.scraped = pages, []
-
-    def map(self, url, limit):
-        return ["https://spa.com/", "https://spa.com/pages/deals"]
-
-    def links(self, url):
-        return []
-
-    def scrape(self, url):
-        self.scraped.append(url)
-        return self.pages[url]
-
-
-def test_discover_business_follows_a_priceless_hub_one_hop() -> None:
-    import argparse
-
-    from scripts.discover_new_promo_pages import discover_business
-
-    hub_html = ("<html><body><main>Our current deals. See each offer below.<a href='/products/duo-promo'>Duo</a>"
-                "<a href='/products/free-consult'>Consult</a></main></body></html>")
-    fc = _FakeFirecrawl({
-        "https://spa.com/pages/deals": {"markdown": "Our current deals. See each offer below.", "rawHtml": hub_html},
-        "https://spa.com/products/duo-promo": {
-            "markdown": "Regular price ~$600.00 USD~ Sale price $420.00 USD",
-            "rawHtml": _html("<p>Regular price <s>$600.00 USD</s> Sale price $420.00 USD</p>")},
-        "https://spa.com/products/free-consult": {
-            "markdown": "Free consultation", "rawHtml": _html("<p>Free consultation</p>")},
-    })
-    args = argparse.Namespace(map_limit=100, allow_blog=False, max_candidates=5, hops=1, max_hop_links=8, max_pages=10,
-                               sources="map", search_limit=10)
-    result = discover_business(fc, {"business_id": 1, "name": "Spa", "city": "X", "website": "https://spa.com"},
-                               set(), args)
-    by_url = {p["url"]: p for p in result["pages"]}
-    assert by_url["https://spa.com/pages/deals"]["status"] == "rejected" and by_url["https://spa.com/pages/deals"]["hop"] == 0
-    duo = by_url["https://spa.com/products/duo-promo"]
-    assert duo["hop"] == 1 and duo["via"] == "https://spa.com/pages/deals" and duo["status"] in ("valid", "needs_review")
-    assert by_url["https://spa.com/products/free-consult"]["status"] == "rejected"
-    # hops disabled: the hub is not followed
-    fc2 = _FakeFirecrawl(fc.pages)
-    args.hops = 0
-    assert len(discover_business(fc2, {"business_id": 1, "name": "Spa", "city": "X", "website": "https://spa.com"},
-                                 set(), args)["pages"]) == 1
-    # page budget caps the work
-    args.hops, args.max_pages = 1, 2
-    fc3 = _FakeFirecrawl(fc.pages)
-    assert len(discover_business(fc3, {"business_id": 1, "name": "Spa", "city": "X", "website": "https://spa.com"},
-                                 set(), args)["pages"]) == 2
-
-
 def test_specialty_and_navigation_pages_are_not_offers_or_hops() -> None:
     from utils.promo_page_discovery import hub_links
 
@@ -192,6 +148,9 @@ def test_specialty_and_navigation_pages_are_not_offers_or_hops() -> None:
             "<a href='/products/botox-promo-49'>Botox</a></main>")
     assert hub_links(html, "https://spa.com/pages/deals") == ["https://spa.com/products/botox-promo-49"]
     assert not candidate_urls("https://spa.com", ["https://spa.com/event-rsvp", "https://spa.com/rewards-club-terms-and-conditions"])
+    # 条款页（laseraway.com/offer-terms）是卡片的补充证据，不是促销来源
+    assert not candidate_urls("https://spa.com", ["https://spa.com/offer-terms", "https://spa.com/specials-terms/fall"])
+    assert not search_candidates("https://spa.com", [{"url": "https://spa.com/offer-terms", "title": "Offer Terms | 20% off"}])
 
 
 def test_search_candidates_filter_site_aggregators_and_titles() -> None:
@@ -218,157 +177,9 @@ def test_end_dates_with_and_without_year() -> None:
 
     today = dt.date(2026, 10, 15)
     text = "Offer ends Nov 30, 2026. Valid through 12/31. Expires Jan 5. Not related: January 3 open house."
-    assert extract_end_dates(text, today) == ["2026-11-30", "2026-12-31", "2027-01-05"]
-    assert extract_end_dates("Valid through September 1", today) == ["2026-09-01"]  # recently ended, same year
+    # 月日没有年份时取当前年份：一月初结束的活动在十月已经过期
+    assert extract_end_dates(text, today) == ["2026-01-05", "2026-11-30", "2026-12-31"]
+    assert extract_end_dates("Valid through September 1", today) == ["2026-09-01"]
+    assert extract_end_dates("Offer ends Mar 31", dt.date(2026, 11, 9)) == ["2026-03-31"]
     assert extract_end_dates("until 3/1/25", today) == ["2025-03-01"]
     assert extract_end_dates("no dates here", today) == []
-
-
-def test_search_and_crawl_sources_add_candidates_without_a_second_scrape() -> None:
-    import argparse
-
-    from scripts.discover_new_promo_pages import discover_business
-
-    class Fc(_FakeFirecrawl):
-        def map(self, url, limit):
-            return ["https://spa.com/"]  # JS site: only the home page
-
-        def search(self, query, limit=10):
-            return [{"url": "https://spa.com/products/botox-promo?srsltid=x", "title": "Botox $9 per unit promo"}]
-
-        def crawl(self, url, include_paths, limit=15, depth=2, timeout=150):
-            return [{"markdown": "Botox $12 per unit this month",
-                     "rawHtml": _html("<p>Botox $12 per unit this month</p>"),
-                     "metadata": {"sourceURL": "https://spa.com/summer-specials"}}]
-
-    pages = {"https://spa.com/products/botox-promo": {
-        "markdown": "Botox $9 per unit", "rawHtml": _html("<p>Botox $9 per unit</p>")}}
-    fc = Fc(pages)
-    args = argparse.Namespace(map_limit=100, allow_blog=False, max_candidates=5, hops=0, max_hop_links=8, max_pages=10,
-                              sources="map,search", search_limit=10)
-    result = discover_business(fc, {"business_id": 2, "name": "Spa", "city": "X", "website": "https://spa.com"}, set(), args)
-    found = {p["url"]: p for p in result["pages"]}
-    assert found["https://spa.com/products/botox-promo"]["sources"] == ["search"]
-    assert found["https://spa.com/products/botox-promo"]["title"].startswith("Botox")
-    assert fc.scraped == ["https://spa.com/products/botox-promo"]
-
-    # crawl only runs when map and search found nothing
-    class Empty(Fc):
-        def search(self, query, limit=10):
-            return []
-
-    fc2 = Empty({})
-    args.sources = "map,search,crawl"
-    result = discover_business(fc2, {"business_id": 3, "name": "Spa", "city": "X", "website": "https://spa.com"}, set(), args)
-    crawled = {p["url"]: p for p in result["pages"]}["https://spa.com/summer-specials"]
-    assert crawled["sources"] == ["crawl"] and crawled["status"] in ("valid", "needs_review")
-    assert fc2.scraped == []  # crawl results are assessed directly
-
-
-def test_empty_search_is_retried_and_a_dead_backend_is_not_hammered() -> None:
-    import argparse
-    import threading
-
-    from scripts.discover_new_promo_pages import SearchHealth, discover_business
-
-    class Dead(_FakeFirecrawl):
-        searches = 0
-
-        def map(self, url, limit):
-            return []
-
-        def search(self, query, limit=10):
-            Dead.searches += 1
-            return []
-
-    health = SearchHealth(empty_limit=2, cooldown=0)
-    args = argparse.Namespace(map_limit=10, allow_blog=False, max_candidates=5, hops=0, max_hop_links=8, max_pages=5,
-                              sources="search", search_limit=10, search_retry_delay=0, search_health=health)
-    fc = Dead({})
-    statuses = [discover_business(fc, {"business_id": i, "name": "S", "city": "X", "website": f"https://s{i}.com"},
-                                  set(), args)["search_status"] for i in range(5)]
-    assert health.down and statuses[0] == "no_results"
-    assert statuses[-1] == "skipped_engines_down"
-    searches_before = Dead.searches
-    discover_business(fc, {"business_id": 9, "name": "S", "city": "X", "website": "https://s9.com"}, set(), args)
-    assert Dead.searches == searches_before  # a down backend is skipped, not queried
-
-    class Healthy(_FakeFirecrawl):
-        def map(self, url, limit):
-            return []
-
-        def search(self, query, limit=10):
-            return [{"url": "https://s1.com/specials", "title": "Specials"}]
-
-    args.search_health = SearchHealth()
-    ok = discover_business(Healthy({"https://s1.com/specials": {"markdown": "Botox $9 per unit",
-                           "rawHtml": _html("<p>Botox $9 per unit</p>")}}),
-                           {"business_id": 1, "name": "S", "city": "X", "website": "https://s1.com"}, set(), args)
-    assert ok["search_status"] == "ok" and ok["search_results"] == 1
-
-
-class _Resp:
-    def __init__(self, status=200, payload=None):
-        self.status_code, self._payload = status, payload or {}
-
-    def json(self):
-        return self._payload
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"http {self.status_code}")
-
-
-class _CloudSession:
-    def __init__(self, responses):
-        self.responses, self.calls, self.trust_env = list(responses), [], True
-
-    def post(self, url, headers=None, json=None, timeout=None):
-        self.calls.append(json)
-        return self.responses.pop(0)
-
-    def get(self, url, headers=None, timeout=None):
-        return _Resp(200, {"data": {"remainingCredits": 500}})
-
-
-def test_cloud_search_parses_v2_and_enforces_the_budget() -> None:
-    from scripts.discover_new_promo_pages import BudgetExhausted, CloudSearch
-
-    ok = _Resp(200, {"success": True, "creditsUsed": 2,
-                     "data": {"web": [{"url": "https://spa.com/specials", "title": "Specials"}]}})
-    session = _CloudSession([ok, ok, ok])
-    search = CloudSearch("fc-x", budget=4, reserve=100, interval=0, session=session)
-    assert search.effective_budget() == 4  # min(budget 4, remaining 500 - reserve 100)
-    assert search.search("q", 25)[0]["url"] == "https://spa.com/specials"
-    assert session.calls[0]["limit"] == 10  # limit is capped at 10: more results never cost less
-    search.search("q")
-    assert search.spent == 4 and search.searches == 2
-    with pytest.raises(BudgetExhausted):
-        search.search("q")
-    assert len(session.calls) == 2  # the over-budget search never reached the API
-
-
-def test_cloud_budget_never_spends_into_the_reserve() -> None:
-    from scripts.discover_new_promo_pages import CloudSearch
-
-    search = CloudSearch("fc-x", budget=10_000, reserve=450, interval=0, session=_CloudSession([]))
-    assert search.effective_budget() == 50  # 500 remaining - 450 reserve
-
-
-def test_out_of_credits_stops_spending_and_marks_businesses_skipped() -> None:
-    import argparse
-
-    from scripts.discover_new_promo_pages import CloudSearch, SearchHealth, discover_business
-
-    class Fc(_FakeFirecrawl):
-        def map(self, url, limit):
-            return []
-
-    session = _CloudSession([_Resp(402, {"error": "Insufficient credits"})])
-    args = argparse.Namespace(map_limit=10, allow_blog=False, max_candidates=5, hops=0, max_hop_links=8, max_pages=5,
-                              sources="search", search_limit=10, search_retry_delay=0, search_health=SearchHealth(),
-                              search_client=CloudSearch("fc-x", budget=100, interval=0, session=session))
-    result = discover_business(Fc({}), {"business_id": 1, "name": "S", "city": "X", "website": "https://s.com"},
-                               set(), args)
-    assert result["search_status"] == "skipped_budget"
-    assert args.search_client.budget == args.search_client.spent == 0

@@ -43,15 +43,6 @@ def normalize_unit_type(value: Any) -> str:
     return _UNIT_ALIASES.get(text, text)
 
 
-def normalize_price(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        return f"{float(value):.4f}".rstrip("0").rstrip(".")
-    except (TypeError, ValueError):
-        return str(value).strip()
-
-
 def normalize_offer_raw_text(value: Any) -> str:
     """Match the database trigger's ASCII token normalization exactly."""
     text = re.sub(r"[^a-zA-Z0-9]+", " ", str(value or ""))

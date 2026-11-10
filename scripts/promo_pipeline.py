@@ -5,17 +5,17 @@
 
 Stages, in order:
   1 discover-businesses -> register-businesses   Google Maps scraper finds businesses
-  2 discover-pages -> review-pages -> retry-pages -> render-shards -> (scripts/run_render_review_deep.sh)
-    -> render-verdicts -> finalize-pages           promotion / membership URLs per business domain
+  2 discover-pages -> review-pages -> render-pages promotion / membership URLs per business domain
   3 crawl                                          self-hosted Firecrawl into the local raw store
   4 extract-pages                                  raw -> clinic_promotions / clinic_memberships
   5 extract-offers                                 promotion_content / benefits -> offers + items
   6 link-services                                  offer items -> clinic_services + service_id
 Maintenance: merge-promotions, deactivate-expired, monitor, quality, batch-gate.
 
-Every command runs the script's own ``main()`` with the remaining arguments. No command connects to the
-database: reads come from snapshot files exported through the Supabase MCP (``read-sql``), writes are rendered
-to a single-transaction ``apply.sql`` that is executed through the Supabase MCP (``apply-sql``).
+Every command runs the script's own ``main()`` with the remaining arguments. No command writes the
+database: ``plan`` reads a read-only snapshot automatically (``read.sql`` run by the Supabase CLI, see
+``utils.pipeline_db.fresh_snapshot``), writes are rendered to a single-transaction ``apply.sql`` that is executed
+through the Supabase MCP (``apply-sql``).
 """
 from __future__ import annotations
 
@@ -30,17 +30,19 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # command -> (module, one-line purpose, writes the database?)
 COMMANDS: Dict[str, Tuple[str, str, str]] = {
-    "select-city": ("scripts.select_next_city", "pick the next city to scan", "no"),
-    "discover-businesses": ("scripts.gmaps_discovery", "1: Google Maps scraper places for a city", "no"),
+    "select-city": ("scripts.select_next_city", "pick the next city to scan; pilot result from candidates", "state files"),
+    "discover-businesses": ("scripts.gmaps_discovery",
+                            "1: Google Maps scraper places for a city; --due re-discovers and registers due cities",
+                            "apply.sql via MCP (--due)"),
     "register-businesses": ("scripts.process_discovery_results",
-                            "1: link / insert discovered places into master_business_info", "--apply"),
+                            "1: link / insert discovered places into master_business_info", "apply.sql via MCP"),
+    "topic-search": ("scripts.topic_search",
+                     "2: topic search in a city -> clinics to register and seed pages for discover-pages", "no"),
     "discover-pages": ("scripts.discover_new_promo_pages",
                        "2: promotion / membership pages per business domain (Map + price evidence)", "no"),
     "review-pages": ("scripts.review_promo_candidates", "2: add / skip decisions for discovered pages", "no"),
-    "retry-pages": ("scripts.retry_failed_pages", "2: retry pages that failed review", "no"),
-    "render-shards": ("scripts.build_deep_review_shards", "2: queue unverified pages for the ego render review", "no"),
-    "render-verdicts": ("scripts.deep_review_verdicts", "2: render-review verdicts (expanded text + OCR)", "no"),
-    "finalize-pages": ("scripts.finalize_discovery_decisions", "2: final page list for crawling", "no"),
+    "render-pages": ("scripts.render_pages",
+                     "2: ego render review of waiting pages (all shards, re-render, OCR) -> final add / skip", "no"),
     "crawl": ("scripts.scrape_urls_to_raw", "3: self-hosted Firecrawl into the raw file store", "no (raw files)"),
     "recrawl-sources": ("scripts.recrawl_sources", "decisions file to re-crawl existing promotions / memberships",
                         "no"),
@@ -58,21 +60,37 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
                          "apply-sql via MCP"),
     "enforce-promotion-rules": ("scripts.enforce_promotion_rules",
                                 "deactivate existing active promotions that break the write rules", "apply-sql via MCP"),
+    "split-offers": ("scripts.split_offers", "split an offer that lists several services under one price into "
+                     "independent offers", "apply-sql via MCP"),
+    "rename-items": ("scripts.rename_items", "rewrite problematic item_name values of active offers",
+                     "apply-sql via MCP"),
+    "upload-sheet-memberships": ("scripts.upload_sheet_memberships",
+                                 "write render-verified membership rows of the upload sheet into clinic_memberships",
+                                 "apply-sql via MCP"),
     "delete-offer-shells": ("scripts.delete_offer_shells",
                             "delete inactive offers without items or user references (gate I)", "apply-sql via MCP"),
     "deactivate-expired": ("scripts.deactivate_expired", "daily: deactivate promotions past campaign_end_date",
                            "apply.sql via MCP"),
-    "monitor": ("scripts.run_monitor_price_sync", "re-crawl known promotions and sync changes", "control file"),
+    "monitor": ("scripts.run_monitor_price_sync",
+                "daily: re-crawl promotion pages due by their 7/15/30-day poll tier and sync changes",
+                "control file"),
+    "monitor-schedule": ("scripts.monitor_schedule", "monitor poll tiers and pages due now", "no"),
+    "notify-run": ("scripts.notify_monitor_run", "Feishu summary of the last monitor run (server launchers)", "no"),
     "quality": ("scripts.run_data_quality_audit",
                 "data-quality audit and rendered recheck", "--apply (with an approved plan)"),
     "batch-gate": ("scripts.run_batch_gate_checks", "batch gate checks A-J (read-only)", "no"),
-    "crawl-schedule": ("scripts.crawl_scheduler", "plan due businesses for the scheduled crawl", "state files"),
+    "crawl-schedule": ("scripts.crawl_scheduler",
+                       "seed new businesses / cities and plan due businesses for the scheduled crawl", "state files"),
     "crawl-record": ("scripts.crawl_record_from_monitor", "record scheduled crawl results", "state files"),
     "read-snapshot": ("scripts.read_snapshot",
                       "run a command's read.sql with the Supabase CLI and save snapshot.json", "no (read only)"),
+    "service-access": ("scripts.service_access",
+                       "let this machine call the monitor server's Firecrawl, scraper and OCR directly (rerun when the IP "
+                       "changes)", "no (server firewall and tasks)"),
     "pending-sql": ("scripts.pending_sql",
-                    "list pending SQL files from the monitor host; --mark-applied FILE after MCP execution",
-                    "no (moves files)"),
+                    "pull and list pending SQL files from the monitor host; --apply executes them through the "
+                    "Supabase MCP (launchd hourly at :50, --install-schedule); --mark-applied FILE registers locally "
+                    "and on the monitor host", "--apply (production, through the Supabase MCP)"),
 }
 
 

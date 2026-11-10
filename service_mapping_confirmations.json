@@ -1,0 +1,754 @@
+{
+  "confirmations": [
+    {
+      "offer_raw_text": "1 IPL Or Carbon Laser 25% OFF",
+      "item_name": "Carbon Laser",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "1 IPL Or Carbon Laser 25% OFF",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "* 1 Peel → **$50 OFF**",
+      "item_name": "Peel",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "10% off all facials",
+      "item_name": "facials",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "10% off all laser services",
+      "item_name": "all laser services",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "10% Off Collagen PIN",
+      "item_name": "Collagen PIN",
+      "service_name": "Microneedling"
+    },
+    {
+      "offer_raw_text": "10% off Dermaplane Treatment",
+      "item_name": "Dermaplane Treatment",
+      "service_name": "Dermaplaning"
+    },
+    {
+      "offer_raw_text": "10% off | facials",
+      "item_name": "facials",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "10% off IV Drips",
+      "item_name": "IV Drips",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "10% off | laser-hair-reduction sessions",
+      "item_name": "laser-hair-reduction sessions",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "10% off laser services",
+      "item_name": "laser services",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "10% off laser treatments",
+      "item_name": "laser treatments",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "10% off Nutraceuticals & peptides (no limits; must be ordered at Renew)",
+      "item_name": "Nutraceuticals & peptides",
+      "service_name": "Peptide Therapy"
+    },
+    {
+      "offer_raw_text": "10% off | other longevity",
+      "item_name": "other longevity",
+      "service_name": "Wellness"
+    },
+    {
+      "offer_raw_text": "10% off | peptide programs",
+      "item_name": "peptide programs",
+      "service_name": "Peptide Therapy"
+    },
+    {
+      "offer_raw_text": "10% off Toxins",
+      "item_name": "Toxins",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "10% off vitamin injections",
+      "item_name": "vitamin injections",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "$10 per unit neuromodulator",
+      "item_name": "neuromodulator",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "$100 OFF A SYRINGE",
+      "item_name": "SYRINGE",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "$100 OFF Hair Loss Treatment",
+      "item_name": "Hair Loss Treatment",
+      "service_name": "Hair Restoration"
+    },
+    {
+      "offer_raw_text": "120 Units at only $3.50 per unit for a total $420!",
+      "item_name": "120 Units at only $3.50 per unit for a total $420!",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "$13/unit wrinkle relaxers locked for 365 days; 10% off bundled packages and skincare.",
+      "item_name": "wrinkle relaxers",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "15% off additional IV’s",
+      "item_name": "IV’s",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "15% off all IV services,",
+      "item_name": "IV services",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "15% Off Collagen PIN",
+      "item_name": "Collagen PIN",
+      "service_name": "Microneedling"
+    },
+    {
+      "offer_raw_text": "15% off IV Drips",
+      "item_name": "IV Drips",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "15% off Moxi and BBL Single Price Treatment (every 4–6 weeks)",
+      "item_name": "BBL",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "15% off Moxi and BBL Single Price Treatment (every 4–6 weeks)",
+      "item_name": "Moxi",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "$179 ($229Reg)\nCOVID-19 DEFENSE\nBOOST IMMUNITY",
+      "item_name": "COVID-19 DEFENSE",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "* 2 Peels → **$75 OFF EACH**",
+      "item_name": "Peels",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "20% off | ALL lasers: MOXI",
+      "item_name": "ALL lasers: MOXI",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "20% off | BBL",
+      "item_name": "BBL",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "20 % off | Hydrating Facials",
+      "item_name": "Hydrating Facials",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "20% off IV’s",
+      "item_name": "IV’s",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "20 % off | Luxury facials",
+      "item_name": "Luxury facials",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "20% off Stimulator Peel",
+      "item_name": "Stimulator Peel",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "20% off TruSculpt Treatments",
+      "item_name": "TruSculpt Treatments",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "20 % off Vitamin Drip",
+      "item_name": "Vitamin Drip",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "$289 ($389 Reg)\nSUPER IMMUNITY+\nPowerful Immunity  Booster",
+      "item_name": "SUPER IMMUNITY+",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "3 IPL Sessions $975 (reg. $1200)",
+      "item_name": "3 IPL Sessions",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "3 IPL Sessions $975 (regular $1,200)",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "3 IPL Treatments FOR $600 ONLY",
+      "item_name": "IPL Treatments",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "* 3 Peels → **$100 OFF EACH**",
+      "item_name": "Peels",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "30% Off | Cellulite",
+      "item_name": "Cellulite",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "30% off | Micro Needling",
+      "item_name": "Micro Needling",
+      "service_name": "Microneedling"
+    },
+    {
+      "offer_raw_text": "$419 ($479 Reg)\nSUPERIOR IV ( ALL IN )",
+      "item_name": "SUPERIOR IV ( ALL IN )",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "$50 OFF Any IV Drip + 2 Wellness Shots for $20",
+      "item_name": "Any IV Drip",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "50% Off Body Contour",
+      "item_name": "Body Contour",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "50% off | Neck & Chest Facials",
+      "item_name": "Neck & Chest Facials",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "50% off | Peels",
+      "item_name": "Peels",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "50% off popular body treatments",
+      "item_name": "popular body treatments",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "$75 off your first Glo2Facial",
+      "item_name": "Glo2Facial",
+      "service_name": "Glo2 Facial"
+    },
+    {
+      "offer_raw_text": "$9 per unit neuromodulator",
+      "item_name": "neuromodulator",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "$99 ($149 Reg)\nHYDRO IV M-Thur 9am-3pm\nInstant Hydration",
+      "item_name": "HYDRO IV",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "A free MIC/B12 skinny shot, every month",
+      "item_name": "MIC/B12 skinny shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "At just $399 (a $500 value), this treatment precisely polishes away dullness and imperfections with minimal downtime",
+      "item_name": "Nano Peel Laser",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "BBL $400 (new patients only)",
+      "item_name": "BBL",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BBL Face = $400. Day of BBL Face 15% savings = $340",
+      "item_name": "BBL Face",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BBL Hands: $0",
+      "item_name": "BBL Hands",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BBL Laser (Face) 1 SESSION $600.00",
+      "item_name": "BBL Laser (Face)",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BBL Laser (Face) 3 SESSIONS $1,500.00",
+      "item_name": "BBL Laser (Face)",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BBL + MOXI combo (Face) 1 SESSION $1,200.00",
+      "item_name": "MOXI",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "BBL + MOXI combo (Face) 3 SESSIONS $3,000.00",
+      "item_name": "MOXI",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "BBL + MOXI combo (Face , neck & chest ) 1 SESSION $1,800.00",
+      "item_name": "MOXI",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "BBL + MOXI combo (Face , neck & chest ) 3 SESSIONS $3,600.00",
+      "item_name": "MOXI",
+      "service_name": "Moxi Laser"
+    },
+    {
+      "offer_raw_text": "BBL® Package: 3 Treatments for $999 Save $276",
+      "item_name": "BBL Package",
+      "service_name": "BBL Photofacial"
+    },
+    {
+      "offer_raw_text": "BlueWater Membership: free vitamin shot every month",
+      "item_name": "vitamin shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "book the Halo Tribrid for $1,999",
+      "item_name": "Halo Tribrid",
+      "service_name": "Halo Laser"
+    },
+    {
+      "offer_raw_text": "Brow Lift Non-surgical $79",
+      "item_name": "Brow Lift Non-surgical",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Bunny Lines\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Bunny Lines",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Buy 3 IV Drips, get the 4th FREE — $750",
+      "item_name": "IV Drips",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "Chest and Abdomen: ~$2500,~ $1750",
+      "item_name": "Abdomen",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Chest and Abdomen: ~$2500,~ $1750",
+      "item_name": "Chest",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Chin Dimpling\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Chin Dimpling",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Chin Dimpling $99 (regular $135)",
+      "item_name": "Chin Dimpling",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Chin Dimpling for $99 (26% off, was $135)",
+      "item_name": "Chin Dimpling",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Chin Full syringe · 1cc $299",
+      "item_name": "Chin Full syringe",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "Clear Silk $299/month (save $100/session)",
+      "item_name": "Clear Silk",
+      "service_name": "ClearSilk"
+    },
+    {
+      "offer_raw_text": "CO2 Face + Neck: SAVE $250 Now $1,400 (Reg. $1,750)",
+      "item_name": "CO2 Face + Neck",
+      "service_name": "CO2 Laser"
+    },
+    {
+      "offer_raw_text": "Complexion Correction — IPL series of 3 for face: $700 (save $350).",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "Complimentary weekly B12 shots",
+      "item_name": "B12 shots",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "CoolTone™ 5 pack just $995",
+      "item_name": "CoolTone™",
+      "service_name": "Emsculpt"
+    },
+    {
+      "offer_raw_text": "Cooltone™ 5 pack just $995 thru November 30, 2026!",
+      "item_name": "Cooltone",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "Crows Feet\n$158.00\n-20%\n~~$199.00~~",
+      "item_name": "Crows Feet",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Crows Feet $158 (regular $199)",
+      "item_name": "Crows Feet",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Dermaplane | for $35.",
+      "item_name": "Dermaplane",
+      "service_name": "Dermaplaning"
+    },
+    {
+      "offer_raw_text": "Diamond GLO Deluxe $300 / $270",
+      "item_name": "Diamond GLO Deluxe",
+      "service_name": "DiamondGlow"
+    },
+    {
+      "offer_raw_text": "Elevens 11s $158 (regular $199)",
+      "item_name": "Elevens 11s",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Evolve Tone 1 Area: 6 sessions $900 (reg. $1,500)",
+      "item_name": "Evolve Tone 1 Area",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "Face + Beard: ~$1500,~ $1050",
+      "item_name": "Beard",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Face + Beard: ~$1500,~ $1050",
+      "item_name": "Face",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Face (Lip + Chin + Sideburns): ~$1250,~ $875",
+      "item_name": "Chin",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Face (Lip + Chin + Sideburns): ~$1250,~ $875",
+      "item_name": "Lip",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Face (Lip + Chin + Sideburns): ~$1250,~ $875",
+      "item_name": "Sideburns",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Free Diamond Glow every quarter",
+      "item_name": "Diamond Glow",
+      "service_name": "DiamondGlow"
+    },
+    {
+      "offer_raw_text": "Frown Eleven lines $6.99 unit",
+      "item_name": "Frown Eleven lines",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Gummy Smile\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Gummy Smile",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Gummy Smile $99 (regular $135)",
+      "item_name": "Gummy Smile",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Half Syringe LIPS $250 and up",
+      "item_name": "Half Syringe LIPS",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "IPL 1 session $199 (regular $250 per session).",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "IPL 2 sessions $279 (regular $250 per session).",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "IPL 3 sessions $449 (regular $250 per session).",
+      "item_name": "IPL",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "IPL Face Treatment : $40 OFF| Helps with pigmentation, sun damage and broken capillaries",
+      "item_name": "IPL Face Treatment",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "Jelly Roll\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Jelly Roll",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Jelly Roll $99 (regular $135)",
+      "item_name": "Jelly Roll",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Jelly Roll for $99 (26% off, was $135)",
+      "item_name": "Jelly Roll",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Laser Monday–50% off all laser treatments",
+      "item_name": "all laser treatments",
+      "service_name": "Laser Treatment"
+    },
+    {
+      "offer_raw_text": "Lips Full syringe · Proportion & hydration Ultra $379",
+      "item_name": "Lips Full syringe",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "Lumecca IPL Face & Neck: 1 session $250 (reg. $350)",
+      "item_name": "Lumecca IPL Face & Neck",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "Lumecca IPL Face & Neck: 3 sessions $750 (reg. $900)",
+      "item_name": "Lumecca IPL Face & Neck",
+      "service_name": "IPL Photofacial"
+    },
+    {
+      "offer_raw_text": "Micro-Puncture: 1 session $450 (reg. $500)",
+      "item_name": "Micro-Puncture",
+      "service_name": "Microneedling"
+    },
+    {
+      "offer_raw_text": "Micro-Puncture: 3 sessions $1,200 (reg. $1,450)",
+      "item_name": "Micro-Puncture",
+      "service_name": "Microneedling"
+    },
+    {
+      "offer_raw_text": "Microneedling with Exosomes (3-pack) $1,750 / $1,575",
+      "item_name": "Exosomes",
+      "service_name": "Exosome Therapy"
+    },
+    {
+      "offer_raw_text": "Mid-Lower Face Correction: Buy 2, Get 1 Free\nThe mid-lower face correction (buy 2, get 1 free) includes three syringes for $1,400, all used during the same appointment.",
+      "item_name": "Mid-Lower Face Correction",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "Monthly Treatment: SkinMedica Illuminizing Peel",
+      "item_name": "SkinMedica Illuminizing Peel",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "Naked Boost | B12 Shot\n$49.00\n-16%\n~~$59.00~~",
+      "item_name": "Naked Boost B12 Shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Naked Boost | B12 Shot\n$49.00\n-16%\nSale price\nRegular price\n$59.00",
+      "item_name": "Naked Boost | B12 Shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Naked Boost B12 Shot $49 (regular $59)",
+      "item_name": "Naked Boost B12 Shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Naked Boost B12 Shot for $49 (16% off, was $59)",
+      "item_name": "Naked Boost B12 Shot",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Naked Hands\n$599.00\n-14%\nSale price\nRegular price\n$699.00",
+      "item_name": "Naked Hands",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "Naked Lobe\n$399.00\n-20%\nSale price\nRegular price\n$499.00",
+      "item_name": "Naked Lobe",
+      "service_name": "Dermal Filler"
+    },
+    {
+      "offer_raw_text": "Nefertiti Lift $199",
+      "item_name": "Nefertiti Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Nefertiti Lift starting from $179 (10% off, was $199)",
+      "item_name": "Nefertiti Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Non-Surgical Brow Lift\n$79.00\n-41%\n~~$135.00~~",
+      "item_name": "Non-Surgical Brow Lift",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Nose Droop\n$99.00\n-26%\n~~$135.00~~",
+      "item_name": "Nose Droop",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Nose Droop $99 (regular $135)",
+      "item_name": "Nose Droop",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "One Full Syringe — RHA Line $75 OFF",
+      "item_name": "One Full Syringe — RHA Line",
+      "service_name": "RHA Filler"
+    },
+    {
+      "offer_raw_text": "Package of 10 Vitamin B shots for $199.",
+      "item_name": "Vitamin B shots",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Peel & Reveal — package of 3 VI Chemical Peels; members $785 (save $262).",
+      "item_name": "VI Chemical Peels",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "Quick peel $400 (Reg. $550)",
+      "item_name": "Quick peel",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "REVIVE ME NOW\nPre Paid IM Package\n4 IM SHOTS for $99/Month\nSelect any 4 IM Shots/Month\nChoose from:\nVitamin B12, Glutathione, Vitamin C, B-Complex, B-6, and more!\n* Package per 1 customer",
+      "item_name": "IM Shots Package",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "Save 15%, plus a free ZO Soothing Hydro Mist (face treatments only).",
+      "item_name": "face treatments",
+      "service_name": "Facial"
+    },
+    {
+      "offer_raw_text": "SAVE $40 ON SKINPEN —claim by 10/30\nLIMITED-TIME OFFER WITH REVA REVANCE REWARDS\nsave $40 on your first skinpen logged throug REVA revance rewards",
+      "item_name": "SkinPen treatment",
+      "service_name": "SkinPen Microneedling"
+    },
+    {
+      "offer_raw_text": "SkinPen®: Save $150 when you purchase a package of three treatments",
+      "item_name": "SkinPen",
+      "service_name": "SkinPen Microneedling"
+    },
+    {
+      "offer_raw_text": "SkinPen®:\nSave $150 when you purchase a package of three treatments",
+      "item_name": "SkinPen Package of Three Treatments",
+      "service_name": "SkinPen Microneedling"
+    },
+    {
+      "offer_raw_text": "Stamp your glow up with a rejuvenating peptide treatment ($75 OFF)!",
+      "item_name": "peptide treatment",
+      "service_name": "Peptide Therapy"
+    },
+    {
+      "offer_raw_text": "The Signature Peel\n$69.00\n-76%\nSale price\nRegular price\n$299.00",
+      "item_name": "The Signature Peel",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "Thread Thursday–20% off threadlift treatment",
+      "item_name": "threadlift treatment",
+      "service_name": "Thread Lift"
+    },
+    {
+      "offer_raw_text": "Toxins: **$11 per unit (new patients only)**",
+      "item_name": "Toxins",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Underarm Sweating\n$799.00\n-11%\n~~$899.00~~",
+      "item_name": "Underarm Sweating",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Underarm Sweating $799 (regular $899)",
+      "item_name": "Underarm Sweating",
+      "service_name": "Neurotoxin"
+    },
+    {
+      "offer_raw_text": "Upper Lip: $525 (reg $750)",
+      "item_name": "Upper Lip",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Upper Lip and Chin: ~$900~, $630",
+      "item_name": "Chin",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "Upper Lip and Chin: ~$900~, $630",
+      "item_name": "Upper Lip",
+      "service_name": "Laser Hair Removal"
+    },
+    {
+      "offer_raw_text": "VI Chemical Peels: $300 (reg. $350/peel).",
+      "item_name": "VI Chemical Peels",
+      "service_name": "Chemical Peel"
+    },
+    {
+      "offer_raw_text": "VIP Introductory Offer: $199 (usually $600)",
+      "item_name": "MDS Contour (extra session)",
+      "service_name": "Body Contouring"
+    },
+    {
+      "offer_raw_text": "Vitamin infusions for $200 (reg $250 each)",
+      "item_name": "Vitamin infusions",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "Vitamin infusions for $225 (reg $250 each)",
+      "item_name": "Vitamin infusions",
+      "service_name": "IV Therapy"
+    },
+    {
+      "offer_raw_text": "Vitamin & Lipotropic Injections Package\nPackage: Buy 4 upfront for $100 -> Get 5th FREE.",
+      "item_name": "Vitamin & Lipotropic Injections Package",
+      "service_name": "Vitamin Injection"
+    },
+    {
+      "offer_raw_text": "ZO Stimulator Peel",
+      "item_name": "ZO Stimulator Peel",
+      "service_name": "Chemical Peel"
+    }
+  ]
+}

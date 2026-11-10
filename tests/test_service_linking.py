@@ -4,17 +4,8 @@ import pytest
 
 from utils.clinic_service_taxonomy import SERVICE_NAME_ENUM_VALUES
 from utils.pipeline_db import snapshot_query
-from utils.service_linking import (
-    SNAPSHOT_TABLES,
-    LlmServiceResolver,
-    build_plan,
-    build_plan_from_rows,
-    dump_plan,
-    item_unit_type,
-    recognize_deterministic,
-    render_apply,
-    scan_services,
-)
+from utils.service_linking import SNAPSHOT_TABLES, build_plan, build_plan_from_rows, dump_plan, render_apply
+from utils.service_recognition import LlmServiceResolver, item_unit_type, recognize_deterministic, scan_services
 
 ENUMS = list(SERVICE_NAME_ENUM_VALUES)
 
@@ -34,7 +25,7 @@ def service(service_id, name, unit_type=None, area=None):
             "service_area": area}
 
 
-PROMOTION = {"promotion_id": 10, "source_url": "https://clinic.test/specials/", "is_offer_extracted": False}
+PROMOTION = {"promotion_id": 10, "source_url": "https://clinic.test/specials/"}
 
 
 def plan(items, offers=None, services=None, promotions=None, memberships=None, resolver=None):
@@ -50,17 +41,29 @@ class FakeClient:
         self.calls = 0
 
     def create_json_response(self, messages, *, json_schema=None):
+        """按 item 名称回答，index 原样取自请求。"""
         self.calls += 1
-        return {"results": [{"index": i, "service_name": name} for i, name in self.answers.items()]}
+        self.batches = getattr(self, "batches", []) + [json.loads(messages[-1]["content"])]
+        return {"results": [{"index": e["index"], "service_name": self.answers[e["item_name"]]}
+                            for e in self.batches[-1]]}
 
 
 def test_deterministic_recognition_from_item_name_and_alias():
     assert scan_services("20 units of Dysport") == {"Dysport"}
     assert scan_services("Juvederm lip filler") == {"Juvéderm"}
     assert scan_services("Semaglutide weekly") == {"Weight Loss"}
+    # Facial Balancing 是填充剂注射（"Includes three 1mL syringes"），不是面部护理
+    assert scan_services("Facial Balancing") == {"Dermal Filler"}
     result = recognize_deterministic(item_name="Hydrafacial", offer_raw_text="", quantity=None,
                                      sibling_count=1, is_package=False)
     assert result["service_name"] == "Hydrafacial" and result["basis"] == "deterministic"
+
+
+def test_device_without_an_enum_value_is_not_mapped_to_a_similar_one():
+    for name, text in (("EMSELLA", "Emsella is 50% off."), ("Leg Vein treatment", "Leg Vein treatment: $199 / area")):
+        result = recognize_deterministic(item_name=name, offer_raw_text=text, quantity=None,
+                                         sibling_count=1, is_package=False)
+        assert (result["service_name"], result["basis"]) == (None, "unresolved"), name
 
 
 def test_multiple_services_in_item_is_unresolved_without_llm():
@@ -79,7 +82,6 @@ def test_unit_type_only_when_confirmed():
 def test_blanket_offer_keeps_null():
     result = plan([item(1, name="Botox")], offers=[offer(text="20% off all services")])
     assert result["items"][0]["action"] == "unresolved" and result["items"][0]["reason"] == "blanket_offer"
-    assert result["promotions_to_mark"] == []
 
 
 def test_existing_service_is_linked():
@@ -87,7 +89,7 @@ def test_existing_service_is_linked():
     entry = result["items"][0]
     assert (entry["action"], entry["service_id"], entry["basis"]) == ("link", 100, "deterministic")
     assert result["services_to_create"] == []
-    assert result["promotions_to_mark"] == [10]
+    assert set(result) == {"generated_at", "counts", "services_to_create", "items", "confirmed_mappings"}
 
 
 def test_missing_service_is_created_with_null_regular_price():
@@ -106,7 +108,6 @@ def test_multiple_service_rows_match_by_unit_type_else_unresolved():
     ambiguous = plan([item(1, name="Botox")], services=rows)
     assert ambiguous["items"][0]["action"] == "unresolved"
     assert ambiguous["items"][0]["reason"] == "multiple_service_rows"
-    assert ambiguous["promotions_to_mark"] == []
 
 
 def test_existing_valid_service_id_untouched_and_duplicate_in_offer_unresolved():
@@ -116,27 +117,15 @@ def test_existing_valid_service_id_untouched_and_duplicate_in_offer_unresolved()
     assert result["items"][0]["reason"] == "duplicate_service_in_offer"
 
 
-def test_is_offer_extracted_requires_all_non_blanket_items_linked():
-    offers = [offer(1, "Botox special"), offer(2, "Spring offer"), offer(3, "10% off gift cards")]
-    items = [item(1, 1, "Botox"), item(2, 2, "Mystery treatment"), item(3, 3, "Gift card")]
-    result = plan(items, offers=offers, resolver=LlmServiceResolver(FakeClient({2: "NONE"}), ENUMS))
-    assert result["promotions_to_mark"] == []
-    only_blanket_free = plan([item(1, 1, "Botox"), item(3, 3, "Gift card")], offers=[offers[0], offers[2]])
-    assert only_blanket_free["promotions_to_mark"] == [10]
-    already = plan([item(1)], promotions=[{**PROMOTION, "is_offer_extracted": True}])
-    assert already["promotions_to_mark"] == []
-
-
-def test_membership_marked_when_complete():
-    member = {"plan_id": 5, "source_url": "https://clinic.test/membership", "is_offer_extracted": False}
+def test_membership_service_takes_the_membership_source_url():
+    member = {"plan_id": 5, "source_url": "https://clinic.test/membership"}
     result = plan([item(1)], offers=[offer(promotion_id=None, membership_plan_id=5)], promotions=[],
                   memberships=[member])
-    assert result["memberships_to_mark"] == [5]
     assert result["services_to_create"][0]["source_url"] == "https://clinic.test/membership"
 
 
 def test_llm_resolves_only_when_deterministic_fails():
-    client = FakeClient({1: "Weight Loss"})
+    client = FakeClient({"Mystery vial": "Weight Loss"})
     resolver = LlmServiceResolver(client, ENUMS)
     result = plan([item(1, name="Mystery vial")], offers=[offer(text="Spring offer")], resolver=resolver)
     assert result["items"][0]["basis"] == "llm" and result["items"][0]["recognized"] == "Weight Loss"
@@ -146,10 +135,13 @@ def test_llm_resolves_only_when_deterministic_fails():
 
 
 def test_llm_none_and_multiple_are_unresolved():
-    resolver = LlmServiceResolver(FakeClient({1: "NONE", 2: "MULTIPLE"}), ENUMS)
+    client = FakeClient({"Mystery": "NONE", "Another mystery": "MULTIPLE"})
     offers = [offer(1, "Spring offer"), offer(2, "Summer offer")]
-    result = plan([item(1, 1, "Mystery"), item(2, 2, "Another mystery")], offers=offers, resolver=resolver)
+    result = plan([item(6020, 1, "Mystery"), item(6071, 2, "Another mystery")], offers=offers,
+                  resolver=LlmServiceResolver(client, ENUMS))
     assert [e["reason"] for e in result["items"]] == ["llm_none", "llm_multiple_services"]
+    # LLM 只看到批内序号，答案按序号映射回 item id
+    assert [e["index"] for e in client.batches[0]] == [0, 1]
 
 
 def test_llm_needed_without_resolver_fails_fast():
@@ -167,35 +159,35 @@ def sql_for(frozen):
     return render_apply(json.loads(dump_plan(frozen)))
 
 
-def test_apply_sql_creates_service_links_item_and_marks_promotion():
+def test_apply_sql_creates_service_and_links_item():
     text = sql_for(plan([item(1)]))
     assert text.count("do $pipeline$") == 1 and text.rstrip().endswith("$pipeline$;")
-    assert "v_service_0 bigint" in text
-    assert "returning service_id into v_service_0" in text
-    assert "cardinality(v_ids) > 1" in text and "stale_plan: business 7 now has several Botox rows" in text
-    assert "values (7, 'Botox'::clinic_service_name_enum, NULL, NULL, 'https://clinic.test/specials', now())" in text
+    assert "cardinality(v_ids) > 1" in text and "stale_plan: business % now has several % rows" in text
+    assert "returning service_id into v_service" in text and "v_map := v_map || jsonb_build_object(r.key, v_service)" in text
+    assert '"Botox"' in text and "https://clinic.test/specials" in text
     link = next(line for line in text.splitlines() if "update public.promo_offer_items" in line)
-    assert "set service_id = v_service_0" in link and "i.service_id is null" in link
+    assert "set service_id = v_ref" in link and "i.service_id is not distinct from r.current_id" in link
+    assert '[[1, "7:Botox:None", null]]' in text
     assert "get diagnostics v_count = row_count;" in text
-    assert "if v_count <> 1 then raise exception 'stale_plan: item 1 cannot be linked" in text
-    assert text.index("returning service_id into v_service_0") < text.index("update public.promo_offer_items")
-    assert "update public.clinic_promotions set is_offer_extracted = true" in text
-    assert "where promotion_id = 10;" in text
-    assert "m.promotion_id = 10 and i.service_id is null" in text
-    assert "if v_count <> 0 then raise exception 'incomplete_mapping: clinic_promotions 10" in text
+    assert "if v_count <> 1 then raise exception 'stale_plan: item % cannot be linked" in text
+    assert text.index("returning service_id into v_service") < text.index("update public.promo_offer_items")
+    # is_offer_extracted 由数据库触发器派生，关联服务不写来源行
+    assert "clinic_promotions" not in text and "is_offer_extracted" not in text
 
 
 def test_apply_sql_links_existing_service_without_creating():
     text = sql_for(plan([item(1)], services=[service(100, "Botox")]))
-    assert "insert into public.clinic_services" not in text and "v_service_0" not in text
-    assert "set service_id = 100" in text and "s.service_id = 100" in text
+    assert "insert into public.clinic_services" not in text and "jsonb_build_object" not in text
+    assert '[[1, "100", null]]' in text and "set service_id = v_ref" in text
 
 
-def test_apply_sql_reuses_one_variable_per_create_key():
+def test_apply_sql_reuses_one_service_per_create_key():
     offers = [offer(1, "Botox special"), offer(2, "More Botox")]
-    text = sql_for(plan([item(1, 1, "Botox"), item(2, 2, "Botox")], offers=offers))
-    assert text.count("insert into public.clinic_services") == 1
-    assert text.count("set service_id = v_service_0") == 2
+    frozen = plan([item(1, 1, "Botox"), item(2, 2, "Botox")], offers=offers)
+    key = frozen["services_to_create"][0]["key"]
+    text = sql_for(frozen)
+    assert len(frozen["services_to_create"]) == 1 and text.count("insert into public.clinic_services") == 1
+    assert text.count(f'"{key}"') == 3  # 一次出现在 service 规格，两次出现在 item 关联
 
 
 def test_apply_sql_runs_blanket_check_on_batch_items_only():
@@ -203,23 +195,7 @@ def test_apply_sql_runs_blanket_check_on_batch_items_only():
     assert "(all services|any service|all products|all treatments|gift card|skin ?care products)'" in text
     assert "and i.offer_item_id = any('{1}'::int2[]::bigint[])) blanket_rows;" in text
     assert "raise exception 'blanket_check_failed" in text
-    assert text.index("update public.clinic_promotions") < text.index("blanket_rows")
-
-
-def test_apply_sql_unlinked_check_uses_blanket_regex_and_handles_null_text():
-    text = sql_for(plan([item(1)], services=[service(100, "Botox")]))
-    assert "not (coalesce(m.offer_raw_text, '') ~* " in text
-    assert "all services|any service|all products|all treatments|gift card|skin ?care products" in text
-    assert "entire menu" in text
-
-
-def test_apply_sql_marks_membership_by_plan_id():
-    member = {"plan_id": 5, "source_url": "https://clinic.test/membership", "is_offer_extracted": False}
-    frozen = plan([item(1)], offers=[offer(promotion_id=None, membership_plan_id=5)], promotions=[],
-                  memberships=[member])
-    text = sql_for(frozen)
-    assert "m.membership_plan_id = 5 and i.service_id is null" in text
-    assert "update public.clinic_memberships set is_offer_extracted = true, updated_at = now() where plan_id = 5;" in text
+    assert text.index("update public.promo_offer_items") < text.index("blanket_rows")
 
 
 def test_apply_sql_without_links_still_checks_batch():

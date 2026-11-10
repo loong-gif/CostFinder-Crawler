@@ -2,8 +2,10 @@ from __future__ import annotations
 import math
 import re
 from typing import Any, Mapping
-from utils.extraction_semantic_quality import has_markdown_or_shopify_residue
+from utils.promo_extraction import traceable
+from utils.render_review import claim_matches
 from utils.rendered_visibility_gate import filter_visible_membership_benefits, normalize_claim
+from utils.visibility_manifest import membership_fee_claim
 
 
 def _markdown_quote(value: str) -> str:
@@ -28,6 +30,11 @@ def _visible_named_fee(name: str, amount: str, evidence: str, quote: str,
 
     if not isinstance(rendered_visibility, Mapping) or rendered_visibility.get("status") != "page_accessible":
         return False
+    # 可见性清单按名称规则核验过「名称 $费用」（费用在渲染文本中紧随方案名称）
+    fee_claim = membership_fee_claim(name, amount.replace("\\", ""))
+    if any(result.get("claim") == fee_claim and result.get("status") == "visible_match"
+           for result in rendered_visibility.get("claimResults") or []):
+        return True
     nodes = [node for node in (rendered_visibility.get("capture") or {}).get("nodes", [])
              if isinstance(node, Mapping) and node.get("visible") is True]
     heading_tags = {"H1", "H2", "H3", "H4", "H5", "H6"}
@@ -60,15 +67,11 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     price = item.get('membership_price')
     quote = str(item.get('membership_description') or item.get('evidence_quote') or '').strip()
     benefits = item.get('benefits')
-    # 同一条权益重复出现只算一条（DUPLICATE_BENEFIT_BULLET）
-    stated: dict[str, str] = {}
-    for value in benefits if isinstance(benefits, list) else []:
-        text = (str(value.get('desc') or '') if isinstance(value, dict) else str(value)).strip()
-        if text:
-            stated.setdefault(normalize_claim(text), text)
     verified = None
-    if stated:
-        values = [value for key, value in stated.items() if key in normalize_claim(evidence)]
+    if isinstance(benefits, list) and benefits:
+        values = [str(value.get('desc') or '') if isinstance(value, dict) else str(value) for value in benefits]
+        # 允许改写，但每条权益必须能在页面上追溯（金额、百分比与数量都在页面上）
+        values = [value.strip() for value in values if value.strip() and traceable(value, evidence)]
         gate = filter_visible_membership_benefits(values, rendered_visibility)
         if gate.accepted:
             verified = list(gate.content)
@@ -80,17 +83,13 @@ def prepare_membership_write(item: dict[str, Any], evidence: str, rendered_visib
     fee_supported = (bool(name) and not isinstance(price, bool) and math.isfinite(fee) and fee > 0
                      and _visible_named_fee(name, amount, evidence, quote, rendered_visibility))
     # 来源清单独立于抽取结果，避免只验证模型已经输出的权益。
-    normalized_benefits = [normalize_claim(value) for value in verified or []]
-    normalized_source_claims = [normalize_claim(claim) for claim in source_claims or []]
+    # 来源清单中的每条权益都要有对应的抽取权益，每条抽取权益也要出自来源清单（允许改写）
     missing_claims = [claim for claim in source_claims or []
-                      if not normalize_claim(claim)
-                      or normalize_claim(claim) not in normalize_claim(evidence)
-                      or normalize_claim(claim) not in normalized_benefits]
+                      if not normalize_claim(claim) or not traceable(claim, evidence)
+                      or not claim_matches({'line': claim}, verified or [])]
     missing_claims.extend(value for value in verified or []
-                          if normalize_claim(value) not in normalized_source_claims)
-    # 权益含 Markdown、链接或网店界面文字时不是可直接写入的原文权益（MARKDOWN_OR_SHOPIFY_RESIDUE）
-    complete = (bool(verified) and len(verified) == len(stated)
-                and not has_markdown_or_shopify_residue("\n".join(verified))
+                          if not claim_matches({'line': value}, source_claims or []))
+    complete = (bool(verified) and len(verified) == len(benefits or [])
                 and bool(source_claims) and not missing_claims
                 and ocr_complete
                 and isinstance(rendered_visibility, Mapping)

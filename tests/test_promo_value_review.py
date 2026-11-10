@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
-
-from scripts.review_promo_candidates import merge_into_config
 from utils.promo_value_review import BusinessContext, decide, review_page
 
 TODAY = dt.date(2026, 10, 15)
@@ -61,19 +58,19 @@ def test_decide_dedupes_and_caps_per_business() -> None:
     assert len(kept) == 6 and any("business_page_cap" in r["reasons"] for r in records)
 
 
-def test_merge_into_config_is_idempotent_and_buckets(tmp_path) -> None:
-    path = tmp_path / "monitors.json"
-    path.write_text(json.dumps({"schema_version": 1, "monitors": {
-        "daily_01": {"name": "d1", "schedule": {"cron": "0 0 * * *"}, "status": "active",
-                     "targets": [{"id": "t", "type": "scrape", "urls": ["https://spa.com/old"]}]}}}))
-    urls = [f"https://spa.com/new/{i}" for i in range(120)] + ["https://spa.com/old"]
-    assert merge_into_config(urls, path) == {"added": 120, "already_present": 1}
-    config = json.loads(path.read_text())
-    sizes = [len(config["monitors"][k]["targets"][0]["urls"]) for k in sorted(config["monitors"]) if k.startswith("discovered_")]
-    assert sizes == [50, 50, 20]
-    assert merge_into_config(urls, path) == {"added": 0, "already_present": 121}
-    assert merge_into_config(["https://spa.com/another"], path)["added"] == 1
-    assert len(json.loads(path.read_text())["monitors"]["discovered_03"]["targets"][0]["urls"]) == 21
+def test_branches_sharing_one_page_each_keep_a_decision() -> None:
+    page = _page(url="https://laseraway.com/promotions", evidence=["Your First Botox Treatment Is $10 Per Unit"])
+    businesses = {1: _biz(never_processed=True), 2: _biz(business_id=2, never_processed=True)}
+    records = decide([{**page, "business_id": 1}, {**page, "business_id": 2}], businesses, TODAY)
+    assert sorted((r["url"], r["business_id"]) for r in records) == [("https://laseraway.com/promotions", 1),
+                                                                    ("https://laseraway.com/promotions", 2)]
+
+
+def test_a_retried_page_replaces_its_failed_scrape_record() -> None:
+    failed = _page(status="scrape_failed", evidence=[])
+    retried = _page(status="rejected", evidence=[])
+    records = decide([failed, retried], {1: _biz()}, TODAY)
+    assert [(r["status"], r["decision"]) for r in records] == [("rejected", "skip")]
 
 
 def test_boilerplate_evidence_repeated_across_pages_counts_once() -> None:

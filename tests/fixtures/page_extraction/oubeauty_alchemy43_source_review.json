@@ -1,0 +1,60 @@
+{
+  "oubeauty_specials": {
+    "promotion_quotes": [
+      {
+        "title" : "Juvederm Filler Special – as low as $395 thru November 30",
+        "lines": ["Juvederm Filler Special Offers in Glendale and Los Angeles thru November 30, 2026."]
+      },
+      {
+        "title": "Restylane Filler Special – as low as $395 thru November 30",
+        "lines": ["Restylane Filler Special Offers in Glendale, Los Angeles thru November 30, 2026"]
+      }
+    ],
+    "blocks": [
+      [
+        "Juvederm Filler Special – as low as $395 thru November 30",
+        "Juvederm Filler Special – as low as $395 thru November 30",
+        "Juvederm Filler Special Offers in Glendale and Los Angeles thru November 30, 2026."
+      ],
+      [
+        "Restylane Filler Special – as low as $395 thru November 30",
+        "Restylane Filler Special – as low as $395 thru November 30",
+        "Restylane Filler Special Offers in Glendale, Los Angeles thru November 30, 2026"
+      ]
+    ]
+  },
+  "alchemy43_services": {
+    "promotion_quotes": [
+      {
+        "title": "RF Microneedling",
+        "lines": [
+          "Now at all A43 locations · 50% off through Nov 30",
+          "Enjoy RF microneedling at all Alchemy 43 locations, now **50% off** through November 30.",
+          "Sign up and we’ll get you booked, or book online.",
+          "Also offered as [Morpheus8 at select LA locations](https://alchemy43.com/laser-treatments/morpheus8/)"
+        ]
+      },
+      {
+        "title": "RF Microneedling",
+        "lines": [
+          "Now at all A43 locations",
+          "Enjoy RF Microneedlingat all A43 locations",
+          "Now **50% off** through November 30",
+          "Sign up and we’ll get you booked at your preferred clinic — or book online now."
+        ]
+      }
+    ],
+    "blocks": [
+      [
+        "RF Microneedling - 50% off",
+        "Enjoy RF microneedling at all Alchemy 43 locations, now 50% off through November 30.",
+        "Offer valid at all A43 locations."
+      ],
+      [
+        "RF Microneedling",
+        "Enjoy RF Microneedling at all A43 locations",
+        "Now 50% off through November 30"
+      ]
+    ]
+  }
+}

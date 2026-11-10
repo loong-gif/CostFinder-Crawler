@@ -1,7 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from utils.data_quality_audit import audit_snapshot
+from utils.data_quality_audit import audit_snapshot, reextract_sources, relink_items
 from scripts.run_data_quality_audit import merge_queue
 from utils.supabase_rest import SupabaseRestClient
 import pytest
@@ -138,14 +138,40 @@ def test_new_customer_cannot_borrow_another_sales_price():
     offer(g, is_new_customer_required=True, regular_price=None)
     offer(g, 2, discount_price=120)
     result = audit_snapshot(g, at=AT)
-    assert not result["repairs"]
-    assert any(i["rule"] == "regular_price_baseline" for i in result["issues"])
+    # 原价未知存 NULL 即可：不借用其他优惠的价格，也不算问题
+    assert not result["repairs"] and not any(i["rule"] == "regular_price_baseline" for i in result["issues"])
 
 
-def test_F_from_price_dropped_rule():
+def test_F_from_price_dropped_is_routed_to_reextraction():
     g = graph()
     offer(g, offer_raw_text="Botox from $99", price_model="total")
-    assert any(i["rule"] == "F_from_price_dropped" for i in audit_snapshot(g, at=AT)["issues"])
+    report = audit_snapshot(g, at=AT)
+    issue = next(i for i in report["issues"] if i["rule"] == "F_from_price_dropped")
+    assert issue["status"] == "reextract"
+    assert reextract_sources({"entries": report["rechecks"]}) == {"promotions": [1], "memberships": []}
+
+
+def test_service_wording_mismatch_is_routed_to_link_services():
+    g = graph()
+    offer(g, offer_raw_text="Bunny Lines $99 (regular $200)")
+    g["items"][0]["item_name"] = "Bunny Lines"
+    # 套餐 item 名称本身由 link-services 的确定性规则得出同一服务：无需重新判定
+    offer(g, 2, offer_raw_text="Iconique Lip Reset $1,200", is_package=True)
+    report = audit_snapshot(g, at=AT)
+    issues = [i for i in report["issues"] if i["rule"] == "service_scope_evidence"]
+    assert [(i["id"], i["status"]) for i in issues] == [(101, "relink")] and not report["repairs"]
+    # relink 由 link-services 消费，不进入渲染复查队列
+    assert not any("service_scope_evidence" in e["reasons"] for e in report["rechecks"])
+    assert relink_items(report) == [101]
+
+
+def test_gone_membership_page_deactivates_its_offers():
+    g = graph()
+    g["memberships"] = [{"plan_id": 5, "business_id": 7, "source_url": URL, "benefits": ["10% off"]}]
+    offer(g, promotion_id=None, membership_plan_id=5)
+    ev = {"url": URL, "captured_at": AT.isoformat(), "gone": True}
+    repairs = audit_snapshot(g, {URL: ev}, at=AT)["repairs"]
+    assert [(r["rule"], r["id"], r["values"]) for r in repairs] == [("membership_page_gone", 1, {"is_active": False})]
 
 
 def test_I_itemless_inactive_stale():
@@ -177,10 +203,11 @@ def test_membership_unknown_keeps_plan_until_verified_benefits():
     assert result["repairs"][0]["table"] == "clinic_memberships"
 
 
-def test_queue_preserves_pause_instead_of_daily_unbounded_retries():
-    entry = {"source_url": URL, "source_kind": "membership", "business_id": 7, "status": "paused", "attempts": 3}
-    merged = merge_queue({"entries": [entry]}, [{**entry, "status": "pending"}])
-    assert merged["entries"][0]["status"] == "paused"
+def test_queue_keeps_the_retry_backoff_across_daily_scans():
+    entry = {"source_url": URL, "source_kind": "membership", "business_id": 7, "status": "pending", "attempts": 3,
+             "retry_after": "2026-10-20T00:00:00+00:00"}
+    merged = merge_queue({"entries": [entry]}, [{**entry, "attempts": 0, "retry_after": None}])
+    assert (merged["entries"][0]["attempts"], merged["entries"][0]["retry_after"]) == (3, "2026-10-20T00:00:00+00:00")
 
 
 @pytest.mark.parametrize("method,args", [("update_row", ("clinic_services", 1, {})),
@@ -195,7 +222,7 @@ def test_rest_writes_are_rejected_before_any_request(method, args):
 
 
 def test_stated_units_ignore_thresholds_and_neighbouring_prices():
-    from utils.data_quality_audit import _stated_fixed_units
+    from utils.data_quality_evidence import _stated_fixed_units
     assert _stated_fixed_units("BBL + MOXI combo 3 SESSIONS $3,000.00") == {3}
     assert _stated_fixed_units("get $40 off 20 units Jeuveau ; Minimum 20 units required.") == set()
     assert _stated_fixed_units("Special $1400 ; Treatment(s) within 6 months") == set()

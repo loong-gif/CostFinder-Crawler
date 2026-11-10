@@ -49,6 +49,7 @@ reports/
 *.csv
 *.json
 !config/firecrawl_monitor_migration.json
+!/service_mapping_confirmations.json
 !/schema/
 !/schema/*.json
 *.xlsx
@@ -103,3 +104,10 @@ architecture-review-*.html
 
 # Archify 架构图产物
 /.archify/
+
+# 存储分析中间结果与报告
+/storage_analysis/
+state/cpa_deploy/
+.scratch/
+.metrics/
+target/coverage/

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from scripts.firecrawl_self_hosted_monitor import (
     build_events,
     build_snapshot,
@@ -38,25 +40,82 @@ def test_response_markdown_supports_v1_envelope() -> None:
     assert response_markdown({"success": True, "data": {"markdown": "price $12"}}) == "price $12"
 
 
-def test_self_hosted_scrape_request_uses_legacy_v1_compatible_fields(monkeypatch) -> None:
+CLOUDFLARE_BLOCK = "Please enable cookies.\n\nSorry, you have been blocked\n============================\n"
+
+
+class _Response:
+    def __init__(self, status_code: int, payload: dict):
+        self.status_code, self.payload, self.ok = status_code, payload, status_code < 400
+        self.text = json.dumps(payload)
+
+    def json(self):
+        return self.payload
+
+
+def _monitor(monkeypatch, response: _Response, rendered: list[str], *, ego_error: str | None = None):
+    from scripts.firecrawl_self_hosted_monitor import SelfHostedMonitor
+    from utils.ego_browser import BrowserScrapeFailed
+
     captured = {}
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"success": True, "data": {"markdown": "price $12"}}
 
     def post(url, **kwargs):
         captured.update(kwargs)
-        return Response()
+        return response
+
+    def ego(url):
+        rendered.append(url)
+        if ego_error:
+            raise BrowserScrapeFailed(ego_error)
+        return {"markdown": "# Promotions\n\nBotox $10 per unit", "metadata": {"engine": "ego"}}
 
     monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.requests.post", post)
-    from scripts.firecrawl_self_hosted_monitor import SelfHostedMonitor
+    monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.ego_scrape", ego)
+    return SelfHostedMonitor("http://local", "", 1), captured
 
-    SelfHostedMonitor("http://local", "", 1).scrape("https://example.com")
-    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown"], "onlyMainContent": True, "excludeTags": ["nav", "footer", "script", "style", "noscript"]}
+
+def test_monitor_scrapes_with_fast_mode_only(monkeypatch) -> None:
+    rendered: list[str] = []
+    monitor, captured = _monitor(monkeypatch, _Response(200, {"success": True, "data": {
+        "markdown": "price $12", "metadata": {"statusCode": 200}}}), rendered)
+    assert monitor.scrape("https://example.com") == "price $12"
+    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown"], "onlyMainContent": True,
+                                "excludeTags": ["nav", "footer", "script", "style", "noscript"], "fastMode": True}
+    assert rendered == []
+
+
+def test_monitor_renders_with_ego_when_fast_mode_has_no_content(monkeypatch) -> None:
+    cases = [
+        _Response(408, {"success": False, "code": "SCRAPE_TIMEOUT"}),
+        _Response(200, {"success": True, "data": {"markdown": CLOUDFLARE_BLOCK, "metadata": {"statusCode": 403}}}),
+        _Response(200, {"success": True, "data": {"markdown": "  ", "metadata": {"statusCode": 200}}}),
+    ]
+    for response in cases:
+        rendered: list[str] = []
+        monitor, _ = _monitor(monkeypatch, response, rendered)
+        payload = monitor.scrape_document("https://www.laseraway.com/promotions/")
+        assert payload["data"]["metadata"]["engine"] == "ego"
+        assert response_markdown(payload) == "# Promotions\n\nBotox $10 per unit"
+        assert rendered == ["https://www.laseraway.com/promotions/"]
+
+
+def test_monitor_keeps_a_404_as_the_page_result_without_rendering(monkeypatch) -> None:
+    rendered: list[str] = []
+    gone = {"success": True, "data": {"markdown": "# Page not found", "metadata": {"statusCode": 404}}}
+    monitor, _ = _monitor(monkeypatch, _Response(200, gone), rendered)
+    assert monitor.scrape_document("https://clinic.example/old-specials") == gone
+    assert rendered == []
+
+
+def test_monitor_records_both_engines_when_ego_also_fails(monkeypatch) -> None:
+    from scripts.firecrawl_self_hosted_monitor import ScrapeFailure
+
+    rendered: list[str] = []
+    monitor, _ = _monitor(monkeypatch, _Response(408, {"success": False, "code": "SCRAPE_TIMEOUT"}), rendered,
+                          ego_error="ego_timeout")
+    with pytest.raises(ScrapeFailure, match="ego_scrape_failed") as failure:
+        monitor.scrape_document("https://slow.example/specials")
+    assert failure.value.raw_response == {
+        "fast_mode": {"http_status": 408, "body": {"success": False, "code": "SCRAPE_TIMEOUT"}}, "ego_error": "ego_timeout"}
 
 
 def test_runner_baselines_without_webhook(tmp_path: Path, monkeypatch) -> None:

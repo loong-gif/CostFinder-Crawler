@@ -9,17 +9,6 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from urllib.parse import urlparse
 
 from utils.clinic_service_extraction import is_promo_offer
-from utils.extraction_semantic_quality import (
-    audit_membership_benefits_semantics,
-    audit_promotion_content_semantics,
-)
-from utils.promotion_source_page import (
-    PAGE_TYPE_BLOG,
-    PAGE_TYPE_GENERIC,
-    PAGE_TYPE_MEMBERSHIP,
-    PAGE_TYPE_PRICING,
-    classify_promotion_source_page,
-)
 from utils.service_price_guard import is_catalog_ineligible_url, infer_unit_count
 from utils.promo_offer_audit import (
     AuditIssue as OfferAuditIssue,
@@ -271,20 +260,6 @@ def audit_memberships(
                 business_name=biz_name,
                 label=str(row.get("membership_name") or ""),
             )
-        for sem in audit_membership_benefits_semantics(
-            row,
-            is_ocr_required=bool(row.get("is_ocr_required")),
-        ):
-            _add(
-                issues,
-                table="clinic_memberships",
-                row_id=pid,
-                severity=sem.severity,
-                issue_type=sem.issue_type,
-                detail=sem.detail,
-                business_name=biz_name,
-                label=str(row.get("membership_name") or ""),
-            )
         inferred = _infer_commitment_months(benefits)
         current = row.get("minimum_commitment_months")
         if inferred and not current:
@@ -326,23 +301,6 @@ def audit_promotions(
         title = str(row.get("promotion_title") or "").strip()
         source_url = str(row.get("source_url") or "").strip()
         content = row.get("promotion_content") or []
-        if isinstance(content, str):
-            content = [content]
-        for sem in audit_promotion_content_semantics(
-            title=title,
-            segments=content if isinstance(content, list) else [],
-            source_url=source_url,
-        ):
-            _add(
-                issues,
-                table="clinic_promotions",
-                row_id=pid,
-                severity=sem.severity,
-                issue_type=sem.issue_type,
-                detail=sem.detail,
-                business_name=biz_name,
-                label=title,
-            )
         if not content:
             _add(
                 issues,
@@ -365,28 +323,7 @@ def audit_promotions(
                 business_name=biz_name,
                 label=title,
             )
-        classification = classify_promotion_source_page(
-            url=source_url,
-            title=title,
-            markdown="\n".join(str(value) for value in content),
-        )
-        if classification.page_type in {
-            PAGE_TYPE_MEMBERSHIP,
-            PAGE_TYPE_BLOG,
-            PAGE_TYPE_GENERIC,
-            PAGE_TYPE_PRICING,
-        }:
-            _add(
-                issues,
-                table="clinic_promotions",
-                row_id=pid,
-                severity="high" if classification.page_type == PAGE_TYPE_MEMBERSHIP else "medium",
-                issue_type="ineligible_promotion_source_page",
-                detail=f"{classification.page_type}: {classification.reason}",
-                business_name=biz_name,
-                label=title,
-            )
-        elif "/membership" in source_url.lower() or source_url.lower().endswith("/memberships"):
+        if "/membership" in source_url.lower() or source_url.lower().endswith("/memberships"):
             _add(
                 issues,
                 table="clinic_promotions",

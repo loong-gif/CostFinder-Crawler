@@ -7,13 +7,11 @@ from pathlib import Path
 import pytest
 
 from scripts.firecrawl_self_hosted_monitor import run_monitor
-from scripts.run_monitor_price_sync import (bind_source, enqueue_expired_campaign_checks,
-                                           prepare_event, process_events,
-                                           retry_failed_scrape_urls, snapshot_business_graph,
-                                           verified_batch_results)
+from scripts.run_monitor_price_sync import prepare_event
+from utils.monitor_event_queue import enqueue_expired_campaign_checks, retry_failed_scrape_urls, verified_batch_results
 from utils.monitor_price_extract import extract_evidence
 from utils.monitor_price_store import atomic_json, manual_protections, run_lock
-from utils.monitor_rendered_browser import resources_complete
+from utils.monitor_rendered_checks import resources_complete
 
 SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
 
@@ -168,86 +166,6 @@ def test_protections_keep_only_manual_file_entries():
     assert result["promotion_ids"] == []
 
 
-def test_source_binding_does_not_choose_between_branches():
-    snap={"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"},{"business_id":2,"website":"a.test"}]}
-    with pytest.raises(RuntimeError,match="ambiguous"):
-        bind_source("https://a.test/specials",snap)
-
-
-@pytest.mark.parametrize("url,memberships",[
-    ("https://omahapmc.com/specials/black-diamond-botox-membership", []),
-    ("https://a.test/pages/specials-memberships", []),
-    ("https://a.test/specials", [{"plan_id":1,"business_id":1,"source_url":"http://www.a.test/specials/"}]),
-])
-def test_membership_and_mixed_sources_require_review(url,memberships):
-    snapshot={"promotions":[{"business_id":1,"source_url":url}],"services":[],
-              "businesses":[],"memberships":memberships}
-    with pytest.raises(RuntimeError,match="membership_source_requires_review"):
-        bind_source(url,snapshot)
-
-
-@pytest.mark.parametrize("url,final_url",[
-    ("https://a.test/botox-membership", "https://a.test/botox-membership"),
-    ("https://a.test/specials", "https://a.test/memberships"),
-])
-def test_cached_ready_membership_plan_is_replaced_with_review(tmp_path,monkeypatch,url,final_url):
-    path=tmp_path / "events/1.json"
-    atomic_json(path,{"event_id":"1","status":"planned","url":url})
-    directory=tmp_path / "sync/1"
-    cached={"status":"ready","prepared_at":"2099-01-01T00:00:00+00:00",
-            "operations":[{"table":"clinic_promotions","action":"insert"}]}
-    atomic_json(directory / "plan.json",cached)
-    atomic_json(directory / "browser.json",{"final_url":final_url})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:pytest.fail("cached source must stop before rendering"))
-    plan=prepare_event(path,{"promotions":[],"services":[],"businesses":[{"business_id":1,"website":"a.test"}]},{},tmp_path)
-    assert plan["status"] == "review" and plan["operations"] == []
-    assert plan["review"] == [{"reason":"membership_source_requires_review"}]
-    assert json.loads((directory / "plan_attempt_1.json").read_text()) == cached
-    assert json.loads(path.read_text())["status"] == "review"
-
-
-def test_live_same_domain_membership_redirect_stops_before_extraction(tmp_path,monkeypatch):
-    path=tmp_path / "events/1.json"
-    artifact=tmp_path / "artifact.json"
-    atomic_json(artifact,{"url":"https://a.test/specials","markdown":"Botox price $10"})
-    atomic_json(path,{"event_id":"1","status":"pending","url":"https://a.test/specials","artifact_path":str(artifact)})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:{"accessible":True,"final_url":"https://a.test/membership"})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.extract_evidence",lambda *a:pytest.fail("membership must not extract"))
-    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
-    plan=prepare_event(path,snapshot,{},tmp_path)
-    assert plan["status"] == "review" and plan["operations"] == []
-    assert plan["review"] == [{"reason":"membership_source_requires_review"}]
-
-
-@pytest.mark.parametrize("code,reason,status",[
-    (402,"extraction_quota_exhausted","retryable"),
-    (429,"extraction_rate_limited","retryable"),
-    (401,"extraction_credentials_rejected","review"),
-])
-def test_extraction_http_failures_preserve_queue_with_safe_categories(tmp_path,monkeypatch,code,reason,status):
-    from requests import HTTPError,Response
-    path=tmp_path / "events/1.json"
-    artifact=tmp_path / "artifact.json"
-    atomic_json(artifact,{"url":"https://a.test/specials","markdown":"Botox price $10"})
-    atomic_json(path,{"event_id":"1","status":"pending","url":"https://a.test/specials","artifact_path":str(artifact)})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_page",lambda *a, **k:{"accessible":True,"final_url":"https://a.test/specials"})
-    def fail(*args):
-        response=Response();response.status_code=code
-        raise HTTPError("do not persist credential-bearing HTTP exception text",response=response)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.extract_evidence",fail)
-    snapshot={"promotions":[],"services":[],"offers":[],"items":[],"service_names":SERVICE_NAMES,"businesses":[{"business_id":1,"website":"a.test"}]}
-    plan=prepare_event(path,snapshot,{},tmp_path)
-    assert plan["status"] == "review" and plan["operations"] == []
-    assert plan["review"] == [{"reason":reason}]
-    assert json.loads(path.read_text())["status"] == status
-
-
-def test_business_snapshot_filters_services():
-    graph=snapshot_business_graph({"promotions":[],"offers":[],"items":[],
-        "services":[{"service_id":1,"business_id":1},{"service_id":2,"business_id":2}]},1)
-    assert [s["service_id"] for s in graph["services"]] == [1]
-
-
 class FakeLLM:
     def __init__(self,offers,empty=None): self.offers,self.empty=offers,empty
     def create_json_response(self,*args,**kwargs):
@@ -274,60 +192,6 @@ def test_complete_empty_extract_does_not_require_explicit_no_specials(tmp_path):
     browser={"accessible":True,"complete":True,"text":"No current specials","image_review_required":False}
     assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([]),SERVICE_NAMES)["complete"]
     assert extract_evidence({"url":"https://a.test"},browser,tmp_path,FakeLLM([],"No current specials"),SERVICE_NAMES)["complete"]
-
-
-def test_latest_event_supersedes_old_price_before_any_write(tmp_path,monkeypatch):
-    for i in (1,2):
-        atomic_json(tmp_path / "events" / f"{i}.json", {"event_id":str(i),"status":"pending","url":"https://a.test", "created_at":str(i)})
-    selected=[]
-    def prepare(path,*args):
-        selected.append(path.name)
-        return {"status":"ready","operations":[],"review":[]}
-    monkeypatch.setattr("scripts.run_monitor_price_sync.prepare_event",prepare)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_pending",lambda *a:pytest.fail("writes disabled"))
-    report=process_events(tmp_path,{"confirmations":[],"audit":[]},write_enabled=False)
-    assert selected == ["2.json"]
-    assert report["sources"][0]["status"] == "writes_disabled"
-    assert json.loads((tmp_path / "events/1.json").read_text())["status"] == "superseded"
-
-
-def test_failed_page_and_review_source_do_not_block_ready_source_write(tmp_path,monkeypatch):
-    from scripts.run_monitor_price_sync import main
-    class Monitor:
-        def __init__(self,*args): pass
-        def scrape(self,url):
-            if "failed" in url:
-                raise RuntimeError("page_failed")
-            return "Botox special $12/unit"
-    config=tmp_path / "config.json"
-    atomic_json(config,{"schema_version":1,"monitors":{"daily":{"targets":[{"urls":["https://ready.test","https://failed.test"]}]}}})
-    atomic_json(tmp_path / "price_sync_control.json",{"write_enabled":True})
-    atomic_json(tmp_path / "events/review.json",{"event_id":"review","status":"review",
-                "url":"https://review.test","created_at":"2026-10-09T00:00:00+00:00"})
-    monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.SelfHostedMonitor",Monitor)
-    monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.time.sleep",lambda _:None)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.database_snapshot",lambda:{"confirmations":[],"audit":[]})
-    monkeypatch.setattr("scripts.run_monitor_price_sync.enqueue_expired_campaign_checks",lambda *a:0)
-    monkeypatch.setattr("scripts.run_monitor_price_sync.prepare_event",lambda path,*a:
-        {"status":"review","operations":[],"review":[{"reason":"unknown_service"}]} if path.stem=="review"
-        else {"status":"ready","operations":[{"id":4,"values":{"discount_price":12}}],"review":[]})
-    writes=[]
-    def render(plan,protections,state_dir):
-        writes.extend(plan["operations"])
-        return {"status":"pending_sql","sql_path":str(state_dir / "pending_sql" / "x.sql")}
-    monkeypatch.setattr("scripts.run_monitor_price_sync.render_pending",render)
-    monkeypatch.setattr("sys.argv",["sync","--state-dir",str(tmp_path),"--config",str(config)])
-    assert main() == 2  # Failed page remains visible to the scheduler for retry.
-    report=json.loads((tmp_path / "sync_report.json").read_text())
-    assert writes == [{"id":4,"values":{"discount_price":12}}]
-    assert report["write_enabled"] is True
-    assert report["scrape_failed_pages"] == 1
-    assert report["source_status_counts"] == {"pending_sql":1,"review":1}
-    assert report["failure_scope"] == "page_or_source_only"
-    archived=next((tmp_path / "runs").glob("*.json"))
-    assert json.loads(archived.read_text()) == report
-    assert report["run_type"] == "full_monitor"
-    assert not (tmp_path / "journals").exists()
 
 
 def test_prior_verified_records_are_recognized_without_replaying_or_hiding_new_differences(tmp_path):
@@ -357,15 +221,24 @@ def test_returning_price_change_is_not_deduplicated_forever(tmp_path,monkeypatch
     assert len(list((tmp_path / "events").glob("*.json"))) == 4
 
 
-@pytest.mark.parametrize("resource",["small_image","failed_background","retried_background"])
-def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path,resource):
-    from test_monitor_price_plan import SOURCE, _graph, _offer, _evidence
+def test_images_matter_only_when_text_has_no_promotion():
+    frame={"ready":True,"unreviewed_regions":0,"backgrounds":[{"decoded":False,"network_failed":True}],
+           "images":[{"alt":"Office lobby","loaded":False},{"alt":"","loaded":False}]}
+    assert resources_complete([frame])
+    frame["images"].append({"alt":"Black Friday Botox special","loaded":False})
+    assert not resources_complete([frame],"Contact us")
+    assert resources_complete([frame],"Botox $10 off per unit")
+    frame["images"][-1]["loaded"]=True
+    assert resources_complete([frame],"Contact us")
+    frame["unreviewed_regions"]=1
+    assert not resources_complete([frame],"Contact us")
+    assert resources_complete([frame],"Save $50 today")
+
+
+def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path):
+    from monitor_price_plan_support import SOURCE, _graph, _offer, _evidence
     from utils.monitor_price_plan import build_plan
-    frame={"ready":True,"unreviewed_regions":0,"images":[],"backgrounds":[]}
-    if resource == "small_image":
-        frame["images"]=[{"width":600,"height":60,"loaded":False}]
-    else:
-        frame["backgrounds"]=[{"decoded":resource == "retried_background","network_failed":True}]
+    frame={"ready":True,"unreviewed_regions":0,"images":[{"alt":"Botox special","loaded":False}],"backgrounds":[]}
     assert not resources_complete([frame])
     graph=_graph()
     extra=dict(graph["offers"][0],id=9)
@@ -377,22 +250,3 @@ def test_failed_visual_resource_allows_text_update_but_never_removal(tmp_path,re
     plan=build_plan(SOURCE,graph,evidence,{})
     assert plan["status"] == "ready",plan
     assert not any(op["values"].get("is_active") is False for op in plan["operations"])
-
-
-def test_database_snapshot_reads_service_names_through_the_read_only_rpc(monkeypatch):
-    import scripts.run_monitor_price_sync as runner
-    class Client:
-        calls=[]
-        def __init__(self,*args): pass
-        def fetch_rows(self,table,columns,**kwargs): return []
-        def rpc_read(self,name):
-            Client.calls.append(name)
-            return SERVICE_NAMES
-    monkeypatch.setenv("SUPABASE_URL","https://kdlpkjzcnbkjcvwsvlwn.supabase.co")
-    monkeypatch.setattr(runner,"SupabaseRestClient",Client)
-    monkeypatch.setattr(runner,"get_supabase_secret_key",lambda:"key")
-    snapshot=runner.database_snapshot()
-    assert Client.calls==["fn_clinic_service_names"] and snapshot["service_names"]==SERVICE_NAMES
-    Client.rpc_read=lambda self,name:[]
-    with pytest.raises(RuntimeError,match="service_names_unavailable"):
-        runner.database_snapshot()

@@ -17,10 +17,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.supabase_rest import SupabaseRestClient
 from utils.supabase_access import load_supabase_client
-from scripts.run_domain_architecture_pipeline import (
-    build_actual_trace,
-    link_item_services,
-)
+from utils.domain_pipeline_persist import link_item_services
+from utils.domain_pipeline_report import build_actual_trace
 from utils.firecrawl_scrape_raw_db import save_scrape_response, scrape_request_fingerprint, scrape_response_to_row_fields
 from utils.scrape_markdown import prepare_scrape_markdown
 from utils.firecrawl_search_raw_db import (
@@ -65,44 +63,12 @@ def persist_memberships_from_bundle(
     plan_ids: List[int] = []
     now = datetime.now(timezone.utc).isoformat()
     for item in memberships:
-        from utils.extraction_persist import persist_membership_item
+        from utils.extraction_persist_records import persist_membership_item
         url = str(item.get("source_url") or source_url or "")
         result = persist_membership_item(client, business_id=business_id, item=item, source_url=url, evidence=(source_evidence or {}).get(url.rstrip("/"), str(item.get("source_evidence") or "")), rendered_visibility=(rendered_visibility or {}).get(url.rstrip("/"), item.get("rendered_visibility")))
         if result.get("accepted"):
             plan_ids.append(int(result["plan_id"]))
     return plan_ids
-
-
-def upsert_promotion_live(
-    client: Any,
-    *,
-    business_id: int,
-    source_url: str,
-    promotion_title: str,
-    promotion_description: str | None = None,
-) -> int:
-    norm = str(source_url or "").strip().rstrip("/")
-    rows = client.fetch_rows(
-        TABLE_CLINIC_PROMOTIONS,
-        "promotion_id",
-        filters={"source_url": f"eq.{norm}", "business_id": f"eq.{business_id}"},
-        limit=1,
-    )
-    if rows:
-        return int(rows[0]["promotion_id"])
-    now = datetime.now(timezone.utc).isoformat()
-    payload: dict[str, Any] = {
-        "business_id": business_id,
-        "source_url": norm,
-        "promotion_title": promotion_title,
-        "is_active": True,
-        "created_at": now,
-        "updated_at": now,
-    }
-    if promotion_description:
-        payload["promotion_description"] = promotion_description
-    inserted = client.insert_rows(TABLE_CLINIC_PROMOTIONS, [payload])
-    return int(inserted[0]["promotion_id"])
 
 
 def insert_offer_items_live(

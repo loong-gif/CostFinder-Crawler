@@ -1,8 +1,10 @@
 """extract-pages 计划的渲染可见性清单：
 
-  shard --plan P        把计划中各页的内容行写成深度渲染核验分片 visibility_shard.json
-  （运行 scripts/run_render_review_deep.sh visibility_shard.json visibility_render.json 90000，ego-lite 渲染）
-  build --plan P        读取分片与渲染结果，写 visibility_manifest.json，供 extract-pages plan/apply-sql 使用
+  --plan P [--shards N]   把计划中各页的内容行写成分片，在 ego-lite 中深度渲染（导航失败、空白页或拦截页重新渲染），
+                          有促销图片时自动建立 OCR 隧道识别，在计划同目录写 visibility_manifest.json
+
+数据质量核验单独使用本命令；extract-pages plan 与 upload-sheet-memberships plan 经
+utils.visibility_manifest.plan_with_visibility 调用同一个 run_manifest。
 """
 from __future__ import annotations
 
@@ -10,26 +12,17 @@ import argparse
 import json
 from pathlib import Path
 
-from utils.pipeline_db import write_text
-from utils.visibility_manifest import build_manifest, build_shard
+from utils.visibility_manifest import run_manifest
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="step", required=True)
-    for step in ("shard", "build"):
-        sub.add_parser(step).add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--plan", type=Path, required=True)
+    parser.add_argument("--shards", type=int, default=4, help="并行渲染的分片数")
     args = parser.parse_args()
-    run_dir = args.plan.parent
-    if args.step == "shard":
-        shard = build_shard(json.loads(args.plan.read_text()), run_dir.name)
-        print(write_text(run_dir / "visibility_shard.json", json.dumps(shard, ensure_ascii=False, indent=1)))
-        print(f"pages={len(shard['items'])}")
-        return 0
-    manifest = build_manifest(json.loads((run_dir / "visibility_shard.json").read_text()),
-                              json.loads((run_dir / "visibility_render.json").read_text()))
-    print(write_text(run_dir / "visibility_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1)))
-    for url, page in manifest.items():
+    path = run_manifest(args.plan, shards=args.shards)
+    print(path)
+    for url, page in json.loads(path.read_text()).items():
         visible = sum(c["status"] == "visible_match" for c in page["claimResults"])
         print(f"{page['status']} {visible}/{len(page['claimResults'])} {url}")
     return 0

@@ -44,31 +44,6 @@ def service_role_key(project_ref: str) -> str:
     raise SystemExit(f"JWT service_role not found for {project_ref}")
 
 
-def ensure_bucket(base: str, key: str) -> None:
-    url = f"{base.rstrip('/')}/storage/v1/bucket/{BUCKET}"
-    req = urllib.request.Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT):
-            return
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            raise
-    create_url = f"{base.rstrip('/')}/storage/v1/bucket"
-    body = json.dumps({"id": BUCKET, "name": BUCKET, "public": True}).encode("utf-8")
-    req = urllib.request.Request(
-        create_url,
-        data=body,
-        method="POST",
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT):
-        pass
-
-
 def download_object(base: str, key: str, object_path: str) -> tuple[bytes, str]:
     encoded = urllib.parse.quote(object_path, safe="/")
     url = f"{base.rstrip('/')}/storage/v1/object/{BUCKET}/{encoded}"

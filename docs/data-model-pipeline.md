@@ -2,7 +2,7 @@
 
 This document describes CostFinder's active Supabase data model and the production ingestion path that populates it. It was verified against the live `costfinder` project on 2026-07-30.
 
-The live database is the source of truth for field names and foreign keys. [`schema/live_schema_snapshot.json`](../schema/live_schema_snapshot.json) is the checked-in repository contract, but it can lag a live schema change; refresh it alongside future database changes rather than using it to override verified live facts. Historical schema material under `config/sql/archive/` and `docs/superpowers/` is context only and must not be executed as the current schema.
+The live database is the source of truth for field names and foreign keys. [`schema/live_schema_snapshot.json`](../schema/live_schema_snapshot.json) is the checked-in repository contract, but it can lag a live schema change; refresh it alongside future database changes rather than using it to override verified live facts. Historical schema material under `config/sql/archive/` is context only and must not be executed as the current schema.
 
 ## Core relationships
 
@@ -58,7 +58,7 @@ The following controls keep discovery output from becoming catalogue or offer da
 
 - A candidate marked `review` is never written automatically. A `ready` candidate still needs route classification for `/product(s)/` pages and same-page specificity resolution: a supported specific service suppresses its generic parent, except when a true category page independently establishes multiple services.
 - `clinic_services.unit_type` is a source-backed unit semantic, not a completeness placeholder. Keep it `NULL` when unknown; do not default it to `treatment` or another catch-all value.
-- Scraped or DOM text alone cannot support a Promotion, Membership benefit, or Offer-condition write. Use the rendered-visibility gate in [`rendered_visibility_qa.md`](rendered_visibility_qa.md); `dom_only_hidden`, `page_unavailable`, and pending image review remain non-writing states.
+- Scraped or DOM text alone cannot support a Promotion, Membership benefit, or Offer-condition write. Use the rendered-visibility gate in [`rendered_visibility_qa.md`](rendered_visibility_qa.md); `not_visible` claims and `page_not_accessible` pages remain non-writing states.
 - `promo_offer_items.item_name` preserves the source's commercial line item; `service_id` is a separate, same-business catalogue association. Never replace the item name with an inferred service enum. A blanket offer (for example, all services, products, or gift cards) remains one offer with `service_id = NULL`, so it stays visible on clinic/city pages without appearing on a treatment page.
 - Writers are idempotent: blanket wording collapses to one unlinked item, an identical or inactive-duplicate offer is a no-op, and a supported change updates the existing active row. Shared-price lines stay one package offer with item prices `NULL`; a known membership requirement sets `membership_plan_id` only.
 - Database-derived discount amount/percent values matching the two source-stated prices do not trigger a rewrite when extraction leaves those comparative fields empty. They remain structural arithmetic rather than extracted source facts.
@@ -113,4 +113,4 @@ The pilot reads structured service, membership, and promotion records, then crea
 The current project accesses SAG through server-side database connectivity used by [`scripts/sag_persistent_pilot.py`](../scripts/sag_persistent_pilot.py). It is intentionally outside client access: as verified on 2026-07-30, the `anon`, `authenticated`, and `public` roles have no `USAGE` on the `sag` schema and no `SELECT` access to its tables. RLS is not currently enabled on these private tables, so documentation must not describe SAG as RLS-protected.
 ## Firecrawl Monitor sync
 
-Monitor-specific exceptions (NULL service/date, `is_offer_extracted=false` while mapping is incomplete) are defined in [`AGENTS.md`](../AGENTS.md) and [`monitor_price_sync.md`](monitor_price_sync.md).
+Monitor-specific exceptions (NULL service/date; `is_offer_extracted` derived by database triggers from offer existence) are defined in [`AGENTS.md`](../AGENTS.md) and [`monitor_price_sync.md`](monitor_price_sync.md).

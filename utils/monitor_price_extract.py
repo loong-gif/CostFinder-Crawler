@@ -27,10 +27,11 @@ def extraction_schema(service_names: list[str]) -> dict:
     offer = schema["properties"]["offers"]["items"]
     offer["properties"].update(is_package={"type":"boolean"},
         quantity_kind={"type":"string","enum":["fixed","minimum","variable"]})
-    offer["required"].extend(["is_package", "quantity_kind"])
+    offer["required"].extend(name for name in ("is_package", "quantity_kind") if name not in offer["required"])
     item = offer["properties"]["items"]["items"]
     item["properties"]["item_name"] = {"type":"string"}
-    item["required"].append("item_name")
+    if "item_name" not in item["required"]:
+        item["required"].append("item_name")
     item["properties"]["quantity"]["description"] = (
         "Only copy an explicit fixed delivered count from offer_raw_text. Minimum purchase, variable quantities, "
         "per-unit rates and uncounted single services have null quantity; never infer a default 1.")
@@ -40,8 +41,8 @@ def extraction_schema(service_names: list[str]) -> dict:
         promotion_title={"type":["string","null"]},
         campaign_start_date={"type":["string","null"]},
         campaign_end_date={"type":["string","null"]})
-    schema["required"].extend(["all_offers_extracted","no_current_offers_quote", "promotion_title",
-                              "campaign_start_date","campaign_end_date"])
+    schema["required"].extend(name for name in ("all_offers_extracted","no_current_offers_quote", "promotion_title",
+                              "campaign_start_date","campaign_end_date") if name not in schema["required"])
     return schema
 
 

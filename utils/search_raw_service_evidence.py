@@ -11,7 +11,6 @@ from utils.clinic_services_search import (
     search_hit_text,
     url_path_score,
 )
-from utils.recent_raw_extraction import normalize_host, resolve_business
 
 
 def iter_search_hits(response_json: Any) -> list[dict[str, Any]]:
@@ -56,42 +55,3 @@ def pick_service_evidence_for_business(
         "text": search_hit_text(picked),
         "path_score": url_path_score(str(picked.get("url") or "")),
     }
-
-
-def group_search_rows_by_business(
-    search_rows: Sequence[dict[str, Any]],
-    businesses: Sequence[dict[str, Any]],
-) -> dict[int, list[dict[str, Any]]]:
-    """Map business_id -> search_raw rows whose response_json mentions that host."""
-    by_business: dict[int, list[dict[str, Any]]] = {}
-    for business in businesses:
-        business_id = int(business["business_id"])
-        domain = business_base_domain(business.get("website"))
-        if not domain:
-            continue
-        matched_rows: list[dict[str, Any]] = []
-        for row in search_rows:
-            hits = iter_search_hits(row.get("response_json"))
-            if any(host_matches_domain(str(hit.get("url") or ""), domain) for hit in hits):
-                matched_rows.append(row)
-        if matched_rows:
-            by_business[business_id] = matched_rows
-    return by_business
-
-
-def resolve_business_for_website(
-    website: str,
-    businesses: Sequence[dict[str, Any]],
-    *,
-    multilocation_hosts: set[str] | None = None,
-) -> int | None:
-    host = normalize_host(business_base_domain(website) or website)
-    if not host:
-        return None
-    source = {"url": f"https://{host}/", "title": "", "description": "", "text": ""}
-    decision = resolve_business(
-        source,
-        businesses,
-        multilocation_hosts or set(),
-    )
-    return decision.business_id if decision.accepted else None

@@ -6,7 +6,10 @@ import sys
 import pytest
 
 import scripts.backfill_promo_offer_conditions as backfill
-from scripts.backfill_promo_offer_conditions import apply_plan, build_plan
+import utils.offer_conditions_backfill_matching as matching
+import utils.offer_conditions_backfill_plan as planning
+from utils.offer_conditions_backfill_apply import apply_plan
+from utils.offer_conditions_backfill_plan import build_plan
 
 
 class SourceClient:
@@ -209,23 +212,23 @@ def test_apply_plan_skips_inactive_and_already_populated_offers() -> None:
 
 
 def test_source_and_json_helpers_cover_structured_membership_values() -> None:
-    assert backfill._json_text(None) == ""
-    assert backfill._json_text(["one", ["two", "three"]]) == "one\ntwo\nthree"
-    assert json.loads(backfill._json_text({"value": 1})) == {"value": 1}
-    assert backfill._source_text(
+    assert planning._json_text(None) == ""
+    assert planning._json_text(["one", ["two", "three"]]) == "one\ntwo\nthree"
+    assert json.loads(planning._json_text({"value": 1})) == {"value": 1}
+    assert planning._source_text(
         "membership",
         {"benefits": "Botox $10/unit", "minimum_commitment_months": 6},
     ) == "Botox $10/unit\nMinimum commitment months: 6"
-    assert backfill._source_key({"promotion_id": 1, "membership_plan_id": 2}) is None
+    assert planning._source_key({"promotion_id": 1, "membership_plan_id": 2}) is None
 
 
 def test_matching_is_conservative_for_ambiguous_or_unlocated_offers() -> None:
     offer = {"offer_raw_text": "Botox $10", "promo_offer_items": [{"item_name": "Botox"}]}
-    assert backfill._match_source_segments(offer, "") == []
-    assert backfill._number_hit_count("$10 and 1,200", ["10", "1", "200"]) == 1
+    assert matching._match_source_segments(offer, "") == []
+    assert matching._number_hit_count("$10 and 1,200", ["10", "1", "200"]) == 1
     tie_source = "Botox $10. Botox $10. Botox $10."
-    assert backfill._match_source_segments(offer, tie_source) == []
-    assert backfill._extract_local_conditions(
+    assert matching._match_source_segments(offer, tie_source) == []
+    assert matching._extract_local_conditions(
         {"offer_raw_text": "Botox $10 minimum 20 units", "promo_offer_items": [{"item_name": "Botox"}]},
         "Botox $10",
     ) == (None, "condition_not_located")
@@ -248,12 +251,12 @@ def test_matching_is_conservative_for_ambiguous_or_unlocated_offers() -> None:
     ],
 )
 def test_condition_candidates_extract_explicit_restrictions(segment: str, expected: str) -> None:
-    assert any(item["requirement"].casefold() == expected.casefold() for item in backfill._condition_candidates(segment))
+    assert any(item["requirement"].casefold() == expected.casefold() for item in matching._condition_candidates(segment))
 
 
 def test_resolve_group_marks_empty_source_for_review() -> None:
     offer = {"id": 1, "offer_raw_text": "Botox $10", "updated_at": "offer-1"}
-    rows = backfill._resolve_group([offer], source_type="promotion", source={"promotion_id": 9})
+    rows = planning._resolve_group([offer], source_type="promotion", source={"promotion_id": 9})
     assert rows[0]["status"] == "review"
     assert rows[0]["reason"] == "source_content_missing"
 
@@ -278,10 +281,10 @@ def test_fetch_all_handles_a_full_page() -> None:
         def fetch_rows(self, table, select, **kwargs):
             del table, select
             if kwargs["offset"] == 0:
-                return [{"id": i} for i in range(backfill.PAGE_SIZE)]
-            return [{"id": backfill.PAGE_SIZE}]
+                return [{"id": i} for i in range(planning.PAGE_SIZE)]
+            return [{"id": planning.PAGE_SIZE}]
 
-    assert len(backfill._fetch_all(PagedClient(), "promo_offer_master", "id")) == backfill.PAGE_SIZE + 1
+    assert len(planning._fetch_all(PagedClient(), "promo_offer_master", "id")) == planning.PAGE_SIZE + 1
 
 
 def test_main_writes_a_local_plan_without_model_configuration(monkeypatch, tmp_path) -> None:

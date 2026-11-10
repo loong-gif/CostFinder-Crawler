@@ -10,13 +10,37 @@ def test_schema_for_gemini_strips_meta_keys():
     assert "type" in _schema_for_gemini(schema)
 
 
-def test_schema_for_gemini_drops_required_missing_from_properties():
-    schema = {
-        "type": "object",
-        "properties": {"offers": {"type": "array"}},
-        "required": ["explanation", "offers"],
-    }
-    assert _schema_for_gemini(schema)["required"] == ["offers"]
+def test_transient_server_errors_are_retried_before_the_answer_is_used():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    served: list[int] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            served.append(1)
+            ok = len(served) > 2
+            raw = json.dumps({"candidates": [{"content": {"parts": [{"text": '{"services": []}'}]}}]}
+                             if ok else {"error": "unavailable"}).encode()
+            self.send_response(200 if ok else 503)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    client = GeminiNativeClient(api_key="k", model="gemini-3.5-flash-lite",
+                                base_url=f"http://127.0.0.1:{server.server_address[1]}")
+    try:
+        assert client.create_json_response([{"role": "user", "content": "x"}]) == {"services": []}
+        assert len(served) == 3
+    finally:
+        server.shutdown()
 
 
 def test_create_json_response_sends_response_json_schema():
@@ -28,7 +52,7 @@ def test_create_json_response_sends_response_json_schema():
     }
     fake_resp.raise_for_status = MagicMock()
 
-    with patch("utils.offer_extraction_llm.requests.post", return_value=fake_resp) as post:
+    with patch.object(client.session, "post", return_value=fake_resp) as post:
         result = client.create_json_response(
             [{"role": "system", "content": "sys"}, {"role": "user", "content": "user"}],
             json_schema=schema,
@@ -52,7 +76,7 @@ def test_create_json_response_with_image_uses_inline_image_and_schema():
     }
     fake_resp.raise_for_status = MagicMock()
 
-    with patch("utils.offer_extraction_llm.requests.post", return_value=fake_resp) as post:
+    with patch.object(client.session, "post", return_value=fake_resp) as post:
         result = client.create_json_response_with_image(
             "Transcribe the promotional image.",
             image_bytes=b"png-bytes",
@@ -83,10 +107,13 @@ def test_openai_client_uses_json_schema_when_provided():
     fake_resp.json.return_value = {"choices": [{"message": {"content": '{"ok": true}'}}]}
     fake_resp.raise_for_status = MagicMock()
 
-    with patch("utils.offer_extraction_llm.requests.post", return_value=fake_resp) as post:
+    with patch.object(client.session, "post", return_value=fake_resp) as post:
         result = client.create_json_response([{"role": "user", "content": "x"}], json_schema=schema)
 
     assert result == {"ok": True}
+    # 瞬时故障（连接中断、429、5xx）由会话按指数退避重试，抽取命令不需要外部重试循环
+    retry = client.session.get_adapter("https://example.com").max_retries
+    assert retry.total == 5 and 429 in retry.status_forcelist and retry.backoff_factor == 2
     body = post.call_args.kwargs["json"]
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["schema"]["type"] == "object"

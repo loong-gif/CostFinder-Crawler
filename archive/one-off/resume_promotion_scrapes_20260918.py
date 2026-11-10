@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.repair_clinic_memberships_full_table import FirecrawlHTTP, scrape_one  # noqa: E402
+from utils.membership_repair_scrape import FirecrawlHTTP, scrape_one  # noqa: E402
 from utils.schema_contract import CLINIC_PROMOTION_SELECT, OFFER_MASTER_SELECT  # noqa: E402
 from utils.supabase_access import fetch_all_rows, load_supabase_client  # noqa: E402
 

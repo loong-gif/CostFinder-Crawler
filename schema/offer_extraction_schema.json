@@ -90,7 +90,8 @@
                 "item_name": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "页面原文中的商业项目名称（如 Botox、Versa Fillers、RF Microneedling），与 service_name 标准库候选解耦。"
+                  "maxLength": 60,
+                  "description": "被购买或被打折的服务、产品或项目的名称短语，取自页面原文（如 Botox、Versa Fillers、RF Microneedling、Face & Neck Morpheus8），不超过 60 个字符。只写名称：不含价格、折扣、数量、期限、条件，不含 member、membership、VIP、event、gift card 等会员、活动、礼品卡措辞，不是整句话，不是括号或连接词开头的残句。与 service_name 标准库候选解耦。"
                 },
                 "service_name": {
                   "type": ["string", "null"],

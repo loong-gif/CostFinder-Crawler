@@ -100,6 +100,9 @@ def run(manifest, truth, output, split, run_kind, client, matching=None, service
         atomic_json(output / 'run_config.json', config)
         for name in ('utils/monitor_image_evaluation.py', 'utils/monitor_image_evidence.py',
                      'utils/monitor_price_extract.py', 'utils/monitor_price_plan.py',
+                     'utils/monitor_price_plan_campaign.py', 'utils/monitor_price_plan_common.py',
+                     'utils/monitor_price_plan_expected.py', 'utils/monitor_price_plan_identity.py',
+                     'utils/monitor_price_plan_offer.py', 'utils/monitor_price_plan_variant.py',
                      'utils/offer_purchase_semantics.py', 'utils/offer_evidence_validator.py',
                      'utils/service_price_guard.py', 'utils/offer_extraction_llm.py',
                      'schema/offer_extraction_schema.json', 'scripts/run_monitor_image_evaluation.py'):

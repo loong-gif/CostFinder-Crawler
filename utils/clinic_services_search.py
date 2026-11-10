@@ -1,27 +1,12 @@
 """Firecrawl Search orchestration for clinic_services price discovery."""
 from __future__ import annotations
 
-import json
 import re
-import time
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, List, Sequence
 from urllib.parse import urlparse
 
-from firecrawl.v2.types import ScrapeOptions
-
-from config.settings import CLINIC_SERVICES_SEARCH_LIMIT, CLINIC_SERVICES_SEARCH_TIMEOUT
 from utils.clinic_services_botox import website_to_crawl_url
-from utils.firecrawl_client import get_firecrawl_search_client
-from utils.firecrawl_search_raw_db import save_search_queries, search_web_row
-from utils.scrape_markdown import prepare_scrape_markdown
-
-SEARCH_QUERIES: dict[str, list[str]] = {
-    "Botox": [
-        'botox ("per unit" OR "/unit" OR "unit price")',
-        "botox pricing injectables",
-    ],
-}
 
 _EXCLUDE_PATH_RE = re.compile(
     r"/(?:specials?|promos?|promotions?|deals?|membership|blog|book(?:ing)?|appointment)s?(?:/|$)",
@@ -130,135 +115,3 @@ def filter_service_menu_urls(pages: Sequence[SearchPage], *, domain: str) -> Lis
     kept = [p for p in kept if url_path_score(p.url) >= 0]
     kept.sort(key=lambda p: (-url_path_score(p.url), p.url))
     return kept
-
-
-def _item_to_search_page(item: Any) -> Optional[SearchPage]:
-    url = str(getattr(item, "url", None) or getattr(item, "metadata", None) and getattr(item.metadata, "source_url", None) or "").strip()
-    if not url and isinstance(item, dict):
-        url = str(item.get("url") or (item.get("metadata") or {}).get("sourceURL") or "").strip()
-    markdown = str(getattr(item, "markdown", None) or "")
-    if not markdown and isinstance(item, dict):
-        markdown = str(item.get("markdown") or item.get("content") or "")
-    title = str(getattr(item, "title", None) or "")
-    if not title and isinstance(item, dict):
-        title = str(item.get("title") or "")
-    if not url:
-        return None
-    return SearchPage(url=url, title=title, markdown=prepare_scrape_markdown(markdown))
-
-
-def _search_once(
-    fc: Any,
-    query: str,
-    *,
-    domain: str,
-    limit: int,
-    timeout: int,
-) -> List[SearchPage]:
-    result = fc.search(
-        query,
-        include_domains=[domain],
-        limit=limit,
-        timeout=timeout,
-        scrape_options=ScrapeOptions(
-            formats=["markdown"],
-            only_main_content=True,
-            block_ads=True,
-        ),
-    )
-    web = getattr(result, "web", None) or []
-    pages: List[SearchPage] = []
-    for item in web:
-        page = _item_to_search_page(item)
-        if page and page.markdown:
-            pages.append(page)
-    return pages
-
-
-def search_service_pages(
-    website: Any,
-    service_name: str,
-    *,
-    limit: Optional[int] = None,
-    timeout: Optional[int] = None,
-    max_retries: int = 2,
-    client: Any = None,
-) -> tuple[List[SearchPage], List[str]]:
-    """Run configured queries for service; return filtered pages and queries used."""
-    domain = business_base_domain(website)
-    if not domain:
-        return [], []
-    queries = SEARCH_QUERIES.get(service_name, [])
-    if not queries:
-        raise ValueError(f"No search queries configured for service_name={service_name!r}")
-
-    fc = get_firecrawl_search_client()
-    per_query_limit = limit if limit is not None else CLINIC_SERVICES_SEARCH_LIMIT
-    per_query_timeout = timeout if timeout is not None else CLINIC_SERVICES_SEARCH_TIMEOUT
-
-    seen_urls: set[str] = set()
-    merged: List[SearchPage] = []
-    for query in queries:
-        last_err: Optional[Exception] = None
-        for attempt in range(max_retries + 1):
-            try:
-                batch = _search_once(
-                    fc,
-                    query,
-                    domain=domain,
-                    limit=per_query_limit,
-                    timeout=per_query_timeout,
-                )
-                for page in batch:
-                    if page.url in seen_urls:
-                        continue
-                    seen_urls.add(page.url)
-                    merged.append(page)
-                last_err = None
-                break
-            except Exception as exc:
-                last_err = exc
-                err_text = str(exc).lower()
-                if "429" in err_text or "rate" in err_text:
-                    wait = 5 * (attempt + 1)
-                    time.sleep(wait)
-                    continue
-                raise
-        if last_err is not None:
-            raise last_err
-
-    return filter_service_menu_urls(merged, domain=domain), list(queries)
-
-
-def persist_search_raw(
-    client: Any,
-    *,
-    website: Any,
-    service_name: str,
-    query_pages: dict[str, Sequence[SearchPage]],
-    success: bool = True,
-    error_message: Optional[str] = None,
-) -> dict[str, int]:
-    """Save one firecrawl_search_raw row per search_query."""
-    domain = business_base_domain(str(website))
-    entries: list[tuple[str, list[dict[str, Any]]]] = []
-    for query, pages in query_pages.items():
-        rows = [
-            row
-            for page in pages
-            if (row := search_web_row({"url": page.url, "title": page.title, "markdown": page.markdown}))
-        ]
-        if rows:
-            entries.append((query, rows))
-    return save_search_queries(
-        client,
-        website=str(website),
-        domain=domain,
-        entries=entries,
-        success=success,
-        error_message=error_message,
-    )
-
-
-def search_pages_to_dicts(pages: Iterable[SearchPage]) -> List[dict[str, str]]:
-    return [{"url": p.url, "markdown": p.markdown, "title": p.title} for p in pages]

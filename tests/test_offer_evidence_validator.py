@@ -1,7 +1,8 @@
 """Tests for the evidence gate used before promo offers are persisted."""
 from __future__ import annotations
 
-from utils.extraction_persist import persist_promo_offer, route_and_persist_extraction
+from utils.extraction_persist import route_and_persist_extraction
+from utils.extraction_persist_offer import persist_promo_offer
 from utils.offer_evidence_validator import validate_offer_evidence
 
 
@@ -57,6 +58,14 @@ def test_strikethrough_price_is_the_regular_price_and_the_other_is_the_sale_pric
     assert decision.accepted is True
     assert decision.offer["regular_price"] == 135
     assert decision.offer["discount_price"] == 69
+    # 单个波浪号的删除线（~$150~）同样是原价
+    single = "A E Skin Signature Facial: $95\nOriginal price: ~$150~"
+    decision = validate_offer_evidence(
+        _offer(regular_price=150, discount_price=95, offer_raw_text=single, items=[{"service_name": "Facial"}]),
+        f"Holiday Specials\n{single}\nSave $55",
+    )
+    assert decision.accepted is True
+    assert (decision.offer["regular_price"], decision.offer["discount_price"]) == (150, 95)
 
 
 def test_clears_discount_price_when_text_only_supports_discount_amount() -> None:
@@ -353,4 +362,5 @@ def test_route_stats_count_evidence_rejections_as_quarantined() -> None:
 
     assert stats["quarantined"] == 1
     assert stats["skipped"] == 0
-    assert stats["quarantine"][0]["reason"] == "offer_raw_text_not_supported"
+    assert stats["promo_writes"][0]["reason"] == "offer_raw_text_not_supported"
+    assert "quarantine" not in stats

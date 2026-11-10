@@ -46,38 +46,6 @@ def _normalized_item_identity(value: Any) -> str:
     return normalize_service_name(raw)
 
 
-def _item_names(items: Any, *, service_names: Mapping[int, str] | None = None) -> set[str]:
-    if not isinstance(items, list):
-        return set()
-    names: set[str] = set()
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        # item_name is the persisted normalized identity. The service lookup
-        # is only a fallback for older rows where it was not populated.
-        name = str(item.get("item_name") or "").strip()
-        if not name and service_names is not None and item.get("service_id") is not None:
-            name = str(service_names.get(int(item["service_id"]), "")).strip()
-        identity = _normalized_item_identity(name)
-        if identity:
-            names.add(identity)
-    return names
-
-
-def _candidate_item_names(items: Any) -> set[str]:
-    if not isinstance(items, list):
-        return set()
-    names: set[str] = set()
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        name = item.get("item_name") or item.get("service_name")
-        identity = _normalized_item_identity(name)
-        if identity:
-            names.add(identity)
-    return names
-
-
 def same_items(
     candidate_items: Any,
     existing_items: Any,

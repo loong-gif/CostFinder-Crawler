@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "one-off"))
 from candidates_20261020_parallel import load_rows
 from utils.batch_gate_checks import linked_query
 from utils.monitor_price_store import atomic_json, now
-from utils.monitor_price_writer import BLANKET_CHECK_SQL
+from utils.monitor_price_writer_plan import BLANKET_CHECK_SQL
 from utils.supabase_access import load_supabase_client
 
 OUT = ROOT / "one-off/outputs/candidates_20261020"

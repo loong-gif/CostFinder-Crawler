@@ -229,7 +229,7 @@ def test_validate_membership_accepts_without_evidence() -> None:
         "membership_name": "Club",
         "membership_price": 99,
         "billing_period": "monthly",
-        "benefits": ["Monthly credit $99", "15% off eligible services"],
+        "benefits": [],
     }
     assert validate_membership(
         item,

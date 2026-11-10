@@ -27,8 +27,10 @@ import requests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+from utils.ego_browser import BrowserScrapeFailed, ego_scrape
+from utils.firecrawl_client import fetched_content, page_gone
+from utils.service_endpoints import FIRECRAWL_URL
 from utils.monitor_price_store import atomic_json, digest, run_lock
-DEFAULT_CONFIG = PROJECT_ROOT / "config" / "firecrawl_monitor_migration.json"
 DEFAULT_STATE_DIR = PROJECT_ROOT / "output" / "self_hosted_monitor_state"
 
 PRICE_LINE_RE = re.compile(
@@ -105,6 +107,11 @@ class SelfHostedMonitor:
         self.timeout = timeout
 
     def scrape_document(self, url: str) -> dict[str, Any]:
+        """先 Firecrawl fastMode；拿不到正文（请求失败、拦截页、空正文）时由 ego-lite 渲染。
+
+        Firecrawl 的浏览器引擎（容器内 Chromium）在本主机的 WSL1 上会卡住并把其他页面的内容返回给当前请求，
+        不再使用。404/410 是页面下架的证据，照常返回 Firecrawl 的结果。
+        """
         response = requests.post(
             f"{self.api_url}/v1/scrape",
             headers=self.headers,
@@ -113,23 +120,27 @@ class SelfHostedMonitor:
                 "formats": ["markdown", "rawHtml"] if crawler_first_enabled() else ["markdown"],
                 "onlyMainContent": True,
                 "excludeTags": ["nav", "footer", "script", "style", "noscript"],
+                "fastMode": True,
             },
             timeout=self.timeout,
         )
         try:
             payload = response.json()
         except ValueError:
-            raise ScrapeFailure("firecrawl_response_not_json", {"http_status":response.status_code,"body":response.text}) from None
+            payload = {"http_status": response.status_code, "body": response.text[:2000]}
+        data = payload.get("data") if response.ok and isinstance(payload.get("data"), dict) else None
+        if data is not None and page_gone(data):
+            if not response_markdown(payload).strip():
+                raise ScrapeFailure("firecrawl_empty_markdown", payload)
+            return payload
+        if data is not None and fetched_content(data):
+            return payload
         try:
-            response.raise_for_status()
-        except requests.HTTPError:
-            raise ScrapeFailure("firecrawl_http_error", {"http_status":response.status_code,"body":payload}) from None
-        if payload.get("success") is False:
-            raise ScrapeFailure("firecrawl_scrape_failed", payload)
-        markdown = response_markdown(payload)
-        if not markdown.strip():
-            raise ScrapeFailure("firecrawl_empty_markdown", payload)
-        return payload
+            rendered = ego_scrape(url)
+        except BrowserScrapeFailed as exc:
+            raise ScrapeFailure("ego_scrape_failed", {"fast_mode": {"http_status": response.status_code, "body": payload},
+                                                      "ego_error": str(exc)}) from None
+        return {"success": True, "data": rendered}
 
     def scrape(self, url: str) -> str:
         return response_markdown(self.scrape_document(url))
@@ -301,7 +312,8 @@ def run_monitor(
     browser_results = {}
     monitor = SelfHostedMonitor(api_url, api_key, timeout)
     if scan_images:
-        from utils.monitor_rendered_browser import render_page, confirmed_not_found
+        from utils.monitor_rendered_browser import render_page
+        from utils.monitor_rendered_checks import confirmed_not_found
         cache = browser_cache if browser_cache is not None else {}
         def capture_one(url):
             page=build_page_results(monitor,[url],old_pages,workers=1)[0]
@@ -421,6 +433,7 @@ def run_monitor(
         "webhook_notified": notified,
         "page_errors": [{"url": page.url, "error": page.error} for page in pages if page.status == "error"],
         "successful_urls": [page.url for page in pages if page.status != "error"],
+        "changed_urls": [page.url for page in pages if page.status == "changed"],
         "browser_coverage": [{"url":url,"accessible":row.get("browser",{}).get("accessible",False),
             "complete":row.get("browser",{}).get("complete",False),"http_status":row.get("browser",{}).get("http_status"),
             "image_review_required":row.get("browser",{}).get("image_review_required"),"browser_path":row["browser_path"],
@@ -431,13 +444,13 @@ def run_monitor(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--monitor", action="append", dest="monitors")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--timeout", type=float, default=float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS", "120")))
     parser.add_argument("--workers", type=int, default=int(os.getenv("FIRECRAWL_MONITOR_WORKERS", "5")))
-    parser.add_argument("--api-url", default=os.getenv("FIRECRAWL_SELF_HOSTED_API_URL") or os.getenv("FIRECRAWL_API_URL") or "http://127.0.0.1:3002")
+    parser.add_argument("--api-url", default=FIRECRAWL_URL)
     parser.add_argument("--api-key", default=os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY") or os.getenv("FIRECRAWL_API_KEY") or "")
     parser.add_argument("--send-notifications", action="store_true")
     return parser.parse_args()

@@ -12,13 +12,17 @@ CSV_TEXT = (
     "https://www.simplicitylaser.com/,(800) 559-9138,651,4.800000,PID1,"
     '"{""city"":""Henderson"",""state"":""Nevada"",""country"":""US""}"\n'
     "Duplicate,,,,,10,3.0,PID1,{}\n"
+    'Aère Aesthetics – Beverly Hills,Skin care clinic,"436 N Roxbury Dr, Beverly Hills, CA 90210",'
+    'https://aereaesthetics.com/,,298,5.0,PID2,"{""city"":""Beverly Hills""}"\n'
     "No Place Id,,,,,5,5.0,,{}\n"
 )
 
 
 class _Resp:
     def __init__(self, payload=None, text=""):
-        self._payload, self.text = payload, text
+        # 与抓取服务一致：正文是 UTF-8，响应头没有 charset，requests 的 .text 按 ISO-8859-1 解码
+        self._payload, self.content = payload, text.encode("utf-8")
+        self.text = self.content.decode("latin-1")
 
     def raise_for_status(self) -> None:
         pass
@@ -43,7 +47,7 @@ class _Session:
 
 def test_rows_to_places_dedupes_and_maps_fields() -> None:
     places = rows_to_places(parse_csv(CSV_TEXT))
-    assert len(places) == 1
+    assert len(places) == 2
     place = places[0]
     assert place["google_place_id"] == "PID1" and place["city"] == "Henderson" and place["state"] == "NV"
     assert place["review_count"] == 651 and place["score"] == 4.8
@@ -56,7 +60,9 @@ def test_discover_creates_job_with_proxy_and_returns_places() -> None:
     url, body = session.posted[0]
     assert url == "http://scraper:8081/api/v1/jobs" and body["proxies"] == ["http://x:x@127.0.0.1:7890"]
     assert body["depth"] == 2 and session.trust_env is False
-    assert [p["google_place_id"] for p in places] == ["PID1"]
+    assert [p["google_place_id"] for p in places] == ["PID1", "PID2"]
+    # 下载的 CSV 按 UTF-8 解码，非 ASCII 名称不变成乱码
+    assert places[1]["name"] == "Aère Aesthetics – Beverly Hills"
 
 
 def test_failed_job_raises() -> None:

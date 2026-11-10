@@ -1,13 +1,31 @@
 """Shared Firecrawl SDK client factory."""
 from __future__ import annotations
 
-import base64
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict
 
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from utils.page_title import is_block_page
+from utils.service_endpoints import FIRECRAWL_URL
+
+
+def firecrawl_session() -> requests.Session:
+    """自托管 Firecrawl 的会话：不走本机代理；连接被拒或被断开时自动重试（请求都是幂等的抓取、map、搜索）。
+
+    Firecrawl（Node.js）会关闭空闲的 keep-alive 连接，连接池复用到已关闭的连接时报
+    RemoteDisconnected；HTTP 状态码（408、500 等）是该页面的结果，不重试。
+    """
+    session = requests.Session()
+    session.trust_env = False
+    retry = Retry(total=3, connect=3, read=3, status=0, backoff_factor=1, allowed_methods=None)
+    for prefix in ("https://", "http://"):
+        session.mount(prefix, HTTPAdapter(max_retries=retry))
+    return session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,93 +33,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def load_firecrawl_env(project_root: Path | None = None) -> None:
     root = project_root or PROJECT_ROOT
     load_dotenv(root / ".env")
-
-
-def _screenshot_api_config(project_root: Path | None = None) -> Tuple[str, str, float]:
-    load_firecrawl_env(project_root)
-    api_url = (
-        os.getenv("FIRECRAWL_SCREENSHOT_API_URL")
-        or os.getenv("FIRECRAWL_API_URL")
-        or "https://api.firecrawl.dev"
-    ).strip().rstrip("/")
-    api_key = (
-        os.getenv("FIRECRAWL_SCREENSHOT_API_KEY")
-        or os.getenv("FIRECRAWL_API_KEY")
-        or ""
-    ).strip()
-    if not api_key:
-        raise RuntimeError("Missing FIRECRAWL_API_KEY for screenshot scrape")
-    timeout = float(os.getenv("FIRECRAWL_HTTP_TIMEOUT_SECS", "120"))
-    return api_url, api_key, timeout
-
-
-def decode_screenshot_payload(value: str) -> Tuple[bytes, str]:
-    """Decode Firecrawl screenshot field (URL, data URL, or raw base64) to image bytes."""
-    raw = str(value or "").strip()
-    if not raw:
-        raise ValueError("empty screenshot payload")
-    if raw.startswith("data:"):
-        mime_match = raw.split(";", 1)[0].split(":", 1)
-        mime = mime_match[1] if len(mime_match) == 2 else "image/png"
-        b64_part = raw.split("base64,", 1)[1] if "base64," in raw else raw
-        return base64.b64decode(b64_part), mime
-    if raw.startswith(("http://", "https://")):
-        resp = requests.get(raw, timeout=60)
-        resp.raise_for_status()
-        mime = resp.headers.get("Content-Type", "image/png").split(";")[0].strip() or "image/png"
-        return resp.content, mime
-    return base64.b64decode(raw), "image/png"
-
-
-def scrape_screenshot_bytes(
-    page_url: str,
-    *,
-    project_root: Path | None = None,
-    full_page: bool = True,
-    wait_for_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Capture a page screenshot via Firecrawl scrape API.
-
-    Returns dict with image_bytes, mime, screenshot_size, warning, screenshot_ref, engine.
-    Requires Fire Engine (cloud or self-hosted with screenshot support).
-    """
-    api_url, api_key, timeout = _screenshot_api_config(project_root)
-    wait_ms = wait_for_ms if wait_for_ms is not None else int(
-        os.getenv("FIRECRAWL_SCREENSHOT_WAIT_MS", "5000")
-    )
-    fmt = "screenshot@fullPage" if full_page else "screenshot"
-    body = {
-        "url": page_url,
-        "formats": [fmt],
-        "waitFor": wait_ms,
-        "timeout": int(timeout * 1000),
-    }
-    resp = requests.post(
-        f"{api_url}/v1/scrape",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=timeout + 30,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("success", True) and payload.get("error"):
-        raise RuntimeError(str(payload.get("error")))
-    data = payload.get("data") or {}
-    warning = str(data.get("warning") or "").strip()
-    screenshot_ref = data.get("screenshot")
-    if not screenshot_ref:
-        if warning and "screenshot" in warning.lower():
-            raise RuntimeError(f"firecrawl_screenshot_unsupported: {warning}")
-        raise RuntimeError("firecrawl_screenshot_missing")
-    image_bytes, mime = decode_screenshot_payload(str(screenshot_ref))
-    return {
-        "image_bytes": image_bytes,
-        "mime": mime,
-        "screenshot_size": len(image_bytes),
-        "warning": warning or None,
-        "screenshot_ref": screenshot_ref if isinstance(screenshot_ref, str) and screenshot_ref.startswith("http") else None,
-        "engine": "firecrawl",
-    }
 
 
 def get_firecrawl_client(*, project_root: Path | None = None):
@@ -193,26 +124,58 @@ def _build_firecrawl_client(
 class SelfHostedFirecrawl:
     """爬虫层统一使用的自托管 Firecrawl（v1 API）。"""
 
-    def __init__(self, api_url: str, api_key: str = "", timeout: float = 120) -> None:
+    def __init__(self, api_url: str, api_key: str = "", timeout: float = 120, *,
+                 browser: Callable[[str], dict[str, Any]]) -> None:
+        """browser：fastMode 抓不到正文时渲染页面的真实浏览器（ego-lite），返回与 Firecrawl data 同构的结果。"""
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
-        self.session = requests.Session()
-        self.session.trust_env = False
+        self.browser = browser
+        self.session = firecrawl_session()
         self.session.headers["Content-Type"] = "application/json"
         if api_key:
             self.session.headers["Authorization"] = f"Bearer {api_key}"
 
-    def scrape(self, url: str, formats: tuple[str, ...] = ("markdown",)) -> dict[str, Any]:
-        response = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout,
-                                     json={"url": url, "formats": list(formats), "onlyMainContent": True})
-        response.raise_for_status()
-        return response.json()["data"]
+    def scrape(self, url: str, formats: tuple[str, ...] = ("markdown",), *,
+               only_main_content: bool = True) -> dict[str, Any]:
+        """先 fastMode（只走 HTTP fetch 引擎，几秒完成）；拿不到正文时由 self.browser（ego-lite）渲染。
+
+        Firecrawl 的浏览器引擎（容器内 Chromium）在 monitor 主机的 WSL1 上会卡住并把其他页面的内容返回给当前请求，
+        所以不再使用。fastMode 下站点（例如 Cloudflare）返回的拦截页仍是 HTTP 200、success=true，只能从
+        metadata.statusCode 和正文标题判定。页面已不存在（404/410）是该页面的结果，抛出 PageGone。
+        """
+        fast = self.session.post(f"{self.api_url}/v1/scrape", timeout=self.timeout, json={
+            "url": url, "formats": list(formats), "onlyMainContent": only_main_content, "fastMode": True})
+        data = fast.json().get("data") if fast.ok else None
+        if data is not None and page_gone(data):
+            raise PageGone(f"page_gone_{data['metadata']['statusCode']}: {url}", response=fast)
+        if data is not None and fetched_content(data):
+            return data
+        return self.browser(url)
 
 
-def self_hosted_firecrawl(*, project_root: Path | None = None) -> SelfHostedFirecrawl:
+GONE_STATUSES = frozenset({404, 410})
+
+
+class PageGone(requests.HTTPError):
+    """站点对该地址返回 404 或 410。"""
+
+
+def page_gone(data: dict[str, Any]) -> bool:
+    status = (data.get("metadata") or {}).get("statusCode")
+    return bool(status) and int(status) in GONE_STATUSES
+
+
+def fetched_content(data: dict[str, Any]) -> bool:
+    """fastMode 拿到了页面正文：状态码不是错误，正文非空，且不是拦截页。"""
+    status = (data.get("metadata") or {}).get("statusCode")
+    markdown = str(data.get("markdown") or "")
+    return not (status and int(status) >= 400) and bool(markdown.strip()) and not is_block_page(markdown)
+
+
+def self_hosted_firecrawl(*, browser: Callable[[str], dict[str, Any]],
+                          project_root: Path | None = None) -> SelfHostedFirecrawl:
     load_firecrawl_env(project_root)
-    return SelfHostedFirecrawl(os.environ["FIRECRAWL_SELF_HOSTED_API_URL"].strip("'\""),
-                               os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""))
+    return SelfHostedFirecrawl(FIRECRAWL_URL, os.getenv("FIRECRAWL_SELF_HOSTED_API_KEY", ""), browser=browser)
 
 
 def scrape_page_markdown(fc: Any, url: str) -> tuple[str, dict[str, Any]]:

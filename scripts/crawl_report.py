@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from utils.city_selection import due_for_rediscovery  # noqa: E402
 from utils.crawl_schedule_state import load_state  # noqa: E402
 
 
@@ -21,12 +22,7 @@ def main() -> int:
     candidates = load_state("candidates")
 
     print("cities:", dict(Counter(c.get("status") for c in cities.values())))
-    due_cities = [
-        key for key, c in cities.items()
-        if c.get("status") == "active" and c.get("next_discovery_at")
-        and datetime.fromisoformat(c["next_discovery_at"]) <= now
-    ]
-    print(f"cities due for re-discovery: {len(due_cities)}")
+    print(f"cities due for re-discovery: {len(due_for_rediscovery(cities, now))} (discover-businesses --due)")
     print("tiers:", dict(Counter(e.get("tier") for e in schedule.values())))
     due = [e for e in schedule.values() if e.get("next_crawl_at") and datetime.fromisoformat(e["next_crawl_at"]) <= now]
     print(f"businesses due now: {len(due)} by tier {dict(Counter(e.get('tier') for e in due))}")

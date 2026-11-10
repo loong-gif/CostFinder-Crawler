@@ -135,23 +135,6 @@ def extract_botox_fields_from_pages(pages: Iterable[Any]) -> BotoxServiceFields:
     return best or BotoxServiceFields(None, None, None)
 
 
-def extract_botox_fields_from_search_pages(pages: Iterable[Any]) -> BotoxServiceFields:
-    """Merge Firecrawl search pages (SearchPage or dict with markdown)."""
-    dict_pages = []
-    for page in pages:
-        if hasattr(page, "markdown"):
-            dict_pages.append(
-                {
-                    "markdown": getattr(page, "markdown", None),
-                    "url": getattr(page, "url", None),
-                    "title": getattr(page, "title", None),
-                }
-            )
-        else:
-            dict_pages.append(page)
-    return extract_botox_fields_from_pages(dict_pages)
-
-
 def website_to_crawl_url(website: Any) -> str:
     raw = str(website or "").strip()
     if not raw:

@@ -5,8 +5,6 @@ Archived scripts keep their own copies.
 """
 from __future__ import annotations
 
-import os
-import sys
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
@@ -19,23 +17,16 @@ PRODUCTION_PROJECT_REF = "kdlpkjzcnbkjcvwsvlwn"
 
 
 class SupabaseRestClient:
-    def __init__(
-        self,
-        base_url: str,
-        service_role_key: str,
-        client_info: str | None = None,
-    ):
+    def __init__(self, base_url: str, service_role_key: str):
         self.base_url = base_url.rstrip("/") + "/rest/v1"
         self.session = requests.Session()
         self.session.trust_env = False  # avoid proxy hijacking in automation
-        script = client_info or os.path.basename(sys.argv[0]) or "cf-crawler"
         self.session.headers.update(
             {
                 "apikey": service_role_key,
                 "Authorization": f"Bearer {service_role_key}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "x-client-info": f"cf-crawler/{script}",
             }
         )
 
@@ -96,9 +87,6 @@ class SupabaseRestClient:
             headers={"Prefer": "return=representation"},
             timeout=90,
         )
-        if not response.ok:
-            detail = response.text.strip().replace("\n", " ")[:1000]
-            raise RuntimeError(f"Supabase update {table} failed ({response.status_code}): {detail}")
         response.raise_for_status()
         return response.json()
 
@@ -114,9 +102,6 @@ class SupabaseRestClient:
             headers={"Prefer": "return=representation"},
             timeout=90,
         )
-        if not response.ok:
-            detail = response.text.strip().replace("\n", " ")[:1000]
-            raise RuntimeError(f"Supabase insert {table} failed ({response.status_code}): {detail}")
         response.raise_for_status()
         return response.json()
 
@@ -168,12 +153,6 @@ class SupabaseRestClient:
             headers=headers,
             timeout=90,
         )
-        response.raise_for_status()
-        return response.json()
-
-    def rpc_read(self, function: str) -> Any:
-        """调用只读（stable）数据库函数；不经写入守卫。"""
-        response = self.session.get(f"{self.base_url}/rpc/{function}", timeout=90)
         response.raise_for_status()
         return response.json()
 
