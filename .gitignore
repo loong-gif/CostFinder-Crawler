@@ -110,3 +110,4 @@ architecture-review-*.html
 state/cpa_deploy/
 .scratch/
 .metrics/
+target/coverage/

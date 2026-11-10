@@ -88,8 +88,9 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
                        "let this machine call the monitor server's Firecrawl, scraper and OCR directly (rerun when the IP "
                        "changes)", "no (server firewall and tasks)"),
     "pending-sql": ("scripts.pending_sql",
-                    "pull and list pending SQL files from the monitor host; --mark-applied FILE registers locally "
-                    "and on the monitor host after MCP execution", "no (moves files)"),
+                    "pull and list pending SQL files from the monitor host; --apply executes them through the "
+                    "Supabase MCP (launchd hourly at :50, --install-schedule); --mark-applied FILE registers locally "
+                    "and on the monitor host", "--apply (production, through the Supabase MCP)"),
 }
 
 

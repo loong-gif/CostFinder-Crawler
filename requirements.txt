@@ -44,4 +44,9 @@ opentelemetry-instrumentation-logging>=0.63b0
 zleap-sag>=0.7.1
 psycopg[binary]>=3.2,<4
 
+# 本机经托管 Supabase MCP 执行待执行 SQL（pending-sql --apply）
+mcp>=2.3,<3
+# 测试用本机 PostgreSQL（tests/test_pending_sql_apply.py）
+pgserver>=0.1.4,<0.2
+
 # 浏览器诊断/补抓依赖已拆分到 requirements_browser_tools.txt

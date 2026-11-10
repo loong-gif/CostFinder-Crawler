@@ -7,7 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from utils.pending_sql import APPLIED_DIR_NAME, PENDING_DIR_NAME
+from utils.pending_sql import APPLIED_DIR_NAME, PENDING_DIR_NAME, REJECTED_DIR_NAME
 
 HOST = "firecrawl"
 BASE = "/home/loong/costfinder_monitor"
@@ -74,8 +74,21 @@ def pull_pending(local_dir: Path, *, base: str = BASE, host: str = HOST) -> list
 
 
 def mark_applied_remote(relative: str, *, base: str = BASE, host: str = HOST) -> str:
-    """在服务器上对同一个文件执行 mark_applied；下一次 monitor 运行时对应事件变为 completed。"""
+    """在服务器上对同一个文件执行 mark_applied；下一次 monitor 运行时对应事件变为 completed。
+    文件已在 applied/ 时不再移动（上次登记后本地移动前中断）。"""
+    return _move_remote(relative, APPLIED_DIR_NAME, "mark_applied(path)", b"", base=base, host=host)
+
+
+def mark_rejected_remote(relative: str, error: str, *, base: str = BASE, host: str = HOST) -> str:
+    """在服务器上把被自身核对拒绝的文件移入 rejected/ 并保存错误原文；监控随后把事件改为 retryable 重新规划。
+    文件已在 rejected/ 时不再移动。"""
+    return _move_remote(relative, REJECTED_DIR_NAME, "mark_rejected(path,sys.stdin.read())", error.encode(),
+                        base=base, host=host)
+
+
+def _move_remote(relative: str, folder: str, call: str, stdin: bytes, *, base: str, host: str) -> str:
     code = (f"import sys\nfrom pathlib import Path\nsys.path.insert(0,{base!r})\n"
-            "from utils.pending_sql import mark_applied\n"
-            f"print(mark_applied(Path({_remote_pending(base)!r})/{relative!r}))\n")
-    return remote_python(code, host=host).strip()
+            "from utils.pending_sql import mark_applied, mark_rejected\n"
+            f"root=Path({_remote_pending(base)!r})\npath=root/{relative!r}\ndone=root/{folder!r}/{relative!r}\n"
+            f"print(done if done.is_file() and not path.exists() else {call})\n")
+    return remote_python(code, stdin=stdin, host=host).strip()
