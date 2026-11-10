@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-from utils.crawler_visibility import assess_page
+from utils.crawler_visibility import CSS_UNCERTAIN_REASONS, assess_page
 from utils.firecrawl_scrape_raw_db import canonical_scrape_url
 
 PROMO_PREFIXES = ("special", "promo", "offer", "deal", "discount", "coupon", "saving", "sale", "bundle", "package",
@@ -40,6 +40,8 @@ SERVICE_RE = re.compile(r"botox|dysport|xeomin|jeuveau|filler|juvederm|restylane
                         r"massage|waxing|lip|sculptra|kybella|body contouring|iv therapy|vitamin", re.I)
 MIN_PLAUSIBLE_AMOUNT = 5
 MAX_PLAUSIBLE_AMOUNT = 20000
+# 可见性由 HTML 与 CSS 判定不了时，页面标为待复核
+REVIEW_VISIBILITY_REASONS = CSS_UNCERTAIN_REASONS | {"thin_visible_text", "script_heavy_page"}
 
 
 @dataclass(frozen=True)
@@ -139,67 +141,81 @@ def _amounts(text: str) -> List[float]:
     return values
 
 
-def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str = "") -> OfferAssessment:
+def assess_offer_page(markdown: str, raw_html: Optional[str], *, kind_hint: str = "", page_url: str,
+                      stylesheets: Mapping[str, Optional[str]]) -> OfferAssessment:
     """A page is valid only when it states a real discount or price tied to a service or plan.
 
-    Evidence lines must also appear in the page's visible text (hidden-element filtered); pages whose
-    visibility cannot be judged from HTML are returned with ``needs_review=True`` instead of valid.
+    Evidence lines must also appear in the page's visible text (computed from the page's HTML and CSS,
+    ``stylesheets`` as returned by ``fetch_stylesheets``); pages whose visibility cannot be judged from
+    HTML and CSS are returned with ``needs_review=True`` instead of valid.
     """
+    evidence, discount, monthly, unit = _evidence_lines(markdown)
+    if not evidence:
+        return OfferAssessment(False, "", False, (), ("no_discount_or_price_evidence",))
+    visibility = assess_page(markdown, raw_html, facts=(), page_url=page_url, stylesheets=stylesheets)
     reasons: List[str] = []
-    lines = [re.sub(r"\s+", " ", ln).strip() for ln in str(markdown or "").splitlines()]
-    lines = [ln for ln in lines if ln]
+    needs_review = "no_html" in visibility.reasons
+    if needs_review:
+        reasons.append("no_html_for_visibility")
+    else:
+        visible = visibility.visible_text.casefold()
+        shown = [e for e in evidence if all(tok in visible for tok in re.findall(r"\d+(?:[.,]\d+)*", e))]
+        if not shown:
+            return OfferAssessment(False, "", False, tuple(evidence[:3]), ("evidence_not_in_visible_text",))
+        evidence = shown
+        reasons.extend(sorted(REVIEW_VISIBILITY_REASONS & set(visibility.reasons)))
+        needs_review = bool(reasons)
+    return OfferAssessment(True, _offer_kind(kind_hint, discount, monthly, unit), needs_review, tuple(evidence[:6]),
+                           tuple(reasons))
+
+
+def _plausible(amount: float) -> bool:
+    return MIN_PLAUSIBLE_AMOUNT <= amount <= MAX_PLAUSIBLE_AMOUNT
+
+
+def _has_amount_off(line: str) -> bool:
+    off_match = AMOUNT_OFF_RE.search(line)
+    off_digits = re.findall(r"\d+(?:\.\d+)?", off_match.group(0)) if off_match else []
+    plausible_off = bool(off_digits) and _plausible(float(off_digits[0]))
+    sale_ok = bool(SALE_PRICE_RE.search(line)) and any(_plausible(a) for a in _amounts(line))
+    return plausible_off or bool(BOGO_RE.search(line)) or sale_ok
+
+
+def _line_signals(line: str) -> Optional[Tuple[bool, bool, bool]]:
+    """证据行的（折扣，月费，单价）；不是证据行时返回 None。"""
+    priced = any(_plausible(a) for a in _amounts(line))
+    discount = bool(PERCENT_OFF_RE.search(line)) or _has_amount_off(line)
+    has_monthly = priced and bool(MONTHLY_RE.search(line))
+    has_unit = priced and bool(UNIT_PRICE_RE.search(line))
+    # 单价行还要提到服务或会员
+    tied = discount or has_monthly or (has_unit and (SERVICE_RE.search(line) or "membership" in line.lower()))
+    return (discount, has_monthly, has_unit) if tied else None
+
+
+def _evidence_lines(markdown: str) -> Tuple[List[str], bool, bool, bool]:
+    lines = [ln for ln in (re.sub(r"\s+", " ", ln).strip() for ln in str(markdown or "").splitlines()) if ln]
     evidence: List[str] = []
     # 同一句话在导航、横幅与正文中重复出现时只差空格、脚注符号或 markdown 转义，按字母数字与 %、$ 去重
     seen_keys: set = set()
     discount = monthly = unit = False
     for line in lines:
-        amounts = [a for a in _amounts(line) if MIN_PLAUSIBLE_AMOUNT <= a <= MAX_PLAUSIBLE_AMOUNT]
-        has_percent = bool(PERCENT_OFF_RE.search(line))
-        off_match = AMOUNT_OFF_RE.search(line)
-        off_digits = re.findall(r"\d+(?:\.\d+)?", off_match.group(0)) if off_match else []
-        plausible_off = bool(off_digits) and MIN_PLAUSIBLE_AMOUNT <= float(off_digits[0]) <= MAX_PLAUSIBLE_AMOUNT
-        sale_ok = bool(SALE_PRICE_RE.search(line)) and any(MIN_PLAUSIBLE_AMOUNT <= a <= MAX_PLAUSIBLE_AMOUNT for a in _amounts(line))
-        has_off = plausible_off or bool(BOGO_RE.search(line)) or sale_ok
-        has_monthly = bool(MONTHLY_RE.search(line)) and bool(amounts)
-        has_unit = bool(UNIT_PRICE_RE.search(line)) and bool(amounts)
-        if not (has_percent or has_off or has_monthly or has_unit):
+        signals = _line_signals(line)
+        if signals is None:
             continue
-        if not (SERVICE_RE.search(line) or has_monthly or "membership" in line.lower() or has_off or has_percent):
-            continue
-        discount |= has_percent or has_off
-        monthly |= has_monthly
-        unit |= has_unit
+        discount, monthly, unit = discount or signals[0], monthly or signals[1], unit or signals[2]
         key = re.sub(r"[^0-9a-z%$]+", "", line.casefold())
         if key not in seen_keys:
             seen_keys.add(key)
             evidence.append(line[:240])
-    if not evidence:
-        reasons.append("no_discount_or_price_evidence")
-        return OfferAssessment(False, "", False, (), tuple(reasons))
+    return evidence, discount, monthly, unit
 
-    visibility = assess_page(markdown, raw_html, facts=())
-    needs_review = False
-    if "no_html" in visibility.reasons:
-        reasons.append("no_html_for_visibility")
-        needs_review = True
-    else:
-        visible = visibility.visible_text.casefold()
-        shown = [e for e in evidence if all(tok in visible for tok in re.findall(r"\d+(?:[.,]\d+)*", e))]
-        if not shown:
-            reasons.append("evidence_not_in_visible_text")
-            return OfferAssessment(False, "", False, tuple(evidence[:3]), tuple(reasons))
-        evidence = shown
-        if {"css_class_hiding_possible", "thin_visible_text", "script_heavy_page"} & set(visibility.reasons):
-            reasons.extend(sorted({"css_class_hiding_possible", "thin_visible_text", "script_heavy_page"} & set(visibility.reasons)))
-            needs_review = True
 
+def _offer_kind(kind_hint: str, discount: bool, monthly: bool, unit: bool) -> str:
     if monthly or (kind_hint == "membership" and (unit or discount)):
-        kind = "membership"
-    elif discount:
-        kind = "promotion"
-    else:
-        kind = "pricing" if kind_hint == "pricing" else (kind_hint or "promotion")
-    return OfferAssessment(True, kind, needs_review, tuple(evidence[:6]), tuple(reasons))
+        return "membership"
+    if discount:
+        return "promotion"
+    return "pricing" if kind_hint == "pricing" else (kind_hint or "promotion")
 
 
 # --- one hop from a promotion / membership hub page --------------------------------------------

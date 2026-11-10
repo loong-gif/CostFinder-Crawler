@@ -64,6 +64,20 @@ def test_retry_recovers_after_transient_500s_with_backoff() -> None:
     assert waits == [5, 15]  # exponential backoff between attempts, none after the last
 
 
+def test_empty_firecrawl_pages_are_retried_and_reported() -> None:
+    empty = {"markdown": " ", "rawHtml": ""}
+    page = retry_one(_Fc([empty, GOOD]), "https://s.com/a", RECORD, attempts=2, backoff=0, sleep=lambda s: None,
+                     fetch=lambda u: (_ for _ in ()).throw(AssertionError("fallback not needed")))
+    assert page["engine"] == "firecrawl" and page["status"] in ("valid", "needs_review")
+
+    def broken(url):
+        raise ValueError("unsupported_content_type")
+
+    failed = retry_one(_Fc([empty, empty]), "https://s.com/a", RECORD, attempts=2, backoff=0, sleep=lambda s: None,
+                       fetch=broken)
+    assert failed["status"] == "scrape_failed" and failed["error"].startswith("empty_page; direct: ValueError")
+
+
 def test_retry_falls_back_to_direct_fetch_then_gives_up_cleanly() -> None:
     fc = _Fc([RuntimeError("500")] * 2)
     page = retry_one(fc, "https://s.com/a", RECORD, attempts=2, backoff=0, sleep=lambda s: None, fetch=lambda u: GOOD)

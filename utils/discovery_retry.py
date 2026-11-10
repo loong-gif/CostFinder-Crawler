@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from utils.crawler_visibility_fetch import fetch_stylesheets
 from utils.direct_public_scrape import DEFAULT_HEADERS, html_to_text
 from utils.promo_page_discovery import assess_offer_page, extract_end_dates
 from utils.url_safety import assert_safe_crawl_entry_url
@@ -47,22 +48,29 @@ def direct_fetch(url: str, timeout: float = 20) -> Dict[str, str]:
     return {"markdown": html_to_text(html), "rawHtml": html}
 
 
-def retry_one(
-    fc: Any, url: str, record: Dict[str, Any], *, attempts: int = 3, backoff: float = 5.0,
-    fetch: Callable[[str], Dict[str, str]] = direct_fetch, sleep: Callable[[float], None] = time.sleep,
-) -> Dict[str, Any]:
-    page: Optional[Dict[str, str]] = None
-    engine, last_error = "", ""
+def _scrape_with_backoff(fc: Any, url: str, attempts: int, backoff: float,
+                         sleep: Callable[[float], None]) -> Tuple[Optional[Dict[str, str]], str]:
+    """自托管 Firecrawl 退避重试：返回（有内容的页面或 None，最后一次错误）。"""
+    last_error = ""
     for attempt in range(attempts):
         try:
-            page, engine = fc.scrape(url), "firecrawl"
+            page = fc.scrape(url)
             if page["markdown"].strip() or page["rawHtml"].strip():
-                break
-            page, last_error = None, "empty_page"
+                return page, last_error
+            last_error = "empty_page"
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
         if attempt < attempts - 1:
             sleep(backoff * (3 ** attempt))
+    return None, last_error
+
+
+def retry_one(
+    fc: Any, url: str, record: Dict[str, Any], *, attempts: int = 3, backoff: float = 5.0,
+    fetch: Callable[[str], Dict[str, str]] = direct_fetch, sleep: Callable[[float], None] = time.sleep,
+) -> Dict[str, Any]:
+    page, last_error = _scrape_with_backoff(fc, url, attempts, backoff, sleep)
+    engine = "firecrawl"
     if page is None:
         try:
             page, engine = fetch(url), "direct_http"
@@ -70,7 +78,8 @@ def retry_one(
             return {"url": url, "hop": record["hop"], "via": record["via"], "status": "scrape_failed",
                     "kind_hint": record["kind_hint"], "sources": record["sources"], "title": record["title"],
                     "error": f"{last_error}; direct: {type(exc).__name__}: {str(exc)[:100]}", "retried": True}
-    assessment = assess_offer_page(page["markdown"], page["rawHtml"], kind_hint=record["kind_hint"])
+    assessment = assess_offer_page(page["markdown"], page["rawHtml"], kind_hint=record["kind_hint"], page_url=url,
+                                   stylesheets=fetch_stylesheets(url, page["rawHtml"]))
     return {
         "url": url, "hop": record["hop"], "via": record["via"], "kind_hint": record["kind_hint"],
         "kind": assessment.kind, "sources": record["sources"], "title": record["title"],

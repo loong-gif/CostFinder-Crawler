@@ -74,3 +74,13 @@ def test_everything_else_goes_to_the_browser(tmp_path, case) -> None:
 def test_inaccessible_previous_render_is_not_reused(tmp_path) -> None:
     previous = _previous(tmp_path, accessible=False)
     assert monitor.reusable_render("https://a.com/p", _page(), previous, tmp_path, NOW.isoformat()) is None
+
+
+def test_claim_hidden_by_the_site_stylesheet_goes_to_the_browser(tmp_path, css_site) -> None:
+    css_site.add("site.css", ".was{display:none}")
+    html = (f'<html><head><link rel="stylesheet" href="site.css"></head><body><main>{FILLER}'
+            f'<p class="was">{MARKDOWN}</p></main></body></html>')
+    url = css_site.add("p.html", html, content_type="text/html")
+    assert monitor.reusable_render(url, _page(html=html), _previous(tmp_path), tmp_path, NOW.isoformat()) is None
+    shown = html.replace('class="was"', 'class="now"')
+    assert monitor.reusable_render(url, _page(html=shown), _previous(tmp_path), tmp_path, NOW.isoformat()) is not None

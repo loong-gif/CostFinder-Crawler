@@ -9,6 +9,10 @@ python-dateutil>=2.9,<3
 pandas==2.2.0
 requests>=2.31.0,<3
 snowballstemmer>=2.2,<4
+# 爬虫可见性：解析页面 CSS、计算选择器权重、在 BeautifulSoup 上匹配选择器（utils/crawler_visibility*）
+tinycss2>=1.4,<2
+cssselect>=1.2,<2
+soupsieve>=2.6,<3
 
 # OCR 图片识别需要系统安装 Tesseract CLI
 

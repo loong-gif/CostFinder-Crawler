@@ -115,15 +115,17 @@ The final gate is evaluated against the current database, not the original scrap
 `MONITOR_RENDER_MODE=crawler_first` 时，监控只在满足以下**全部**条件时复用上一次真实浏览器渲染，而不重新渲染：
 
 1. 本次爬虫 Markdown 的摘要与上次真实渲染时的 `content_digest` 相同；
-2. 爬虫 `rawHtml` 经 `utils/crawler_visibility.py` 过滤隐藏元素后，`assess_page` 判定无需浏览器：
-   正文不为空、可见文本不少于 200 字符、没有 `d-none`/`hidden`/`collapse` 等依赖 CSS 的隐藏类、
-   没有疑似促销图片、每条价格事实的数字都出现在过滤后的可见文本中；
+2. 爬虫 `rawHtml` 连同页面样式表（`utils/crawler_visibility_fetch.fetch_stylesheets` 抓取 `<link>`、`<style>`
+   与递归 `@import`）经 `utils/crawler_visibility.assess_page` 按 1440 宽桌面屏幕的层叠规则计算可见性后，
+   判定无需浏览器：正文不为空、可见文本不少于 200 字符、样式表都已取得、选择器与条件规则都能判定、
+   没有轮播与滚动动画、内嵌框架或疑似促销图片、每条价格事实的数字都出现在可见文本中；
 3. 上一次真实渲染距今不超过 `MONITOR_RENDER_MAX_AGE_DAYS`（默认 14 天），且当时可访问并有视觉摘要。
 
 新页面、内容变化、空内容、可疑内容、超过期限的页面仍然进浏览器。复用的证据保留原始渲染的时间戳和摘要，
 并标记 `visibility_source: crawler_html_filtered`；不会改写 `browser.json`。
 
-**注意：** 过滤只依据 HTML 与内联样式，不等于真实布局；依赖 JS 注入或外部 CSS 的页面靠"可疑即进浏览器"兜底。
+**注意：** 可见性按 HTML 与 CSS 的层叠计算，不计算布局；依赖 JavaScript 的内容（轮播、滚动动画、脚本注入）
+以及样式表取不到、选择器或条件规则无法判定的页面进浏览器。
 该模式把"当前可见性证据"放宽为"内容未变 + 过滤干净 + 近期真实渲染"，与 `AGENTS.md` 中
 "之后的抓取需要当前的可见性证据"的字面要求有张力，启用前需要先确认并同步修改该条规则。
 

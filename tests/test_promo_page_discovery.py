@@ -9,6 +9,10 @@ def _html(body: str) -> str:
     return f"<html><body><main>{FILLER}{body}</main></body></html>"
 
 
+def _offer(markdown: str, raw_html, **kwargs):
+    return assess_offer_page(markdown, raw_html, page_url="https://spa.com/specials", stylesheets={}, **kwargs)
+
+
 def test_candidates_are_same_site_new_and_prioritised() -> None:
     mapped = [
         "https://www.spa.com/", "https://spa.com/specials", "https://spa.com/membership/", "https://spa.com/pricing",
@@ -25,7 +29,7 @@ def test_candidates_are_same_site_new_and_prioritised() -> None:
 
 def test_percent_and_amount_off_with_service_is_valid_promotion() -> None:
     md = "# Fall specials\nBotox $11 per unit this month\n20% off all laser hair removal packages"
-    result = assess_offer_page(md, _html("<p>Botox $11 per unit this month</p><p>20% off all laser hair removal packages</p>"))
+    result = _offer(md, _html("<p>Botox $11 per unit this month</p><p>20% off all laser hair removal packages</p>"))
     assert result.valid and result.kind == "promotion" and not result.needs_review
     assert any("20% off" in e for e in result.evidence)
 
@@ -33,7 +37,7 @@ def test_percent_and_amount_off_with_service_is_valid_promotion() -> None:
 def test_banner_repeated_with_footnote_spacing_counts_as_one_evidence_line() -> None:
     md = ("75% OFF LASER HAIR REMOVAL ǂ\n\n75% OFF LASER HAIR REMOVALǂ\n\n"
           "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*\n\n### Your First Botox Treatment Is $10 Per Unit‡‡")
-    result = assess_offer_page(md, None)
+    result = _offer(md, None)
     assert list(result.evidence) == ["75% OFF LASER HAIR REMOVAL ǂ",
                                      "### 50% Savings On CoolSculpting (8+ Treatments)\\*\\*",
                                      "### Your First Botox Treatment Is $10 Per Unit‡‡"]
@@ -41,36 +45,39 @@ def test_banner_repeated_with_footnote_spacing_counts_as_one_evidence_line() -> 
 
 def test_monthly_price_is_membership() -> None:
     md = "VIP Membership $99/month includes one facial"
-    result = assess_offer_page(md, _html("<p>VIP Membership $99/month includes one facial</p>"), kind_hint="membership")
+    result = _offer(md, _html("<p>VIP Membership $99/month includes one facial</p>"), kind_hint="membership")
     assert result.valid and result.kind == "membership"
 
 
 def test_page_without_price_or_discount_is_rejected() -> None:
     md = "Welcome to our specials page. Ask us about current offers and book today."
-    result = assess_offer_page(md, _html("<p>Ask us about current offers</p>"))
+    result = _offer(md, _html("<p>Ask us about current offers</p>"))
     assert not result.valid and "no_discount_or_price_evidence" in result.reasons
 
 
 def test_hidden_price_is_not_valid() -> None:
     md = "Botox $9 per unit"
     html = f'<html><body>{FILLER}<p style="display:none">Botox $9 per unit</p></body></html>'
-    result = assess_offer_page(md, html)
+    result = _offer(md, html)
     assert not result.valid and "evidence_not_in_visible_text" in result.reasons
 
 
 def test_missing_html_needs_review_not_valid_silently() -> None:
-    result = assess_offer_page("Botox $10 per unit", None)
+    result = _offer("Botox $10 per unit", None)
     assert result.valid and result.needs_review and "no_html_for_visibility" in result.reasons
 
 
-def test_css_class_hiding_marks_review() -> None:
-    html = _html('<p>Botox $10 per unit</p><div class="d-none">other</div>')
-    result = assess_offer_page("Botox $10 per unit", html)
-    assert result.valid and result.needs_review
+def test_undecidable_css_marks_review() -> None:
+    html = _html('<link rel="stylesheet" href="/site.css"><p>Botox $10 per unit</p>')
+    result = _offer("Botox $10 per unit", html)
+    assert result.valid and result.needs_review and "stylesheet_unavailable" in result.reasons
+    styled = _html('<style>.old{display:none}</style><p>Botox $10 per unit</p><div class="old">Botox $8 per unit</div>')
+    shown = _offer("Botox $10 per unit\nBotox $8 per unit", styled)
+    assert shown.valid and not shown.needs_review and shown.evidence == ("Botox $10 per unit",)
 
 
 def test_implausible_amounts_are_ignored() -> None:
-    result = assess_offer_page("Call 555 for $1 off your first visit", _html("<p>Call 555 for $1 off</p>"))
+    result = _offer("Call 555 for $1 off your first visit", _html("<p>Call 555 for $1 off</p>"))
     assert not result.valid
 
 
@@ -84,29 +91,29 @@ def test_path_words_not_substrings() -> None:
 
 def test_compare_at_sale_price_is_a_discount() -> None:
     md = "Regular price ~$600.00 USD~ Sale price $420.00 USD"
-    result = assess_offer_page(md, _html("<p>Regular price <s>$600.00 USD</s> Sale price $420.00 USD</p>"))
+    result = _offer(md, _html("<p>Regular price <s>$600.00 USD</s> Sale price $420.00 USD</p>"))
     assert result.valid and result.kind == "promotion"
-    plain = assess_offer_page("Regular price $420.00 USD", _html("<p>Regular price $420.00 USD</p>"))
+    plain = _offer("Regular price $420.00 USD", _html("<p>Regular price $420.00 USD</p>"))
     assert not plain.valid  # a bare list price is not a discount
 
 
 def test_url_encoded_percent_is_not_a_discount() -> None:
     md = "[HydraFacial](https://spa.com/collections/hydrafacial%E2%84%A2)"
-    assert not assess_offer_page(md, _html("<p>x</p>")).valid
+    assert not _offer(md, _html("<p>x</p>")).valid
 
 
 def test_language_duplicates_and_zero_price_are_dropped() -> None:
     mapped = ["https://spa.com/pages/deals", "https://spa.com/es/pages/deals", "https://spa.com/es/pages/only-spanish-offers"]
     urls = [c["url"] for c in candidate_urls("https://spa.com", mapped, limit=10)]
     assert urls == ["https://spa.com/pages/deals", "https://spa.com/es/pages/only-spanish-offers"]
-    free = assess_offer_page("Regular price Sale price $0.00 USD", _html("<p>Regular price Sale price $0.00 USD</p>"))
+    free = _offer("Regular price Sale price $0.00 USD", _html("<p>Regular price Sale price $0.00 USD</p>"))
     assert not free.valid
 
 
 def test_free_consultation_is_not_a_price_discount() -> None:
     md = "Free Skincare Consultation with our wellness team. Book today!"
-    assert not assess_offer_page(md, _html("<p>Free Skincare Consultation with our wellness team</p>")).valid
-    bogo = assess_offer_page("Buy 2 syringes of filler, get 1 free", _html("<p>Buy 2 syringes of filler, get 1 free</p>"))
+    assert not _offer(md, _html("<p>Free Skincare Consultation with our wellness team</p>")).valid
+    bogo = _offer("Buy 2 syringes of filler, get 1 free", _html("<p>Buy 2 syringes of filler, get 1 free</p>"))
     assert bogo.valid
 
 
@@ -131,10 +138,10 @@ def test_hub_links_use_main_content_only() -> None:
 def test_hub_detection_needs_a_promo_page_without_price() -> None:
     from utils.promo_page_discovery import is_hub_page
 
-    empty = assess_offer_page("Our specials: see below", _html("<p>Our specials: see below</p>"))
+    empty = _offer("Our specials: see below", _html("<p>Our specials: see below</p>"))
     assert is_hub_page(empty, "promotion") and is_hub_page(empty, "membership")
     assert not is_hub_page(empty, "pricing")
-    priced = assess_offer_page("Botox $11 per unit", _html("<p>Botox $11 per unit</p>"))
+    priced = _offer("Botox $11 per unit", _html("<p>Botox $11 per unit</p>"))
     assert not is_hub_page(priced, "promotion")
 
 

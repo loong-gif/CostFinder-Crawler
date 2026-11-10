@@ -7,6 +7,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
+from utils.crawler_visibility_fetch import fetch_stylesheets
 from utils.discovery_search import BudgetExhausted
 from utils.ego_browser import ego_scrape
 from utils.firecrawl_client import SelfHostedFirecrawl, firecrawl_session
@@ -222,7 +223,8 @@ def discover_business(fc: Firecrawl, business: Dict[str, Any], known: Set[str], 
                                         "kind_hint": kind_hint, "sources": sources_of.get(url, []),
                                         "title": titles_of.get(url, ""), "error": str(exc)[:160]})
                 return None
-            assessment = assess_offer_page(page["markdown"], page["rawHtml"], kind_hint=kind_hint)
+            assessment = assess_offer_page(page["markdown"], page["rawHtml"], kind_hint=kind_hint, page_url=url,
+                                           stylesheets=fetch_stylesheets(url, page["rawHtml"]))
             result["pages"].append({
                 "url": url, "hop": hop, "via": via, "kind_hint": kind_hint, "kind": assessment.kind,
                 "sources": sources_of.get(url, []), "title": titles_of.get(url, ""),

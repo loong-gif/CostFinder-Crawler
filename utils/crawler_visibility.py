@@ -1,36 +1,36 @@
-"""Hidden-element filtering of crawler HTML, used to decide whether a browser render is needed.
+"""Visibility of crawler HTML computed from the page's own CSS, used to decide whether a browser render is needed.
 
-This is DOM/inline-style evidence, not a rendered layout: it cannot see CSS classes or JavaScript.
-``assess_page`` therefore returns ``needs_browser=True`` whenever the page might hide or inject
-content in ways this filter cannot judge, so the browser stays the fallback for those pages.
+The cascade of the hiding-relevant properties is resolved from the raw HTML and the fetched stylesheets for a
+1440px-wide screen at rest. ``assess_page`` returns ``needs_browser=True`` whenever a stylesheet, selector,
+condition or JavaScript-driven content leaves visibility undecided, so the browser stays the judge for those pages.
 """
 from __future__ import annotations
 
 import hashlib
 import re
 from dataclasses import dataclass
-from html.parser import HTMLParser
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
-                       "source", "track", "wbr"})
-ALWAYS_HIDDEN_TAGS = frozenset({"script", "style", "template", "noscript", "head", "title", "svg", "iframe",
-                                "object", "canvas", "select", "option"})
-HIDING_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*(hidden|collapse)|opacity\s*:\s*0(\.0+)?\s*(;|$)|"
-    r"font-size\s*:\s*0(px|em|rem|pt|%)?\s*(;|$)|"
-    r"(text-indent|left|right|top)\s*:\s*-\d{3,}px|clip\s*:\s*rect\(\s*0|clip-path\s*:\s*inset\(\s*50%|"
-    r"(?:^|;)\s*(max-)?(width|height)\s*:\s*0(px)?\s*(;|$)",
-    re.I,
+from bs4 import NavigableString
+
+from utils.crawler_visibility_cascade import Cascade
+from utils.crawler_visibility_rules import (
+    CONDITION_UNDECIDABLE, SELECTOR_UNDECIDABLE, STYLESHEET_UNAVAILABLE, RuleCollector,
 )
-SR_ONLY_CLASSES = frozenset({"sr-only", "screen-reader-text", "visually-hidden", "visuallyhidden", "a11y-hidden",
-                             "assistive-text", "screen-reader-only"})
-CSS_CONTROLLED_CLASSES = frozenset({"hidden", "hide", "d-none", "invisible", "collapse", "collapsed", "is-hidden",
-                                    "display-none", "u-hidden", "tw-hidden", "mobile-hidden", "desktop-hidden",
-                                    "hidden-xs", "hidden-sm", "hidden-md", "hidden-lg", "show-more", "read-more",
-                                    "accordion-content", "tab-pane", "modal", "popup", "dropdown-menu"})
+from utils.crawler_visibility_sheets import parse_document
+from utils.crawler_visibility_values import VALUE_UNDECIDABLE, Box, compute_boxes
+
+DESKTOP_WIDTH = 1440
 PROMO_IMAGE_HINT = re.compile(r"special|promo|offer|sale|deal|discount|off\b|%|\$\d|save|membership|package|"
                               r"banner|coupon|limited", re.I)
+# 轮播组件在加载时由 JavaScript 重排、克隆和隐藏幻灯片，层叠计算回答不了它们的静止状态
+JS_WIDGET_CLASS = re.compile(r"(?:^|[-_])(?:swiper|slick|carousel|splide|flickity|glide|owl)(?:$|[-_])", re.I)
+# 滚动动画库在加载后由 JavaScript 先隐藏、进入视口时再显示内容
+ANIMATION_ATTRIBUTES = frozenset({"data-aos", "data-animation", "data-animate", "data-sal", "data-wow-delay"})
+ANIMATION_CLASSES = frozenset({"wow", "animate__animated"})
+EMBEDDED_TAGS = ("iframe", "object", "embed", "canvas")
+CSS_UNCERTAIN_REASONS = frozenset({STYLESHEET_UNAVAILABLE, SELECTOR_UNDECIDABLE, CONDITION_UNDECIDABLE,
+                                   VALUE_UNDECIDABLE})
 MIN_VISIBLE_CHARS = 200
 
 
@@ -42,103 +42,73 @@ class PageAssessment:
     visible_digest: str
 
 
-class _VisibleTextParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.stack: List[Tuple[str, bool]] = []
-        self.chunks: List[str] = []
-        self.reasons: set[str] = set()
-        self.script_count = 0
-        self.closed_details: List[bool] = []
-
-    @property
-    def hidden(self) -> bool:
-        return any(flag for _, flag in self.stack)
-
-    def _is_hidden(self, tag: str, attrs: dict[str, str]) -> Tuple[bool, bool]:
-        """Return (hidden, css_uncertain)."""
-        if tag in ALWAYS_HIDDEN_TAGS:
-            return True, False
-        if "hidden" in attrs or attrs.get("aria-hidden", "").strip().lower() == "true":
-            return True, False
-        if tag == "input" and attrs.get("type", "").lower() == "hidden":
-            return True, False
-        if tag == "dialog" and "open" not in attrs:
-            return True, False
-        parent = self.stack[-1][0] if self.stack else ""
-        if parent == "details" and tag != "summary" and self.closed_details and self.closed_details[-1]:
-            return True, False  # body of a collapsed <details>; only its <summary> stays visible
-        if HIDING_STYLE.search(attrs.get("style", "")):
-            return True, False
-        classes = {c.lower() for c in attrs.get("class", "").split()}
-        if classes & SR_ONLY_CLASSES:
-            return True, False
-        return False, bool(classes & CSS_CONTROLLED_CLASSES)
-
-    def handle_starttag(self, tag: str, attrs_list) -> None:
-        attrs = {k.lower(): (v or "") for k, v in attrs_list}
-        if tag == "script":
-            self.script_count += 1
-        if tag in ("img", "source"):
-            hint = " ".join(attrs.get(k, "") for k in ("alt", "src", "srcset", "title"))
-            if not self.hidden and PROMO_IMAGE_HINT.search(hint):
-                self.reasons.add("image_promo_candidate")
-        if tag in VOID_TAGS:
-            return
-        hidden, uncertain = self._is_hidden(tag, attrs)
-        if tag == "summary" and any(t == "details" for t, _ in self.stack):
-            hidden = False  # the summary stays visible inside a closed <details>
-        if tag == "details":
-            self.closed_details.append("open" not in attrs)
-        self.stack.append((tag, hidden))
-        if uncertain and not self.hidden:
-            self.reasons.add("css_class_hiding_possible")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "details" and self.closed_details:
-            self.closed_details.pop()
-        for index in range(len(self.stack) - 1, -1, -1):
-            if self.stack[index][0] == tag:
-                del self.stack[index:]
-                break
-
-    def handle_data(self, data: str) -> None:
-        if not self.hidden and data.strip():
-            self.chunks.append(data)
+def _visible_text(soup, boxes: Dict[int, Box]) -> str:
+    chunks: List[str] = []
+    for node in soup.descendants:
+        if type(node) is not NavigableString or not node.strip():
+            continue
+        box = boxes.get(id(node.parent))
+        if box and not (box.hidden or box.text_hidden or box.textless or box.details_closed):
+            chunks.append(str(node))
+    return re.sub(r"\s+", " ", " ".join(chunks)).strip()
 
 
-def visible_text_from_html(html: str) -> Tuple[str, set[str], int]:
-    """Return (visible text, uncertainty reasons, script count) for crawler HTML."""
-    parser = _VisibleTextParser()
-    parser.feed(html or "")
-    parser.close()
-    text = re.sub(r"\s+", " ", " ".join(parser.chunks)).strip()
-    return text, parser.reasons, parser.script_count
+def _markup_reasons(elements: List, boxes: Dict[int, Box]) -> Set[str]:
+    reasons: Set[str] = set()
+    for element in elements:
+        box = boxes[id(element)]
+        if box.hidden:
+            continue
+        if element.name in ("img", "source"):
+            hint = " ".join(str(element.get(k, "")) for k in ("alt", "src", "srcset", "title"))
+            if PROMO_IMAGE_HINT.search(hint):
+                reasons.add("image_promo_candidate")
+        elif element.name in EMBEDDED_TAGS:
+            reasons.add("embedded_content")
+        classes = element.get("class", [])
+        if any(JS_WIDGET_CLASS.search(name) for name in classes):
+            reasons.add("js_widget_state")
+        animated = any(str(element.get(name, "none")).strip().lower() not in ("none", "") for name in ANIMATION_ATTRIBUTES)
+        if animated or ANIMATION_CLASSES & set(classes):
+            reasons.add("js_animation")
+    return reasons
 
 
 def _numeric_tokens(fact: str) -> List[str]:
     return re.findall(r"\d+(?:[.,]\d+)*", str(fact))
 
 
-def assess_page(markdown: str, raw_html: str | None, facts: Iterable[str] = ()) -> PageAssessment:
-    """Decide whether crawler evidence is enough or the page must go to the browser."""
-    reasons: set[str] = set()
+def assess_page(markdown: str, raw_html: Optional[str], facts: Iterable[str] = (), *, page_url: str,
+                stylesheets: Mapping[str, Optional[str]], width: float = DESKTOP_WIDTH) -> PageAssessment:
+    """Decide whether crawler evidence is enough or the page must go to the browser.
+
+    ``stylesheets`` maps absolute stylesheet URLs to their text (``None`` when unavailable), as returned by
+    ``utils.crawler_visibility_fetch.fetch_stylesheets``.
+    """
+    reasons: Set[str] = set()
     if not (markdown or "").strip():
         reasons.add("empty_markdown")
     if not (raw_html or "").strip():
         reasons.add("no_html")
         return PageAssessment(True, tuple(sorted(reasons)), "", "")
-    text, uncertain, scripts = visible_text_from_html(raw_html)
-    reasons |= uncertain
+    soup = parse_document(raw_html)
+    collector = RuleCollector(stylesheets, width)
+    cascade = Cascade(soup, collector.collect(soup, page_url))
+    boxes, value_reasons = compute_boxes(cascade)
+    text = _visible_text(soup, boxes)
+    reasons |= (collector.reasons | cascade.reasons | value_reasons | _markup_reasons(cascade.index.elements, boxes)
+                | _text_reasons(text, len(soup.find_all("script")), facts))
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
+    return PageAssessment(bool(reasons), tuple(sorted(reasons)), text, digest)
+
+
+def _text_reasons(text: str, scripts: int, facts: Iterable[str]) -> Set[str]:
+    reasons: Set[str] = set()
     if len(text) < MIN_VISIBLE_CHARS:
         reasons.add("thin_visible_text")
     if scripts >= 8 and len(text) < 2000:
         reasons.add("script_heavy_page")
     lowered = text.casefold()
-    for fact in facts:
-        tokens = _numeric_tokens(fact)
-        if tokens and not all(token in lowered for token in tokens):
-            reasons.add("claim_not_in_visible_text")
-            break
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest() if text else ""
-    return PageAssessment(bool(reasons), tuple(sorted(reasons)), text, digest)
+    if any((tokens := _numeric_tokens(fact)) and not all(token in lowered for token in tokens) for fact in facts):
+        reasons.add("claim_not_in_visible_text")
+    return reasons

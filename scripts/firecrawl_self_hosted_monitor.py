@@ -160,6 +160,7 @@ def reusable_render(url: str, page: Any, previous: dict[str, Any], state_dir: Pa
     (new/changed page, empty or suspicious content, old render) is rendered in the browser.
     """
     from utils.crawler_visibility import assess_page
+    from utils.crawler_visibility_fetch import fetch_stylesheets
 
     payload = page.response or {}
     raw_html = ((payload.get("data") or {}).get("rawHtml") if isinstance(payload, dict) else None) or ""
@@ -173,7 +174,8 @@ def reusable_render(url: str, page: Any, previous: dict[str, Any], state_dir: Pa
         return None
     if age_days > int(os.getenv("MONITOR_RENDER_MAX_AGE_DAYS", "14")):
         return None
-    assessment = assess_page(page.markdown, raw_html, facts=page.facts)
+    assessment = assess_page(page.markdown, raw_html, facts=page.facts, page_url=url,
+                             stylesheets=fetch_stylesheets(url, raw_html))
     if assessment.needs_browser:
         return None
     evidence_path = state_dir / "evidence" / (str(previous["artifact_id"]) + ".json")

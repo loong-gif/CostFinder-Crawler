@@ -98,8 +98,8 @@ python scripts/promo_pipeline.py discover-pages --city "Newport Beach" --limit 1
 3. 抓取候选页（markdown + rawHtml）并校验，**只有出现真实折扣或价格才算有效**：
    百分比折扣、金额折扣、买赠、划线原价/现价、起价/单价、月费，金额范围 5–20000 美元；
    `$0`、"Free consultation"、URL 里的 `%E2%84` 不算。
-4. 证据行的数字必须出现在隐藏元素过滤后的可见文本里（`utils/crawler_visibility.py`）；
-   依赖 CSS 类隐藏、文本过少或脚本过重的页面标 `needs_review`，不直接算有效。
+4. 证据行的数字必须出现在按页面 HTML 与 CSS 计算出的可见文本里（`utils/crawler_visibility.py`）；
+   样式表取不到、CSS 无法判定、文本过少或脚本过重的页面标 `needs_review`，不直接算有效。
 
 输出每页的 `status`：`valid` / `needs_review` / `rejected` / `scrape_failed`，
 附 `kind`（promotion / membership / pricing）和证据行。不会自动写入监控列表或数据库。
