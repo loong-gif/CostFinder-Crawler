@@ -5,6 +5,7 @@ from pathlib import Path
 
 from utils.monitor_price_store import atomic_json, read_json
 from utils.monitor_price_writer_plan import normalize_source_url
+from utils.monitor_visibility_evidence import CRAWLER_SOURCE, visibility_source
 
 
 def reviewed_browser(root: Path, artifact: dict, directory: Path) -> dict | None:
@@ -31,10 +32,19 @@ def reviewed_browser(root: Path, artifact: dict, directory: Path) -> dict | None
     return None
 
 
+def captured_visibility(artifact: dict) -> dict | None:
+    """抓取阶段保存的可见性证据：渲染结果文件，或存在抓取证据里的爬虫证据。"""
+    rendered = artifact.get("rendered", {})
+    if rendered.get("browser_path"):
+        return read_json(Path(rendered["browser_path"]), {}) or None
+    if visibility_source(rendered.get("browser", {})) == CRAWLER_SOURCE:
+        return rendered["browser"]
+    return None
+
+
 def stored_browser(root: Path, artifact: dict, artifact_path: str, directory: Path) -> dict | None:
-    """抓取时保存的渲染结果；没有时复用对同一次抓取做过的 Ego Lite 核验（截图仍在才算），保留原始时间。"""
-    rendered_path = artifact.get("rendered", {}).get("browser_path")
-    browser = read_json(Path(rendered_path), {}) if rendered_path else None
+    """抓取时保存的可见性证据；没有时复用对同一次抓取做过的 Ego Lite 核验（截图仍在才算），保留原始时间。"""
+    browser = captured_visibility(artifact)
     if browser:
         return browser
     verified = reviewed_browser(root, artifact, directory)

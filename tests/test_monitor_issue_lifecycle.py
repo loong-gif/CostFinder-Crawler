@@ -8,7 +8,8 @@ from utils.monitor_event_queue import (
     enqueue_expired_campaign_checks,
     expired_active_promotion_urls,
 )
-from utils.monitor_price_extract import extract_evidence, visible_variant_offers
+from utils.monitor_offer_tiers import visible_variant_offers
+from utils.monitor_price_extract import extract_evidence
 from utils.monitor_price_plan import build_plan
 from utils.monitor_price_store import atomic_json, now
 from utils.monitor_rendered_browser import BREAKPOINTS, combine_breakpoint_reports, render_page

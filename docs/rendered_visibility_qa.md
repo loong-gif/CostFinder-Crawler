@@ -110,24 +110,30 @@ When a claim is not in the visible text, the command proceeds automatically:
 
 The final gate is evaluated against the current database, not the original scrape report. The 2026-09-18 run produced `outputs/final_visibility_gate_audit_20260918.json`: 160 active Promotions, 1,444 active claims, 160 verified records, 0 unmatched claims, and 0 active Offers attached to inactive Promotions. Active Offers attached to empty active Promotions are also rejected; the final run deactivated 51 such Offers.
 
-## 爬虫优先复用渲染（可选，默认关闭）
+## 监控中的爬虫可见性证据
 
-`MONITOR_RENDER_MODE=crawler_first` 时，监控只在满足以下**全部**条件时复用上一次真实浏览器渲染，而不重新渲染：
+Firecrawl 监控（`scripts/firecrawl_self_hosted_monitor.py`）每次抓取都请求 `markdown` 与 `rawHtml`。抓取成功的页面
+由 `utils/monitor_page_visibility.page_visibility` 决定证据来源：
 
-1. 本次爬虫 Markdown 的摘要与上次真实渲染时的 `content_digest` 相同；
-2. 爬虫 `rawHtml` 连同页面样式表（`utils/crawler_visibility_fetch.fetch_stylesheets` 抓取 `<link>`、`<style>`
-   与递归 `@import`）经 `utils/crawler_visibility.assess_page` 按 1440 宽桌面屏幕的层叠规则计算可见性后，
-   判定无需浏览器：正文不为空、可见文本不少于 200 字符、样式表都已取得、选择器与条件规则都能判定、
-   没有轮播与滚动动画、内嵌框架或疑似促销图片、每条价格事实的数字都出现在可见文本中；
-3. 上一次真实渲染距今不超过 `MONITOR_RENDER_MAX_AGE_DAYS`（默认 14 天），且当时可访问并有视觉摘要。
+1. 先排除爬虫结果本身不能作为证据的页面，直接交给 ego-lite 渲染：抓取失败（`scrape_failed`）；状态码不是 2xx，
+   包括 404/410 下架页与 Firecrawl 取不到正文时由 ego-lite 兜底抓取的结果（`crawl_status_not_ok`）；路径含
+   `/products/` 或 `/collections/` 的商品页，规格选项只能在浏览器里逐个截图（`product_variants_require_browser`）。
+2. 其余页面的 `rawHtml` 连同页面样式表（`utils/crawler_visibility_fetch.fetch_stylesheets` 抓取 `<link>`、`<style>`
+   与递归 `@import`）经 `utils/crawler_visibility.assess_page` 按渲染宽度 1440 的层叠规则计算可见性。判定完全可见
+   （正文不为空、可见文本不少于 200 字符、样式表都已取得、选择器与条件规则都能判定、没有轮播与滚动动画、
+   内嵌框架或疑似促销图片、每条价格事实的数字都出现在可见文本中）时，页面只用爬虫内容处理：不渲染、不截图。
+3. 其他页面由 ego-lite 渲染一次（一张整页截图），运行报告记录爬虫判定不了的原因（`crawler_reasons`）。
 
-新页面、内容变化、空内容、可疑内容、超过期限的页面仍然进浏览器。复用的证据保留原始渲染的时间戳和摘要，
-并标记 `visibility_source: crawler_html_filtered`；不会改写 `browser.json`。
+爬虫证据由 `utils/monitor_visibility_evidence.CrawlerVisibility` 生成，存于抓取证据的 `rendered.browser`：
+`visibility_source: crawler_html_filtered`、请求地址与最终地址、HTTP 状态、页面标题、过滤后的可见文本、
+可见文本摘要（`context_digest`）、抓取时间（`captured_at`），以及 `accessible`、`complete` 为真、
+`image_review_required` 为假。它没有截图、图块、逐宽度覆盖和商品选项截图；`visibility_source` 读取证据时检查这一点，
+爬虫证据带有任何浏览器内容或图片审查时抛出异常。渲染证据的来源为 `browser_render`（未标记的旧证据与人工核验同属此类）。
 
-**注意：** 可见性按 HTML 与 CSS 的层叠计算，不计算布局；依赖 JavaScript 的内容（轮播、滚动动画、脚本注入）
-以及样式表取不到、选择器或条件规则无法判定的页面进浏览器。
-该模式把"当前可见性证据"放宽为"内容未变 + 过滤干净 + 近期真实渲染"，与 `AGENTS.md` 中
-"之后的抓取需要当前的可见性证据"的字面要求有张力，启用前需要先确认并同步修改该条规则。
+事件处理与写入门禁对两种证据一视同仁：爬虫证据的处理与计划和一次成功渲染的纯文字页面相同，
+覆盖检查（`coverage_complete`）把爬虫证据当作唯一渲染宽度的完整覆盖。证据超过 24 小时、数据库要求 OCR
+（`is_ocr_required`）或待重试原因属于图片截取时，事件处理照常改由 ego-lite 渲染。
+可见性按 HTML 与 CSS 的层叠计算，不计算布局；依赖 JavaScript 的内容交给浏览器。
 
 另外，`run_data_quality_audit.py --recheck` 现在有运行时间预算（`--max-seconds`，默认 1800，
 环境变量 `DATA_QUALITY_RECHECK_MAX_SECONDS`，`0` 为不限）；超出后停止开始新的渲染，未处理的条目

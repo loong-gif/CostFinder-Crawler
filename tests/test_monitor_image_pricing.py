@@ -135,7 +135,7 @@ def test_same_service_two_fixed_bundles_preserve_the_unique_quantity_offer_id():
 
 
 def test_claim_format_normalization_keeps_decimal_currency_and_percentage_roles():
-    from utils.monitor_price_extract import _visible_key
+    from utils.monitor_offer_tiers import _visible_key
     assert _visible_key('$1,950 .55cc')==_visible_key('$1950 0.55cc')
     assert _visible_key('$12/unit')!=_visible_key('$1.2/unit')
     assert _visible_key('10% off')!=_visible_key('$10 off')

@@ -78,7 +78,7 @@ def test_monitor_scrapes_with_fast_mode_only(monkeypatch) -> None:
     monitor, captured = _monitor(monkeypatch, _Response(200, {"success": True, "data": {
         "markdown": "price $12", "metadata": {"statusCode": 200}}}), rendered)
     assert monitor.scrape("https://example.com") == "price $12"
-    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown"], "onlyMainContent": True,
+    assert captured["json"] == {"url": "https://example.com", "formats": ["markdown", "rawHtml"], "onlyMainContent": True,
                                 "excludeTags": ["nav", "footer", "script", "style", "noscript"], "fastMode": True}
     assert rendered == []
 
@@ -88,12 +88,14 @@ def test_monitor_renders_with_ego_when_fast_mode_has_no_content(monkeypatch) -> 
         _Response(408, {"success": False, "code": "SCRAPE_TIMEOUT"}),
         _Response(200, {"success": True, "data": {"markdown": CLOUDFLARE_BLOCK, "metadata": {"statusCode": 403}}}),
         _Response(200, {"success": True, "data": {"markdown": "  ", "metadata": {"statusCode": 200}}}),
+        # Firecrawl 自身出错时，响应里残留的 data 不是页面正文
+        _Response(500, {"success": False, "data": {"markdown": "Botox $12 per unit", "metadata": {"statusCode": 200}}}),
     ]
     for response in cases:
         rendered: list[str] = []
         monitor, _ = _monitor(monkeypatch, response, rendered)
         payload = monitor.scrape_document("https://www.laseraway.com/promotions/")
-        assert payload["data"]["metadata"]["engine"] == "ego"
+        assert payload["success"] is True and payload["data"]["metadata"]["engine"] == "ego"
         assert response_markdown(payload) == "# Promotions\n\nBotox $10 per unit"
         assert rendered == ["https://www.laseraway.com/promotions/"]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import time
 import uuid
@@ -14,11 +15,17 @@ import pytest
 class CssSite:
     """本机 http.server 提供的真实页面与样式表；每个测试使用独立路径前缀，避免进程内样式表缓存互相影响。"""
 
-    def __init__(self, base: str, files: dict, hits: Counter) -> None:
+    def __init__(self, base: str, files: dict, hits: Counter, posts: dict) -> None:
         self.prefix = f"/{uuid.uuid4().hex}"
         self.base = base
         self.files = files
         self.hits = hits
+        self.posts = posts
+
+    def serve_json(self, path: str, respond) -> str:
+        """POST 接口：respond(请求体 JSON) 返回 (状态码, 响应 JSON)。"""
+        self.posts[f"{self.prefix}/{path}"] = respond
+        return self.url(path)
 
     def url(self, path: str) -> str:
         return f"{self.base}{self.prefix}/{path}"
@@ -52,8 +59,18 @@ class CssSite:
 def _css_server():
     files: dict = {}
     hits: Counter = Counter()
+    posts: dict = {}
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            status, payload = posts[self.path](json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):  # noqa: N802
             hits[self.path] += 1
             entry = files.get(self.path, (404, "text/plain", b"missing"))
@@ -76,7 +93,7 @@ def _css_server():
     # 回环地址同样可达，用来证明被安全检查拒绝的地址确实没有被请求
     server = ThreadingHTTPServer(("0.0.0.0", 0), Handler)
     Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://{socket.gethostname()}:{server.server_address[1]}", files, hits
+    yield f"http://{socket.gethostname()}:{server.server_address[1]}", files, hits, posts
     server.shutdown()
 
 
@@ -86,5 +103,5 @@ def css_site(_css_server, monkeypatch) -> CssSite:
     no_proxy = f"127.0.0.1,localhost,{socket.gethostname()}"
     monkeypatch.setenv("NO_PROXY", no_proxy)
     monkeypatch.setenv("no_proxy", no_proxy)
-    base, files, hits = _css_server
-    return CssSite(base, files, hits)
+    base, files, hits, posts = _css_server
+    return CssSite(base, files, hits, posts)

@@ -9,7 +9,6 @@ notifications are explicitly enabled.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -30,7 +29,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from utils.ego_browser import BrowserScrapeFailed, ego_scrape
 from utils.firecrawl_client import fetched_content, page_gone
 from utils.service_endpoints import FIRECRAWL_URL
-from utils.monitor_price_store import atomic_json, digest, run_lock
+from utils.monitor_capture_record import compare_facts, monitor_report, record_page
+from utils.monitor_page_visibility import page_visibility
+from utils.monitor_price_store import atomic_json, run_lock
+from utils.monitor_rendered_checks import confirmed_not_found
 DEFAULT_STATE_DIR = PROJECT_ROOT / "output" / "self_hosted_monitor_state"
 
 PRICE_LINE_RE = re.compile(
@@ -54,6 +56,7 @@ class PageResult:
     markdown: str = ""
     response: dict[str, Any] | None = None
     failed_attempts: tuple[dict[str, Any], ...] = ()
+    captured_at: str = ""
 
 
 class ScrapeFailure(RuntimeError):
@@ -82,12 +85,6 @@ def extract_price_facts(markdown: str) -> tuple[str, ...]:
     return tuple(sorted(facts))
 
 
-def compare_facts(previous: Iterable[str], current: Iterable[str]) -> dict[str, list[str]]:
-    old = set(previous)
-    new = set(current)
-    return {"added": sorted(new - old), "removed": sorted(old - new)}
-
-
 def response_markdown(payload: dict[str, Any]) -> str:
     data = payload.get("data") if isinstance(payload, dict) else None
     body = data if isinstance(data, dict) else payload
@@ -96,6 +93,15 @@ def response_markdown(payload: dict[str, Any]) -> str:
 
 def safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "monitor"
+
+
+def fast_mode_result(response: requests.Response) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """fastMode 的响应体与其中的 data；响应不是 JSON 时保存状态码和正文开头。"""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {"http_status": response.status_code, "body": response.text[:2000]}
+    return payload, payload.get("data") if response.ok and isinstance(payload.get("data"), dict) else None
 
 
 class SelfHostedMonitor:
@@ -117,18 +123,14 @@ class SelfHostedMonitor:
             headers=self.headers,
             json={
                 "url": url,
-                "formats": ["markdown", "rawHtml"] if crawler_first_enabled() else ["markdown"],
+                "formats": ["markdown", "rawHtml"],
                 "onlyMainContent": True,
                 "excludeTags": ["nav", "footer", "script", "style", "noscript"],
                 "fastMode": True,
             },
             timeout=self.timeout,
         )
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {"http_status": response.status_code, "body": response.text[:2000]}
-        data = payload.get("data") if response.ok and isinstance(payload.get("data"), dict) else None
+        payload, data = fast_mode_result(response)
         if data is not None and page_gone(data):
             if not response_markdown(payload).strip():
                 raise ScrapeFailure("firecrawl_empty_markdown", payload)
@@ -144,50 +146,6 @@ class SelfHostedMonitor:
 
     def scrape(self, url: str) -> str:
         return response_markdown(self.scrape_document(url))
-
-
-def crawler_first_enabled() -> bool:
-    """Opt-in: reuse an earlier real render when crawler content is unchanged and cleanly visible."""
-    return os.getenv("MONITOR_RENDER_MODE", "always").strip().lower() == "crawler_first"
-
-
-def reusable_render(url: str, page: Any, previous: dict[str, Any], state_dir: Path, now_ts: str) -> dict[str, Any] | None:
-    """Return the previous rendered evidence when this capture needs no new browser render.
-
-    Reuse requires: crawler content identical to the last rendered capture, the filtered crawler
-    HTML assessed as cleanly visible (``assess_page`` finds no reason to need a browser), and the
-    last real render younger than ``MONITOR_RENDER_MAX_AGE_DAYS`` (default 14). Anything else
-    (new/changed page, empty or suspicious content, old render) is rendered in the browser.
-    """
-    from utils.crawler_visibility import assess_page
-    from utils.crawler_visibility_fetch import fetch_stylesheets
-
-    payload = page.response or {}
-    raw_html = ((payload.get("data") or {}).get("rawHtml") if isinstance(payload, dict) else None) or ""
-    if page.status == "error" or not previous.get("artifact_id") or not previous.get("rendered_at"):
-        return None
-    if previous.get("content_digest") != digest(page.markdown):
-        return None
-    try:
-        age_days = (datetime.fromisoformat(now_ts) - datetime.fromisoformat(previous["rendered_at"])).days
-    except (TypeError, ValueError):
-        return None
-    if age_days > int(os.getenv("MONITOR_RENDER_MAX_AGE_DAYS", "14")):
-        return None
-    assessment = assess_page(page.markdown, raw_html, facts=page.facts, page_url=url,
-                             stylesheets=fetch_stylesheets(url, raw_html))
-    if assessment.needs_browser:
-        return None
-    evidence_path = state_dir / "evidence" / (str(previous["artifact_id"]) + ".json")
-    try:
-        rendered = json.loads(evidence_path.read_text(encoding="utf-8")).get("rendered") or {}
-    except (OSError, ValueError):
-        return None
-    browser = rendered.get("browser") or {}
-    if not browser.get("accessible") or not browser.get("visual_digest"):
-        return None
-    return {**rendered, "reused_from_artifact": previous["artifact_id"], "reused_at": now_ts,
-            "visibility_source": "crawler_html_filtered", "crawler_visible_digest": assessment.visible_digest}
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -225,7 +183,7 @@ def build_page_results(
                 facts = extract_price_facts(markdown)
                 status = "new" if not previous else ("changed" if tuple(previous.get("facts", [])) != facts else "same")
                 return PageResult(url=url, status=status, facts=facts, markdown=markdown, response=payload,
-                                  failed_attempts=tuple(failed_attempts))
+                                  failed_attempts=tuple(failed_attempts), captured_at=utc_now())
             except Exception as exc:  # one bad page must not stop the batch
                 last_error = str(exc)[:500]
                 if isinstance(exc, requests.RequestException):
@@ -304,49 +262,14 @@ def run_monitor(
     browser_cache: dict | None = None,
 ) -> dict[str, Any]:
     definition = config["monitors"][name]
-    urls = [url for target in definition.get("targets", []) for url in target.get("urls", [])]
-    if urls_filter is not None:
-        urls = [url for url in urls if url in urls_filter]
-    urls = urls[:limit] if limit else urls
+    urls = monitor_urls(definition, urls_filter, limit)
     state_path = state_dir / f"{safe_name(name)}.json"
     old_state = load_state(state_path)
     old_pages = (old_state or {}).get("pages", {})
-    browser_results = {}
     monitor = SelfHostedMonitor(api_url, api_key, timeout)
-    if scan_images:
-        from utils.monitor_rendered_browser import render_page
-        from utils.monitor_rendered_checks import confirmed_not_found
-        cache = browser_cache if browser_cache is not None else {}
-        def capture_one(url):
-            page=build_page_results(monitor,[url],old_pages,workers=1)[0]
-            reuse = reusable_render(url, page, old_pages.get(url) or {}, state_dir, utc_now()) if crawler_first_enabled() else None
-            if crawler_first_enabled() and isinstance(page.response, dict) and isinstance(page.response.get("data"), dict):
-                page.response["data"].pop("rawHtml", None)  # assessed above; keep evidence files small
-            if reuse is not None:
-                result = reuse
-                cache[url] = result
-            elif url in cache:
-                result=cache[url]
-            else:
-                directory=state_dir / "rendered" / uuid4().hex
-                try:
-                    browser=render_page(url,directory)
-                    result={"browser":browser,"browser_path":str(directory / "browser.json")}
-                except Exception as exc:
-                    result={"error":type(exc).__name__,"browser_path":str(directory / "browser.json")}
-                    atomic_json(directory / "capture_failure.json",result)
-                cache[url]=result
-            browser=result.get("browser",{})
-            if page.status=="error" and (browser.get("accessible") or confirmed_not_found(browser)):
-                text=browser.get("text", "")
-                page=replace(page,status="new",error=None,markdown=text,facts=extract_price_facts(text))
-            return page,result
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            captured=list(executor.map(capture_one,urls))
-        pages=[page for page,_ in captured]
-        browser_results={page.url:result for page,result in captured}
-    else:
-        pages=build_page_results(monitor,urls,old_pages,workers=workers)
+    # 不核验可见性的监控组（会员页）只抓取，browser_results 为 None
+    pages, browser_results = (capture_visible_pages(monitor, urls, old_pages, state_dir, browser_cache) if scan_images
+                              else (build_page_results(monitor, urls, old_pages, workers=workers), None))
     # Each successfully captured page establishes its own baseline. A failing
     # sibling must not suppress future changes on pages already captured.
     baseline = old_state is None
@@ -354,94 +277,70 @@ def run_monitor(
         name,
         pages,
         baseline=baseline,
-        baseline_complete=len(pages) == len(urls) and all(page.status != "error" for page in pages),
+        baseline_complete=len(pages) == len(urls) and "error" not in {page.status for page in pages},
         old_pages=old_pages,
     )
     events = build_events(name, pages, old_pages, baseline=baseline and not catchup)
     state_dir.mkdir(parents=True, exist_ok=True)
-    event_by_url = {event["url"]: event for event in events}
-    for page in pages:
-        if page.failed_attempts:
-            captured_at = utc_now()
-            atomic_json(state_dir / "failed_evidence" / (uuid4().hex+".json"),
-                        {"url":page.url,"captured_at":captured_at,"error":page.error,
-                         "failed_attempts":list(page.failed_attempts)})
-        if page.status == "error":
-            continue
-        rendered = browser_results.get(page.url,{})
-        browser = rendered.get("browser",{})
-        previous = old_pages.get(page.url) or {}
-        # Full markdown also detects changed dates, qualification, and removal
-        # of image links, which price-line comparison alone cannot establish.
-        content_digest = digest(page.markdown)
-        # Keep each raw response even when rendered Markdown is unchanged.
-        artifact_id = uuid4().hex
-        artifact_path = state_dir / "evidence" / (artifact_id + ".json")
-        atomic_json(artifact_path, {"url": page.url, "captured_at": utc_now(),
-                    "markdown": page.markdown, "raw_response": page.response,
-                    "failed_attempts":list(page.failed_attempts),"facts": list(page.facts),
-                    "rendered":rendered,"browser_fallback":bool(page.failed_attempts and browser.get("accessible"))})
-        snapshot["pages"][page.url].update(content_digest=content_digest, artifact_id=artifact_id)
-        if browser.get("accessible"):
-            snapshot["pages"][page.url].update(visual_digest=browser.get("visual_digest"),context_digest=browser.get("context_digest"))
-            if rendered.get("reused_from_artifact"):
-                snapshot["pages"][page.url]["rendered_at"] = previous.get("rendered_at")
-            else:
-                snapshot["pages"][page.url]["rendered_at"] = utc_now()
-        if previous.get("revision"):
-            snapshot["pages"][page.url]["revision"] = previous["revision"]
-        event = event_by_url.get(page.url)
-        if catchup and not previous.get("sync_enqueued"):
-            event = {"monitor_name": name, "url": page.url, "status": "catchup",
-                     "price_diff": compare_facts(previous.get("facts", []), page.facts)}
-        elif previous.get("content_digest") and previous["content_digest"] != content_digest:
-            event = event or {"monitor_name": name, "url": page.url, "status": "content_changed",
-                             "price_diff": compare_facts(previous.get("facts", []), page.facts)}
-        if (scan_images and browser.get("accessible") and
-            (browser.get("visual_digest") != previous.get("visual_digest") or
-             browser.get("context_digest") != previous.get("context_digest"))):
-            event = event or {"monitor_name":name,"url":page.url,"status":"visible_content_changed",
-                             "price_diff":compare_facts(previous.get("facts", []),page.facts)}
-        if scan_images and not browser.get("accessible") and not event:
-            # Text events remain independent; missing visual proof is retried per page.
-            event={"monitor_name":name,"url":page.url,"status":"browser_capture_required","price_diff":{}}
-        if event:
-            event_id = digest([name, page.url, previous.get("revision", previous.get("artifact_id")), artifact_id])
-            event_path = state_dir / "events" / (event_id + ".json")
-            if not event_path.exists():
-                atomic_json(event_path, {**event, "event_id": event_id, "status": "pending",
-                            "change_type": event["status"], "created_at": utc_now(),
-                            "artifact_id": artifact_id, "artifact_path": str(artifact_path)})
-            snapshot["pages"][page.url]["sync_enqueued"] = True
-            snapshot["pages"][page.url]["revision"] = event_id
-        elif previous.get("sync_enqueued"):
-            snapshot["pages"][page.url]["sync_enqueued"] = True
+    record_pages(name, pages, browser_results, old_pages, snapshot, events, state_dir, catchup=catchup)
     # Durable evidence + pending event must precede advancing the page snapshot.
     atomic_json(state_path, snapshot)
+    notified = notify(definition, events, send_notifications, timeout)
+    return monitor_report(name, baseline, pages, events, notified, browser_results or {}, state_path)
+
+
+def monitor_urls(definition: dict[str, Any], urls_filter: set[str] | None, limit: int | None) -> list[str]:
+    urls = [url for target in definition.get("targets", []) for url in target.get("urls", [])]
+    if urls_filter is not None:
+        urls = [url for url in urls if url in urls_filter]
+    return urls[:limit] if limit else urls
+
+
+def record_pages(name: str, pages: list[PageResult], browser_results: dict[str, dict] | None,
+                 old_pages: dict[str, Any], snapshot: dict[str, Any], events: list[dict[str, Any]], state_dir: Path,
+                 *, catchup: bool) -> None:
+    event_by_url = {event["url"]: event for event in events}
+    for page in pages:
+        record_failed_attempts(page, state_dir)
+        if page.status != "error":
+            rendered = None if browser_results is None else browser_results[page.url]
+            record_page(name, page, rendered, old_pages.get(page.url) or {}, snapshot["pages"][page.url],
+                        state_dir, event_by_url.get(page.url), catchup=catchup)
+
+
+def record_failed_attempts(page: PageResult, state_dir: Path) -> None:
+    if page.failed_attempts:
+        atomic_json(state_dir / "failed_evidence" / (uuid4().hex+".json"),
+                    {"url":page.url,"captured_at":utc_now(),"error":page.error,
+                     "failed_attempts":list(page.failed_attempts)})
+
+
+def notify(definition: dict[str, Any], events: list[dict[str, Any]], send_notifications: bool, timeout: float) -> bool:
     webhook = ((definition.get("webhook") or {}).get("url") or "").strip()
-    notified = False
-    if send_notifications and webhook and events:
+    notified = bool(send_notifications and webhook and events)
+    if notified:
         post_webhook(webhook, {"source": "costfinder_self_hosted_monitor", "events": events}, timeout)
-        notified = True
-    return {
-        "monitor_name": name,
-        "baseline": baseline,
-        "total_pages": len(pages),
-        "same": sum(page.status == "same" for page in pages),
-        "new": sum(page.status == "new" for page in pages),
-        "changed": sum(page.status == "changed" for page in pages),
-        "error": sum(page.status == "error" for page in pages),
-        "meaningful_events": len(events),
-        "webhook_notified": notified,
-        "page_errors": [{"url": page.url, "error": page.error} for page in pages if page.status == "error"],
-        "successful_urls": [page.url for page in pages if page.status != "error"],
-        "changed_urls": [page.url for page in pages if page.status == "changed"],
-        "browser_coverage": [{"url":url,"accessible":row.get("browser",{}).get("accessible",False),
-            "complete":row.get("browser",{}).get("complete",False),"http_status":row.get("browser",{}).get("http_status"),
-            "image_review_required":row.get("browser",{}).get("image_review_required"),"browser_path":row["browser_path"],
-            "error":row.get("error")} for url,row in browser_results.items()],
-        "state_path": str(state_path),
-    }
+    return notified
+
+
+def capture_visible_pages(monitor: SelfHostedMonitor, urls: list[str], old_pages: dict[str, Any], state_dir: Path,
+                          cache: dict | None) -> tuple[list[PageResult], dict[str, dict]]:
+    """逐页抓取并取得可见性证据；抓取失败而渲染可访问（或确认 404）的页面改用渲染出的文字。
+
+    cache 由同一轮运行的各监控组共用，同一地址只判定一次。
+    """
+    cache = {} if cache is None else cache
+    def capture_one(url):
+        page = build_page_results(monitor, [url], old_pages, workers=1)[0]
+        result = page_visibility(url, page, state_dir, cache)
+        browser = result.get("browser", {})
+        if page.status == "error" and (browser.get("accessible") or confirmed_not_found(browser)):
+            text = browser.get("text", "")
+            page = replace(page, status="new", error=None, markdown=text, facts=extract_price_facts(text))
+        return page, result
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        captured = list(executor.map(capture_one, urls))
+    return [page for page, _ in captured], {page.url: result for page, result in captured}
 
 
 def parse_args() -> argparse.Namespace:

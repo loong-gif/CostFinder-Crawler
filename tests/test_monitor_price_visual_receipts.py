@@ -2,7 +2,8 @@ from copy import deepcopy
 
 from utils.monitor_price_store import atomic_json
 from utils.monitor_price_visual_receipts import reviewed_browser
-from utils.monitor_price_extract import _visible_key, extract_evidence
+from utils.monitor_offer_tiers import _visible_key
+from utils.monitor_price_extract import extract_evidence
 
 SERVICE_NAMES = ["Botox", "Dermal Filler", "Others"]
 

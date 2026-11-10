@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from utils.monitor_price_extract import merge_member_tiers, merge_new_customer_tiers, visible_variant_offers
+from utils.monitor_offer_tiers import merge_member_tiers, merge_new_customer_tiers, visible_variant_offers
 
 
 def test_compare_at_stays_regular_and_both_sales_remain(tmp_path):

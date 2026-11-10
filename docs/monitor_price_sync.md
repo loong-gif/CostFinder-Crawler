@@ -30,7 +30,8 @@ Python 3.12 环境 `/home/loong/ocr_service`（PaddlePaddle 3.x 没有 Python 3.
 （`utils/monitor_queue.py`）：
 
 - 出现在 `clinic_promotions` 的页面是促销页（同时出现在 `clinic_memberships` 的页面也按促销页处理），
-  分桶 `daily_NN`，抓取后做浏览器渲染核验。
+  分桶 `daily_NN`，抓取后核验可见性：经 CSS 层叠判定完全可见的爬虫内容直接作为证据，爬虫判定不了的页面由 ego-lite
+  渲染（见 [`rendered_visibility_qa.md`](rendered_visibility_qa.md)「监控中的爬虫可见性证据」）。
 - 只出现在 `clinic_memberships` 的页面是会员页，分桶 `membership_NN`，只做 Firecrawl 抓取检测内容变化，不渲染；
   它们的事件在处理阶段标为 `excluded`（会员页只进 `clinic_memberships`）。
 - 每桶最多 50 个页面。已有桶状态文件（`daily_NN.json` / `membership_NN.json`）里的页面保持原桶，新页面放进有空位的
@@ -96,9 +97,9 @@ transient 事件和最近一次失败晚于成功抓取的页面。两个入口�
 跳转到商家自己登记的网站（`master_business_info.website`）按网站迁移继续处理。
 已有促销或服务行指向同一页面的多家商家各出一份计划；没有对应商家的来源标为 `excluded`。
 站点一侧的长期失败、基础设施故障、审查事件的重新处理与存档见 [`monitor_auto_remediation.md`](monitor_auto_remediation.md)。
-运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文；服务器已有的
-Windows Edge 使用独立 `browser_profile` 在本机核验可见内容并保存整页截图。
-每个临时页面都会关闭。WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
+运行时使用专用 `.venv`。Firecrawl 固定使用 `http://127.0.0.1:3002`，收集原始正文与原始 HTML；
+爬虫内容经页面自身的 CSS 判定完全可见时即为可见性证据，其余页面由 ego-lite 渲染并保存整页截图。
+WSL 1 无法运行原容器里的 Chromium，因此不依赖该容器做可见性证明。
 
 通过门禁的冻结计划直接渲染为 `state/pending_sql/` 下的 SQL 文件；服务器不写库，SQL 只有经 MCP 执行才生效，
 执行本身就是写入的把关，没有另外的写入开关。图片里的 offer 经 OCR 双读核验后照常写入；
@@ -132,10 +133,11 @@ OCR/提取服务返回 402 额度耗尽、429 限流或 401/403 凭据被拒绝�
 | 文件 | 含义 |
 | --- | --- |
 | `daily_01.json` 至 `daily_04.json` | 每页独立基线，失败页保留旧值 |
-| `evidence/*.json` | Firecrawl 原始响应、原文、价格事实 |
+| `evidence/*.json` | Firecrawl 原始响应（不含原始 HTML）、原文、价格事实与可见性证据（`rendered`：爬虫证据或渲染结果的路径） |
+| `rendered/<ID>/browser.json` | 抓取阶段的 ego-lite 渲染结果；爬虫证据足够的页面没有渲染目录 |
 | `failed_evidence/*.json` | 空正文、错误响应及每次失败重试的原始响应；网络未返回响应时记录错误 |
 | `events/*.json` | 待处理事件、完成状态及重试状态 |
-| `sync/<事件ID>/browser.json`、`screenshot.png`、`ocr.json` | 浏览器可见性、截图和 OCR |
+| `sync/<事件ID>/browser.json`、`screenshot.png`、`ocr.json` | 可见性证据（`visibility_source` 为 `crawler_html_filtered` 或 `browser_render`）、截图和 OCR |
 | `sync/<事件ID>/extraction.json`、`evidence.json`、`visibility.json` | 结构化提取和逐条证据门禁 |
 | `sync/<事件ID>/plan.json`、`plan_attempt_*.json` | 冻结计划和保留的旧版计划 |
 | `manual_protections.json` | 手工追加的保护条目和 ID 列表 |

@@ -144,7 +144,7 @@ def test_event_persistence_failure_does_not_advance_snapshot(tmp_path,monkeypatc
     def fail(path,value):
         if path.parent.name == "events": raise OSError("disk full")
         atomic_json(path,value)
-    monkeypatch.setattr("scripts.firecrawl_self_hosted_monitor.atomic_json",fail)
+    monkeypatch.setattr("utils.monitor_capture_record.atomic_json",fail)
     with pytest.raises(OSError):
         run_monitor({"monitors":{"daily":{"targets":[{"urls":["https://a.test"]}]}}},"daily",
                     api_url="x",api_key="",state_dir=tmp_path,timeout=1,limit=None,workers=1,

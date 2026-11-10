@@ -121,6 +121,14 @@ def test_image_proof_age_uses_capture_time_not_new_plan_timestamp(tmp_path):
     assert image_write_block(plan,tmp_path/'journals')=='image_capture_expired_requires_refresh'
 
 
+def test_image_offer_removal_needs_reads_that_cover_the_whole_capture(tmp_path):
+    plan,proof=proof_plan(tmp_path)
+    plan['operations']=[{'table':'promo_offer_master','action':'update','id':4,'values':{'is_active':False}}]
+    assert image_write_block(plan,tmp_path/'journals') is None
+    atomic_json(tmp_path/'dual.json',{**proof,'coverage_complete':False})
+    assert image_write_block(plan,tmp_path/'journals')=='image_coverage_incomplete'
+
+
 def test_shadow_images_reactivate_the_parent_without_touching_its_other_fields():
     graph=_graph();graph['promotions'][0]['is_active']=False;graph['offers'][0]['is_active']=False
     evidence=_evidence(complete=False,image_policy={'version':1,'depends_on_images':False,'hold_parent_fields':True})
@@ -163,7 +171,7 @@ def test_firecrawl_failure_falls_back_to_complete_pure_image_page(tmp_path,monke
     config={'monitors':{'daily':{'targets':[{'urls':['https://test/image']}]}}}
     report=run_monitor(config,'daily',api_url='x',api_key='',state_dir=tmp_path,timeout=1,limit=None,
                        workers=2,send_notifications=False,scan_images=True)
-    assert report['error']==0 and report['browser_coverage'][0]['complete']
+    assert report['error']==0 and report['visibility'][0]['complete']
     artifact=json.loads(next((tmp_path/'evidence').glob('*.json')).read_text())
     assert artifact['browser_fallback'] and artifact['markdown']=='' and len(artifact['failed_attempts'])==2
     assert len(list((tmp_path/'events').glob('*.json')))==1
