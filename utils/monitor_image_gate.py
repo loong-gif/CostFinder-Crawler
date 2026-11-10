@@ -78,7 +78,7 @@ def image_write_block(plan, journal_dir):
             return "image_capture_proof_mismatch"
         if not capture_is_current(browser):
             return "image_capture_expired_requires_refresh"
-        if "image_obscured" in browser.get("failures", []) and browser.get("image_capture_mode") != "viewport_scrolled":
+        if "image_obscured" in browser.get("failures", []) and browser.get("image_capture_mode") != "full_page":
             return "image_obscured"
         requires_complete = any(op["table"] == "clinic_promotions" and op.get("action") != "insert" and set(op["values"]) - {"is_offer_extracted"}
                     or op["table"] == "promo_offer_master" and op["values"].get("is_active") is False

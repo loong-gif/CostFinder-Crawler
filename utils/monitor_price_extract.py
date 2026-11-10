@@ -220,7 +220,7 @@ def extract_evidence(artifact: dict, browser: dict, directory: Path, client, ser
     if browser.get("image_review_required") and not exact_human:
         try:
             dual = blind_image_reads(browser, directory, client, extraction_schema(service_names))
-            if "image_obscured" in browser.get("failures", []) and browser.get("image_capture_mode") != "viewport_scrolled":
+            if "image_obscured" in browser.get("failures", []) and browser.get("image_capture_mode") != "full_page":
                 dual["rejected"].extend({"offer":o,"reason":"image_obscured"} for o in dual["accepted"])
                 dual["accepted"] = []
                 dual["complete"] = False

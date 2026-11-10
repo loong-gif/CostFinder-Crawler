@@ -7,18 +7,17 @@ it over loopback HTTP to the single page of one render slot's task space.
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from utils.monitor_price_store import atomic_bytes, atomic_json, digest, now
-from utils.monitor_image_evidence import tile_ranges, pixel_digest
+from utils.monitor_price_store import atomic_json, digest, now
 from utils.monitor_rendered_cdp import ROOT, ego_cdp_page, frame_regions
 from utils.monitor_rendered_checks import promotion_images, resources_complete, text_has_promotion
 from utils.monitor_rendered_variants import (
     _dedupe_variant_captures, _product_variant_reconciliation, capture_product_variants)
+from utils.monitor_screenshot_tiles import page_screenshot, variant_tiles
 
 # 只渲染 PC 宽度；覆盖检查（写入策略门、计划）按这里的名称集合判定完整
 BREAKPOINTS = (("desktop", 1440, False),)
@@ -92,14 +91,9 @@ def render_page(url: str, directory: Path, *, force_ocr: bool = False, product_d
     if not result.get("product_variant_reconciliation") and result.get("variant_expected") is not None:
         result["product_variant_reconciliation"] = [_product_variant_reconciliation(result)]
     for capture in variant_captures:
-        for round_name, field in (("a", "screenshot_path"), ("b", "second_screenshot_path")):
-            path = capture.get(field)
-            if path:
-                data = Path(path).read_bytes()
-                tile = {"path":path,"bytes":len(data),"png_digest":hashlib.sha256(data).hexdigest()}
-                if round_name == "a":
-                    tile["pixel_digest"] = pixel_digest(data)
-                result["image_tiles"][round_name].append(tile)
+        first, second = variant_tiles(capture["screenshot_path"])
+        result["image_tiles"]["a"].append(first)
+        result["image_tiles"]["b"].append(second)
     if variant_captures:
         result["visual_digest"] = digest({"old":result["visual_digest"],"variants":[t["png_digest"] for t in result["image_tiles"]["b"]]})
         result["context_digest"] = digest({"text":result["text"],"variants":[c["offer_raw_text"] for c in variant_captures]})
@@ -162,7 +156,6 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
             failures.append("screenshot_truncated")
         capture = page.call("Page.captureScreenshot",format="png",captureBeyondViewport=True,
                             clip={"x":0,"y":0,"width":width,"height":height,"scale":1})
-        atomic_bytes(directory / "screenshot.png",base64.b64decode(capture["data"],validate=True))
         request_urls = {event["params"]["requestId"]:event["params"]["request"]["url"]
                         for event in page.events if event.get("method") == "Network.requestWillBeSent"}
         failed_urls = {request_urls.get(event["params"]["requestId"])
@@ -182,35 +175,18 @@ def _render_page(url: str, directory: Path, *, force_ocr: bool = False, width: i
             or any(f.get("canvas") or f.get("generated_content") or f.get("obscured") for f in scans))
         accessible = 200<=status<400 and bool(text.strip() or has_visual or any(f.get("images") or f.get("backgrounds") for f in scans)) and not blocked
         if any(f.get("obscured") for f in scans): failures.append("image_obscured")
-        tiles={"a":[],"b":[]}
-        image_error=None
-        if has_visual or force_ocr:
-            try:
-                for round_name in ("a","b"):
-                    for index,(y,tile_height) in enumerate(tile_ranges(metrics["height"],shifted=round_name=="b")):
-                        if time.monotonic()>=started+300:raise RuntimeError("image_stage_timeout")
-                        page.evaluate(f"window.scrollTo(0,{y});new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
-                        clip={"x":0,"y":y,"width":width,"height":tile_height,"scale":2 if round_name=="b" else 1}
-                        capture=page.call("Page.captureScreenshot",format="png",captureBeyondViewport=False,clip=clip)
-                        data=base64.b64decode(capture["data"],validate=True)
-                        path=directory/f"image_{round_name}_{index:03d}.png";atomic_bytes(path,data)
-                        tile={"path":str(path),"clip":clip,"bytes":len(data)}
-                        tile["png_digest"]=hashlib.sha256(data).hexdigest()
-                        if round_name=="a":tile["pixel_digest"]=pixel_digest(data)
-                        tiles[round_name].append(tile)
-            except (RuntimeError,TimeoutError) as exc:
-                failures.append("image_coverage_partial")
-                image_error = str(exc)[:500]
+        shot = page_screenshot(base64.b64decode(capture["data"],validate=True), directory, tiles=has_visual or force_ocr)
+        tiles = shot["image_tiles"]
         visual_digest=digest({"a":[t["pixel_digest"] for t in tiles["a"]],
                               "b":[t["png_digest"] for t in tiles["b"]]}) if tiles["a"] else None
         report = {"url":url,"final_url":final_url,"http_status":status,"title":title,"text":text,
             "frames":scans,"accessible":bool(accessible),"captured_at":now(),
-            "image_capture_mode":"viewport_scrolled",
+            "image_capture_mode":"full_page",
             "image_tiles":tiles,"visual_digest":visual_digest,"context_digest":digest(text),
             "image_seconds_remaining":max(0,300-(time.monotonic()-started)),"scroll_complete":bool(stable),
             "complete":bool(accessible and stable and not failures and resources_complete(scans,text)),
             "image_review_required":force_ocr or has_visual,
-            "failures":failures,"image_error":image_error,"screenshot_path":str(directory / "screenshot.png")}
+            "failures":failures,"screenshot_path":shot["screenshot_path"]}
         report["product_links"] = page.evaluate(PRODUCT_LINKS)
         if "/collections/" in urlsplit(url).path and page.evaluate("""(()=>[...document.querySelectorAll('a[rel="next"],.pagination a[href*="page="],.pagination__item--next')].some(a=>a.getClientRects().length&&a.href&&a.href!==location.href))()"""):
             report["complete"] = False

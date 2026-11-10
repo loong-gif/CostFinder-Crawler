@@ -102,6 +102,15 @@ def test_obscured_dom_and_dual_agreement_cannot_release_hidden_price(tmp_path,mo
     assert evidence['image_rejections'][0]['reason']=='image_obscured'
 
 
+def test_obscured_page_is_released_only_for_a_full_page_render(tmp_path):
+    plan,proof=proof_plan(tmp_path)
+    browser=json.loads((tmp_path/'browser.json').read_text())
+    atomic_json(tmp_path/'browser.json',{**browser,'failures':['image_obscured'],'image_capture_mode':'archived_screenshots'})
+    assert image_write_block(plan,tmp_path/'journals')=='image_obscured'
+    atomic_json(tmp_path/'browser.json',{**browser,'failures':['image_obscured'],'image_capture_mode':'full_page'})
+    assert image_write_block(plan,tmp_path/'journals') is None
+
+
 def test_image_proof_age_uses_capture_time_not_new_plan_timestamp(tmp_path):
     from datetime import datetime, timedelta, timezone
     plan,proof=proof_plan(tmp_path)

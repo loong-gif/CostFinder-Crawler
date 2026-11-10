@@ -102,13 +102,8 @@ def capture_product_variants(page, directory: Path, width: int) -> dict:
                             clip={"x":0,"y":0,"width":width,"height":min(page.call("Page.getLayoutMetrics")["cssContentSize"]["height"],32000),"scale":1})
         screenshot = directory / f"variant_{index}.png"
         atomic_bytes(screenshot, base64.b64decode(capture["data"], validate=True))
-        second = page.call("Page.captureScreenshot", format="png", captureBeyondViewport=True,
-                            clip={"x":0,"y":0,"width":width,"height":min(page.call("Page.getLayoutMetrics")["cssContentSize"]["height"],32000),"scale":2})
-        screenshot_b = directory / f"variant_{index}_b.png"
-        atomic_bytes(screenshot_b, base64.b64decode(second["data"], validate=True))
         captures.append({**details, "selected_options": labels, "offer_raw_text": quote,
-                         "captured_at": now(), "screenshot_path": str(screenshot),
-                         "second_screenshot_path": str(screenshot_b)})
+                         "captured_at": now(), "screenshot_path": str(screenshot)})
     accounted = len(captures) + len(variant_skipped)
     if variant_expected and accounted != variant_expected:
         complete = False
