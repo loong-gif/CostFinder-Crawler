@@ -21,16 +21,52 @@ def test_ego_script_error_on_a_page_is_that_page_failure(tmp_path, monkeypatch):
         ego_scrape("https://glow.example/specials")
 
 
-def test_ego_result_with_a_unicode_line_separator_in_the_page_is_read_whole(tmp_path, monkeypatch):
-    # JSON.stringify 不转义 U+2028：输出仍是一行，只能按 \n 分行
-    info = {"url": "https://glow.example/specials", "title": "Specials",
-            "html": "<html><body><h2>Botox $10/unit this week</h2><p>Filler $500</p></body></html>"}
+def _ego_chunks(info: dict, size: int = 4000) -> list[str]:
+    # ego 脚本的输出：纯 ASCII 的 JSON 按固定长度分块，每块一行，带序号、块数与总长度
+    text = json.dumps(info, ensure_ascii=True)
+    parts = [text[i:i + size] for i in range(0, len(text), size)]
+    return [f"EGO_CHUNK {i} {len(parts)} {len(text)} {part}" for i, part in enumerate(parts)]
+
+
+def _fake_ego(tmp_path, monkeypatch, lines: list[str]) -> None:
     payload = tmp_path / "payload.txt"
-    payload.write_text("EGO_SCRAPE " + json.dumps(info, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload.write_text("\n".join(lines) + "\n", encoding="utf-8")
     fake = tmp_path / "ego-browser"
     fake.write_text(f"#!/bin/sh\ncat '{payload}' >&2\n")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+
+
+def test_ego_result_split_by_other_output_lines_is_read_whole(tmp_path, monkeypatch):
+    # ego-browser 的其他输出行插在结果中间时，按序号拼回整页；非 ASCII 字符原样保留
+    info = {"url": "https://glow.example/specials", "title": "Specials",
+            "html": "<html><body><h2>Botox \U0001F389</h2>" + "<p>x</p>" * 1500 + "<p>Filler $500</p></body></html>"}
+    chunks = _ego_chunks(info)
+    assert len(chunks) >= 3
+    _fake_ego(tmp_path, monkeypatch, [chunks[0], "warning: task space reconnected", *chunks[1:]])
+    result = ego_scrape("https://glow.example/specials")
+    assert "Filler $500" in result["markdown"] and "\U0001F389" in result["markdown"]
+    assert result["metadata"]["title"] == "Specials"
+
+
+def test_ego_result_with_a_cut_or_missing_chunk_is_that_page_failure(tmp_path, monkeypatch):
+    # 某一块被截断或缺失时，记为该页面的抓取失败，不作为未分类的 JSON 错误抛出
+    info = {"url": "https://glow.example/specials", "title": "Specials",
+            "html": "<html><body>" + "<p>x</p>" * 1500 + "</body></html>"}
+    chunks = _ego_chunks(info)
+    _fake_ego(tmp_path, monkeypatch, [chunks[0], chunks[1][:300], "noise", *chunks[2:]])
+    with pytest.raises(BrowserScrapeFailed, match="ego_output_incomplete"):
+        ego_scrape("https://glow.example/specials")
+    _fake_ego(tmp_path, monkeypatch, [chunks[0], *chunks[2:]])
+    with pytest.raises(BrowserScrapeFailed, match="ego_output_incomplete"):
+        ego_scrape("https://glow.example/specials")
+
+
+def test_ego_result_with_a_unicode_line_separator_in_the_page_is_read_whole(tmp_path, monkeypatch):
+    # 页面中的 U+2028 不会把结果拆开
+    info = {"url": "https://glow.example/specials", "title": "Specials",
+            "html": "<html><body><h2>Botox $10/unit this week</h2><p>Filler $500</p></body></html>"}
+    _fake_ego(tmp_path, monkeypatch, _ego_chunks(info))
     result = ego_scrape("https://glow.example/specials")
     assert "Filler $500" in result["markdown"] and result["metadata"]["title"] == "Specials"
 

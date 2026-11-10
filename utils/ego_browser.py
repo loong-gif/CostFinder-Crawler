@@ -32,8 +32,14 @@ const info = await page.evaluate(() => ({{
   title: document.title,
   html: document.documentElement.outerHTML,
 }}));
-console.log("EGO_SCRAPE " + JSON.stringify(info));
+const text = JSON.stringify(info).replace(/[\\u007f-\\uffff]/g, c => "\\\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+const count = Math.ceil(text.length / {chunk});
+for (let i = 0; i < count; i++) {{
+  console.log(`EGO_CHUNK ${{i}} ${{count}} ${{text.length}} ` + text.slice(i * {chunk}, (i + 1) * {chunk}));
+}}
 """
+# 整页结果按块输出：ego-browser 的其他输出行可能插进单个超长行的中间，把结果拆断
+EGO_CHUNK_CHARS = 4000
 _EGO_LOCK = threading.Lock()
 
 
@@ -69,8 +75,27 @@ def ego_command() -> str:
     return command
 
 
+def chunked_result(output: str) -> dict[str, Any]:
+    """按序号拼回 EGO_CHUNK 行；块缺失或长度不符是该页面的抓取失败。只按 \\n 分行。"""
+    chunks: dict[int, str] = {}
+    shape: set[tuple[int, int]] = set()
+    for line in output.split("\n"):
+        if line.startswith("EGO_CHUNK "):
+            _, index, count, total, part = line.split(" ", 4)
+            chunks[int(index)] = part
+            shape.add((int(count), int(total)))
+    if len(shape) != 1:
+        raise BrowserScrapeFailed(f"ego_output_incomplete: {len(chunks)} chunks")
+    count, total = shape.pop()
+    text = "".join(chunks.get(i, "") for i in range(count))
+    if sorted(chunks) != list(range(count)) or len(text) != total:
+        raise BrowserScrapeFailed(f"ego_output_incomplete: {len(chunks)}/{count} chunks, {len(text)}/{total} chars")
+    return json.loads(text)
+
+
 def ego_scrape(url: str) -> dict[str, Any]:
-    script = EGO_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS)
+    script = EGO_SCRIPT.format(space=json.dumps(EGO_TASK_SPACE), url=json.dumps(url), timeout=PAGE_TIMEOUT_MS,
+                               chunk=EGO_CHUNK_CHARS)
     command = ego_command()
     try:
         # 各次渲染共用同一个任务空间和页面，同一进程内只能逐个执行
@@ -84,9 +109,7 @@ def ego_scrape(url: str) -> dict[str, Any]:
         # 脚本在该页面上出错（导航失败、页面崩溃）是该页面的抓取结果
         raise BrowserScrapeFailed(f"ego_script_failed: {(exc.stderr or '').strip()[-300:]}") from None
     # ego-browser 的 console 输出写到 stderr
-    # 只按 \n 分行：JSON.stringify 不转义 U+2028/U+2029，splitlines() 会在页面 HTML 中间把这一行截断
-    line = next(l for l in (done.stdout + done.stderr).split("\n") if l.startswith("EGO_SCRAPE "))
-    info = json.loads(line[len("EGO_SCRAPE "):])
+    info = chunked_result(done.stdout + done.stderr)
     return firecrawl_shaped_result(url, info["url"], info["title"], info["html"], None, "ego")
 
 
