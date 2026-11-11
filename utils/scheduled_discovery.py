@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from datetime import datetime, time, timezone
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from utils.offer_stage import snapshot_tables as offer_tables
 from utils.page_extraction_snapshot import load_decision_pages, snapshot_tables_for_pages
 from utils.pipeline_db import fresh_snapshot
 from utils.pipeline_run import PROJECT_ROOT
+from utils.promo_value_review import different_page_city
 from utils.scheduled_discovery_registration import run_registration
 from utils.service_linking import snapshot_tables as service_tables
 
@@ -148,7 +150,17 @@ def run_batch(batch: Path) -> str:
             elif stage == "render":
                 command("render-pages", "--batch-dir", pages)
             else:
-                records = json.loads((pages / "decisions.json").read_text())["decisions"]
+                path = pages / "decisions.json"
+                payload = json.loads(path.read_text())
+                records = payload["decisions"]
+                for record in records:
+                    if record["decision"] == "add" and different_page_city(record, record.get("city") or ""):
+                        record["decision"] = "skip"
+                        record.setdefault("reasons", []).append("different_page_city")
+                payload["summary"] = dict(Counter(record["decision"] for record in records))
+                temporary = path.with_suffix(".new")
+                temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+                temporary.replace(path)
                 if any(record["decision"] == "add" for record in records):
                     command("crawl", "--decisions", pages / "decisions.json", raw=next_raw_directory(batch, state))
                 else:

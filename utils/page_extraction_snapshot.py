@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from utils.pipeline_db import literal
+from utils.promo_value_review import different_page_city
 from utils.source_url import source_url_key
 
 PROMOTION_SNAPSHOT_COLUMNS = ("promotion_id, business_id, source_url, promotion_title, promotion_content, "
@@ -38,7 +39,7 @@ def load_decision_pages(payload: Mapping[str, Any], *, business_ids: set[int] | 
     """
     pages: dict[tuple[str, int], dict[str, Any]] = {}
     for record in payload["decisions"]:
-        if record["decision"] != "add":
+        if record["decision"] != "add" or different_page_city(record, record.get("city") or ""):
             continue
         business_id = int(record["business_id"])
         if business_ids is not None and business_id not in business_ids:

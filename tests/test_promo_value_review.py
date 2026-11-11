@@ -2,8 +2,19 @@ from __future__ import annotations
 
 import datetime as dt
 from utils.promo_value_review import BusinessContext, decide, review_page
+from utils.page_extraction_snapshot import load_decision_pages
 
 TODAY = dt.date(2026, 10, 15)
+
+
+def test_city_specific_page_is_not_assigned_to_another_city():
+    page = {"url": "https://skinpharm.com/pages/pricing-raleigh", "title": "Treatment Pricing in Raleigh, NC | Skin Pharm",
+            "status": "needs_review", "kind": "promotion", "evidence": ["20% off your first treatment"]}
+    business = BusinessContext(4345, "Skin Pharm", "Alpharetta", 120, 4.8, "https://skinpharm.com", False, True)
+    assert review_page(page, business)["reasons"] == ["different_page_city"]
+    record = {**page, "business_id": 4345, "city": "Alpharetta", "decision": "add"}
+    assert load_decision_pages({"decisions": [record]}) == []
+    assert len(load_decision_pages({"decisions": [{**record, "city": "Raleigh"}]})) == 1
 
 
 def _biz(**kw):

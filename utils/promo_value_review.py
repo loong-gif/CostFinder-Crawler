@@ -39,6 +39,17 @@ class BusinessContext:
     never_processed: bool   # nothing stored at all: promotions, services, offers, memberships
 
 
+def different_page_city(page: Mapping[str, Any], city: str) -> bool:
+    title = str(page.get("title") or "")
+    match = re.search(r"\bin\s+([A-Za-z]+(?:[ -][A-Za-z]+)*),\s*[A-Z]{2}\b", title, re.I)
+    if not match or not city:
+        return False
+    page_city = re.sub(r"[\W_]+", " ", match.group(1).casefold()).strip()
+    business_city = re.sub(r"[\W_]+", " ", city.casefold()).strip()
+    path = re.sub(r"[\W_]+", " ", urlparse(str(page.get("url") or "")).path.casefold()).strip()
+    return page_city != business_city and bool(re.search(rf"(?<!\w){re.escape(page_city)}(?!\w)", path))
+
+
 def review_page(page: Mapping[str, Any], business: BusinessContext, today: Optional[dt.date] = None) -> Dict[str, Any]:
     today = today or dt.date.today()
     url = str(page.get("url") or "")
@@ -50,6 +61,8 @@ def review_page(page: Mapping[str, Any], business: BusinessContext, today: Optio
     def skip(reason: str, score: int = 0) -> Dict[str, Any]:
         return {"decision": "skip", "score": score, "reasons": [reason]}
 
+    if different_page_city(page, business.city):
+        return skip("different_page_city")
     if status not in ("valid", "needs_review"):
         return skip(f"status_{status}")
     if is_aggregator(host.removeprefix("www.")):
