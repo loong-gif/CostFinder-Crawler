@@ -6,8 +6,10 @@ Files live under ``state/crawl_schedule/`` (override with ``COSTFINDER_CRAWL_STA
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
@@ -21,6 +23,15 @@ SMALL_CITY_MAX_BUSINESSES = 4
 def state_dir() -> Path:
     override = (os.getenv("COSTFINDER_CRAWL_STATE_DIR") or "").strip()
     return Path(override) if override else DEFAULT_STATE_DIR
+
+
+@contextmanager
+def schedule_lock(directory: Path | None = None):
+    target = directory or state_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    with (target / ".lock").open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def load_state(name: str, directory: Path | None = None) -> Dict[str, Any]:

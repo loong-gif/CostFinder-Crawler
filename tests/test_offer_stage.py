@@ -169,3 +169,10 @@ def test_snapshot_query_limit_is_applied_in_sql():
     tables = snapshot_tables(limit=5)
     assert "order by promotion_id limit 5" in tables["promotions"][2]
     assert "order by plan_id limit greatest(5 - (select count(*)" in tables["memberships"][2]
+
+
+def test_snapshot_restricts_both_source_types_to_selected_businesses():
+    tables = snapshot_tables(business_ids=[12, 34], limit=5)
+    assert "business_id = any('{12,34}'::int2[]::bigint[])" in tables["promotions"][2]
+    assert "business_id = any('{12,34}'::int2[]::bigint[])" in tables["memberships"][2]
+    assert "business_id = any('{12,34}'::int2[]::bigint[])" in tables["offers"][2]

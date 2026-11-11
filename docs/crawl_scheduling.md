@@ -82,6 +82,13 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
   Windows 任务 `CostFinderGmapsScraper`（登录时启动，程序与日志在 `C:\Users\loong\gmaps-scraper\`）。服务器直连谷歌，
   不需要代理。`discover-businesses` 与 `topic-search` 直接调用 `utils.service_endpoints` 中的地址（`http://72.52.161.65:8081`）。
 
+### 城市发现和处理
+
+- `CostFinderScheduledDiscovery` 从服务器当地时间 04:30 起每小时运行；每天处理最多 5 个到期活跃城市，其余运行恢复未完成的批次。
+- 批次保存在 `/home/loong/costfinder_monitor/state/scheduled_discovery/<UTC时间戳>/`，包括发现结果、页面决策、原始抓取、快照及处理计划；日志为 `logs/scheduled_discovery.log`。
+- 登记、页面抽取、offer 抽取和服务关联生成的 SQL 经 `state/pending_sql/` 交给本机每小时执行；服务器确认 `applied/` 后才进入下一阶段。被拒的 SQL 基于新快照重新规划，待核验页面留在批次中继续处理。
+- 任务使用 `state/scheduled_discovery/.lock` 避免重复运行，城市调度状态与到期抓取共用 `state/crawl_schedule/.lock`。中断后重新启动同一任务即可恢复；不得手动移动待执行 SQL 充当执行确认。
+
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 
 ```bash

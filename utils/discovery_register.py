@@ -12,7 +12,7 @@ from utils.pipeline_db import fresh_snapshot, load_snapshot, write_text
 from utils.register_businesses import render_register
 
 MASTER_TABLES = {"master": ("master_business_info",
-                            "business_id, name, city, address, website, google_place_id, review_count, score", "true")}
+                            "business_id, name, city, address, website, google_place_id, review_count, score, category", "true")}
 
 
 def read_master(run_dir: Path, snapshot: Path | None = None) -> list[dict[str, Any]]:

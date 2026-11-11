@@ -31,7 +31,7 @@ def _linked_after_write(fk: str) -> str:
 
 
 def snapshot_tables(requeued: Mapping[str, list[int]] | None = None,
-                    limit: int | None = None) -> dict[str, tuple[str, str, str]]:
+                    limit: int | None = None, business_ids: list[int] | None = None) -> dict[str, tuple[str, str, str]]:
     """快照查询的表定义：is_offer_extracted 非 true 的 active 促销与会员、未激活 offer 已完成服务关联的来源，
     以及 requeued（数据质量审计排入重新抽取的 {promotions, memberships} id）；
     limit 为促销与会员合计的最大源数量（促销在前）。"""
@@ -43,6 +43,10 @@ def snapshot_tables(requeued: Mapping[str, list[int]] | None = None,
                    f"({_linked_after_write('promotion_id')}){promo_extra})")
     plan_where = (f"(is_offer_extracted is not true or plan_id in ({_linked_after_write('membership_plan_id')})"
                   f"{plan_extra})")
+    if business_ids is not None:
+        scope = f"business_id = any({_id_array(business_ids)})"
+        promo_where = f"({promo_where}) and {scope}"
+        plan_where = f"({plan_where}) and {scope}"
     if limit is not None:
         promo_pick = (f"select promotion_id from public.clinic_promotions where {promo_where} "
                       f"order by promotion_id limit {int(limit)}")

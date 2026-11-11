@@ -16,3 +16,4 @@ soupsieve>=2.6,<3
 playwright>=1.49,<2
 markdownify>=1.2,<2
 Pillow>=10.4,<12
+scrapling[fetchers]>=0.5.1

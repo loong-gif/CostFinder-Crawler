@@ -1,7 +1,7 @@
 """流水线不使用 DB_URL，不建立数据库连接。
 
-读：命令的 plan 步骤经 fresh_snapshot 生成只读快照查询（read.sql），read_snapshot 用 Supabase CLI（--linked）
-    执行并直接写入 snapshot.json；加载时逐表核对 count 与行数，结果被截断即报错。
+读：命令的 plan 步骤经 fresh_snapshot 生成只读快照查询（read.sql），本机用 Supabase CLI（--linked），
+    监控主机用 Management API 只读端点执行，写入 snapshot.json；加载时逐表核对 count 与行数。
 写：命令把计划渲染为单个 DO 块（apply.sql），经 Supabase MCP（execute_sql）执行；块内先核对计划生成后
     数据未变化，再写入，最后执行收尾检查；任何一步失败整体回滚。
 """
@@ -18,6 +18,7 @@ import pglast
 from psycopg import sql
 
 from utils.pipeline_run import PROJECT_ROOT
+from utils.service_endpoints import MONITOR_DEPLOY_DIR
 from utils.supabase_rest import PRODUCTION_PROJECT_REF
 
 DO_TAG = "$pipeline$"
@@ -89,8 +90,15 @@ def run_dir(output_dir: Path) -> Path:
     return Path(output_dir) / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def uses_management_api(project_root: Path) -> bool:
+    return project_root == MONITOR_DEPLOY_DIR
+
+
 def fresh_snapshot(directory: Path, tables: Mapping[str, tuple[str, str, str]]) -> Path:
-    """在 directory 写入只读快照查询 read.sql 并立即执行，返回 snapshot.json 的路径。"""
+    """在 directory 写入并执行只读查询，返回 snapshot.json 的路径。"""
+    if uses_management_api(PROJECT_ROOT):
+        from utils.monitor_database_snapshot import api_snapshot
+        return api_snapshot(directory, tables)
     return read_snapshot(write_text(Path(directory) / "read.sql", snapshot_query(tables)))
 
 

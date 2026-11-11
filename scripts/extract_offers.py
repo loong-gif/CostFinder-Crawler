@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="step", required=True)
     plan_parser = sub.add_parser("plan")
     plan_parser.add_argument("--limit", type=int, help="最多处理的源数量")
+    plan_parser.add_argument("--business-id", type=int, action="append", help="只处理这些商家（可重复）")
     plan_parser.add_argument("--state-dir", type=Path, default=PROJECT_ROOT / "output" / "data_quality_state",
                              help="数据质量状态目录（读取其中的复查队列）")
     plan_parser.add_argument("--snapshot", type=Path)
@@ -47,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         # 数据质量审计排入重新抽取的来源（offer 组成问题）一并选入
         requeued = reextract_sources(read_json(args.state_dir / "data_quality" / "recheck_queue.json", {}))
         snapshot_path = args.snapshot or pipeline_db.fresh_snapshot(
-            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(requeued, limit=args.limit))
+            pipeline_db.run_dir(OUTPUT_DIR), snapshot_tables(requeued, limit=args.limit, business_ids=args.business_id))
         snapshot = load_snapshot(snapshot_path, snapshot_tables())
         schema = offer_schema(service_name_enum(snapshot["service_enum"]))
         plan = build_plan(snapshot, client, schema, OUTPUT_DIR / "llm_cache")

@@ -34,6 +34,7 @@ COMMANDS: Dict[str, Tuple[str, str, str]] = {
     "discover-businesses": ("scripts.gmaps_discovery",
                             "1: Google Maps scraper places for a city; --due re-discovers and registers due cities",
                             "apply.sql via MCP (--due)"),
+    "scheduled-discovery": ("scripts.scheduled_discovery", "resume scheduled city discovery and processing", "pending SQL"),
     "register-businesses": ("scripts.process_discovery_results",
                             "1: link / insert discovered places into master_business_info", "apply.sql via MCP"),
     "topic-search": ("scripts.topic_search",

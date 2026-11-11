@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.city_selection import due_for_rediscovery  # noqa: E402
 from utils.crawl_schedule_seed import SEED_TABLES, seed  # noqa: E402
-from utils.crawl_schedule_state import load_state, save_state  # noqa: E402
+from utils.crawl_schedule_state import load_state, save_state, schedule_lock  # noqa: E402
 from utils.crawl_scheduler_logic import (  # noqa: E402
     apply_result,
     build_buckets,
@@ -129,7 +129,8 @@ def main() -> int:
     record.add_argument("--apply", action="store_true")
     record.set_defaults(func=cmd_record)
     args = parser.parse_args()
-    return args.func(args)
+    with schedule_lock():
+        return args.func(args)
 
 
 if __name__ == "__main__":

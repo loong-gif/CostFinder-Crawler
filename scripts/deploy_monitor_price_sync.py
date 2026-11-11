@@ -59,6 +59,14 @@ def data_quality_launcher() -> bytes:
         '--state-dir "$BASE/state" --management-api --recheck\n').encode()
 
 
+def discovery_launcher() -> bytes:
+    return (
+        '#!/bin/sh\nset -eu\nBASE="'+BASE+'"\nmkdir -p "$BASE/logs" "$BASE/state/tmp"\n'
+        'exec >>"$BASE/logs/scheduled_discovery.log" 2>&1\ndate -u\n'
+        'export PYTHONUNBUFFERED=1 TMPDIR="$BASE/state/tmp"\ncd "$BASE"\n'
+        'exec "$BASE/.venv/bin/python" scripts/promo_pipeline.py scheduled-discovery\n').encode()
+
+
 # 主机 .env 由部署整体替换：只读令牌必须存在，其余凭据存在才写入
 REQUIRED_KEYS = ("SUPABASE_READONLY_TOKEN",)
 OPTIONAL_KEYS = ("FIRECRAWL_SELF_HOSTED_API_KEY",
@@ -83,12 +91,16 @@ def deploy(host: str, include_credentials: bool):
         "scripts/process_discovery_results.py","scripts/select_next_city.py","scripts/crawl_report.py",
         "scripts/crawl_record_from_monitor.py","scripts/gmaps_discovery.py","scripts/promo_pipeline.py",
         "scripts/discover_new_promo_pages.py","scripts/deactivate_expired.py","scripts/pending_sql.py",
+        "scripts/scheduled_discovery.py", "scripts/review_promo_candidates.py", "scripts/render_pages.py",
+        "scripts/render_review_deep.js", "scripts/scrape_urls_to_raw.py", "scripts/extract_pages.py",
+        "scripts/extract_offers.py", "scripts/link_services.py",
         "scripts/monitor_rendered_page.js","scripts/monitor_ego_bridge.js","requirements_monitor_price_sync.txt",
         "service_name_dict.json","service_mapping_confirmations.json")]
     payload = {str(path.relative_to(ROOT)):path.read_bytes() for path in files}
     if include_credentials:
         payload[".env"] = host_env(dotenv_values(ROOT / ".env"))
     payload["run_crawl_due.sh"] = (ROOT / "scripts/run_crawl_due.sh").read_bytes()
+    payload["run_scheduled_discovery.sh"] = discovery_launcher()
     payload["run_monitor_validation.sh"] = monitor_launcher("monitor.log", "full_monitor", "")
     payload["run_monitor_retry.sh"] = monitor_launcher("retry.log", "failure_retry", " --retry-transient-only",
                                                        yield_to_running=True)
@@ -111,6 +123,9 @@ state=base/"state"; state.mkdir(parents=True,exist_ok=True)
 (state/"pending_sql").mkdir(exist_ok=True)
 lock=open(state/".monitor.lock","a+")
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+discovery=state/"scheduled_discovery"; discovery.mkdir(exist_ok=True)
+discovery_lock=open(discovery/".lock","a+")
+fcntl.flock(discovery_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 backup.mkdir(parents=True,exist_ok=True)
 archive=tarfile.open(fileobj=io.BytesIO(base64.b64decode(sys.stdin.buffer.read())),mode="r:gz")
@@ -127,6 +142,7 @@ for member in archive.getmembers():
 (base/"run_monitor_retry.sh").chmod(0o755)
 (base/"run_data_quality_daily.sh").chmod(0o755)
 (base/"run_crawl_due.sh").chmod(0o755)
+(base/"run_scheduled_discovery.sh").chmod(0o755)
 (base/"run_ocr_service.sh").chmod(0o755)
 print(json.dumps({"files_deployed":count,"backup":str(backup)}))
 '''
@@ -168,6 +184,20 @@ def ensure_console_session_task(host: str) -> str:
     return remote_powershell(script, host=host)
 
 
+def ensure_discovery_task(host: str) -> str:
+    script = (
+        "$action = New-ScheduledTaskAction -Execute 'C:\\Windows\\System32\\wsl.exe' "
+        "-Argument '-d Ubuntu -- /home/loong/costfinder_monitor/run_scheduled_discovery.sh'\n"
+        "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date '04:30') "
+        "-RepetitionInterval (New-TimeSpan -Hours 1)\n"
+        "$principal = New-ScheduledTaskPrincipal -UserId 'loong' -LogonType Interactive\n"
+        "$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable\n"
+        "Register-ScheduledTask -TaskName 'CostFinderScheduledDiscovery' -Action $action "
+        "-Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null\n"
+        "(Get-ScheduledTask -TaskName 'CostFinderScheduledDiscovery').State\n")
+    return remote_powershell(script, host=host)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host",default="firecrawl")
@@ -175,6 +205,7 @@ def main():
     args=parser.parse_args()
     deploy(args.host,args.include_credentials)
     print(json.dumps({"console_session_task": ensure_console_session_task(args.host).strip().splitlines()[-1]}))
+    print(json.dumps({"scheduled_discovery_task": ensure_discovery_task(args.host).strip().splitlines()[-1]}))
 
 
 if __name__ == "__main__":

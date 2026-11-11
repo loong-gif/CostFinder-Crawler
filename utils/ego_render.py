@@ -25,8 +25,12 @@ ShardRunner = Callable[[Path, Path, int], None]
 
 def shard_command(shard_path: Path, out_path: Path, timeout_ms: int) -> tuple[list[str], str]:
     """ego-browser nodejs 的参数与标准输入：首行注入分片与输出的绝对路径（ego 的 Node 进程工作目录不同），其后是渲染脚本。"""
-    config = {"shard": str(Path(shard_path).absolute()), "out": str(Path(out_path).absolute()), "timeout": timeout_ms}
-    return [ego_command(), "nodejs"], f"globalThis.RR = {json.dumps(config)};\n" + RENDER_SCRIPT.read_text()
+    command = ego_command()
+    paths = [str(Path(path).absolute()) for path in (shard_path, out_path)]
+    if command.lower().endswith(".exe"):
+        paths = [subprocess.check_output(["wslpath", "-w", path], text=True).strip() for path in paths]
+    config = {"shard": paths[0], "out": paths[1], "timeout": timeout_ms}
+    return [command, "nodejs"], f"globalThis.RR = {json.dumps(config)};\n" + RENDER_SCRIPT.read_text()
 
 
 def run_shard(shard_path: Path, out_path: Path, timeout_ms: int) -> None:
