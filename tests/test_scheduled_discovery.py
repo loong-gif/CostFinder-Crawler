@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from utils.scheduled_discovery import city_check_due, pending_status, run_batch, settle_sql
+from utils.scheduled_discovery import city_check_due, next_raw_directory, pending_status, run_batch, settle_sql
 
 
 def test_pending_sql_waits_for_confirmation_and_detects_rejection(tmp_path: Path):
@@ -25,6 +25,14 @@ def test_pending_sql_waits_for_confirmation_and_detects_rejection(tmp_path: Path
 
 def test_missing_pending_sql_is_requeued(tmp_path: Path):
     assert pending_status(tmp_path, "20261111T043000_discovery_pages_0.sql") == "missing"
+
+
+def test_interrupted_crawl_uses_a_new_raw_directory(tmp_path: Path):
+    state = {"stage": "crawl"}
+    first = next_raw_directory(tmp_path, state)
+    second = next_raw_directory(tmp_path, json.loads((tmp_path / "state.json").read_text()))
+    assert first != second
+    assert json.loads((tmp_path / "state.json").read_text())["raw_dir"] == str(second)
 
 
 def test_sql_stage_resumes_only_after_application(tmp_path: Path):

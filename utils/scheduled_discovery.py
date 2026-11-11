@@ -50,6 +50,14 @@ def ids_args(ids: list[int]) -> list[str]:
     return [value for business_id in ids for value in ("--business-id", str(business_id))]
 
 
+def next_raw_directory(batch: Path, state: dict) -> Path:
+    state["crawl_attempt"] = state.get("crawl_attempt", 0) + 1
+    directory = batch / "raw_attempts" / str(state["crawl_attempt"])
+    state["raw_dir"] = str(directory)
+    save(batch, state)
+    return directory
+
+
 def prepare_sql(batch: Path, state: dict) -> None:
     stage = state["stage"]
     ids = state["business_ids"]
@@ -61,7 +69,7 @@ def prepare_sql(batch: Path, state: dict) -> None:
     if stage == "pages":
         pages = load_decision_pages(json.loads(decisions.read_text()), business_ids=set(ids))
         tables = snapshot_tables_for_pages(pages)
-        arguments = ["extract-pages", "plan", "--decisions", str(decisions), "--raw-dir", str(batch / "raw")]
+        arguments = ["extract-pages", "plan", "--decisions", str(decisions), "--raw-dir", state["raw_dir"]]
     elif stage in ("offers", "activate"):
         tables = offer_tables(business_ids=ids)
         arguments = ["extract-offers", "plan", "--state-dir", str(batch)]
@@ -142,7 +150,7 @@ def run_batch(batch: Path) -> str:
             else:
                 records = json.loads((pages / "decisions.json").read_text())["decisions"]
                 if any(record["decision"] == "add" for record in records):
-                    command("crawl", "--decisions", pages / "decisions.json", raw=batch / "raw")
+                    command("crawl", "--decisions", pages / "decisions.json", raw=next_raw_directory(batch, state))
                 else:
                     state.pop("page_plan", None)
                     state["stage"] = "finish"

@@ -13,7 +13,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 
 from utils.ocr_rows import rows_from_detections
-from utils.paddle_ocr_markdown import OCR_SERVICE_URL, ocr_lines
+from utils.paddle_ocr_markdown import OCR_SERVICE_URL, image_urls_from_markdown, ocr_lines
 from utils.rendered_visibility_gate import filter_visible_membership_benefits
 from utils.visibility_manifest import build_manifest, build_shard
 
@@ -24,6 +24,13 @@ PAGE_CHROME = ["Home", "About Us", "Services", "Book Now", "Contact",
                "Hours: Monday to Friday 9am - 6pm, Saturday 10am - 4pm. Located downtown near the main square."]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_markdown_image_title_is_not_part_of_the_url():
+    markdown = '![Botox](https://dermanimedspa.com/wp-content/uploads/2024/11/larger-shields-botox.png "larger-shields-botox")'
+    assert image_urls_from_markdown(markdown) == [
+        "https://dermanimedspa.com/wp-content/uploads/2024/11/larger-shields-botox.png"
+    ]
 
 
 def _image(rows: list[list[tuple[int, str]]]) -> Image.Image:

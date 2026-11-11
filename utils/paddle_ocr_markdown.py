@@ -1,12 +1,12 @@
 """Download relevant promotion and membership images and assemble OCR markdown."""
 from __future__ import annotations
 
-import re
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+from markdown_it import MarkdownIt
 
 from utils.service_endpoints import OCR_URL
 
@@ -46,7 +46,9 @@ def filter_promo_image_urls(urls: Sequence[str]) -> list[str]:
 
 
 def image_urls_from_markdown(markdown: str) -> list[str]:
-    urls = re.findall(r"!\[[^\]]*\]\((https?://[^)]+)\)", str(markdown or ""))
+    urls = [token.attrGet("src") for block in MarkdownIt().parse(str(markdown or ""))
+            for token in (block.children or []) if token.type == "image" and token.attrGet("src")
+            and urlparse(token.attrGet("src")).scheme in ("http", "https")]
     return filter_promo_image_urls(urls)
 
 
