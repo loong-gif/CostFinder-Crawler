@@ -15,6 +15,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from utils.llm_quota_fallback import LLMQuotaExceeded, with_cpa_fallback
 from utils.offer_scope_filter import filter_service_offers
 from utils.service_category_lookup import resolve_service_category
 
@@ -378,7 +379,7 @@ class GeminiNativeClient:
             timeout=self.timeout,
         )
         if response.status_code == 429:
-            raise RuntimeError(
+            raise LLMQuotaExceeded(
                 "Gemini HTTP 429: "
                 f"{response.text[:500]} "
                 f"Retry-After: {response.headers.get('Retry-After', '')}"
@@ -454,7 +455,7 @@ def build_client_from_env(
     if use_gemini and resolved_key and resolved_model:
         native = build_gemini_client_from_env(api_key=resolved_key, model=resolved_model)
         if native:
-            return native
+            return with_cpa_fallback(native, OpenAICompatibleClient)
 
     resolved_url = api_url or os.getenv("LLM_API_URL", "").strip()
     if not resolved_url:

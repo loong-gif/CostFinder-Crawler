@@ -70,7 +70,7 @@ def discovery_launcher() -> bytes:
 # 主机 .env 由部署整体替换：只读令牌必须存在，其余凭据存在才写入
 REQUIRED_KEYS = ("SUPABASE_READONLY_TOKEN",)
 OPTIONAL_KEYS = ("FIRECRAWL_SELF_HOSTED_API_KEY",
-                 "LLM_API_KEY", "LLM_API_URL", "LLM_API_BASE", "LLM_MODEL", "LLM_BACKEND", "GEMINI_API_KEY",
+                 "LLM_API_KEY", "LLM_API_URL", "LLM_API_BASE", "LLM_MODEL", "LLM_BACKEND", "GEMINI_API_KEY", "CPA_API_KEY",
                  "FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_NOTIFY_OPEN_ID")
 
 
@@ -78,6 +78,43 @@ def host_env(values) -> bytes:
     lines = [key+"="+json.dumps(values[key]) for key in REQUIRED_KEYS]
     lines += [key+"="+json.dumps(values[key]) for key in OPTIONAL_KEYS if values.get(key)]
     return ("\n".join(lines)+"\n").encode()
+
+
+def sync_cpa_key(host: str) -> None:
+    key = dotenv_values(ROOT / ".env").get("CPA_API_KEY")
+    if not key:
+        raise RuntimeError("CPA_API_KEY is missing from the local .env")
+    child = ("import sys\nfrom dotenv import dotenv_values,set_key\n"
+             "path='/home/loong/costfinder_monitor/.env'\nkey=sys.stdin.read()\n"
+             "existing=dotenv_values(path).get('CPA_API_KEY')\n"
+             "if existing and existing != key: raise RuntimeError('CPA_API_KEY differs on server')\n"
+             "set_key(path,'CPA_API_KEY',key)\nprint('CPA key configured')")
+    code = ("import os,subprocess,sys\n"
+            "os.environ['TMPDIR']='/home/loong/costfinder_monitor/state/tmp'\n"
+            "os.makedirs(os.environ['TMPDIR'],exist_ok=True)\n"
+            f"subprocess.run(['/home/loong/costfinder_monitor/.venv/bin/python','-c',{child!r}], "
+            "input=sys.stdin.buffer.read(),check=True)\n")
+    print(remote_python(code, stdin=key.encode(), host=host))
+
+
+def deploy_quota_client(host: str) -> None:
+    code = '''import fcntl,os,shutil,sys
+from datetime import datetime,timezone
+from pathlib import Path
+base=Path("/home/loong/costfinder_monitor")
+lock=(base/"state/scheduled_discovery/.lock").open("a+")
+fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+target=base/"utils/llm_quota_fallback.py"
+backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")/"utils"
+backup.mkdir(parents=True,exist_ok=True)
+shutil.copy2(target,backup/target.name)
+staging=target.with_suffix(".py.new")
+staging.write_bytes(sys.stdin.buffer.read())
+staging.chmod(target.stat().st_mode & 0o777)
+os.replace(staging,target)
+print("quota client deployed")
+'''
+    print(remote_python(code, stdin=(ROOT / "utils/llm_quota_fallback.py").read_bytes(), host=host))
 
 
 def deploy(host: str, include_credentials: bool):
@@ -202,7 +239,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host",default="firecrawl")
     parser.add_argument("--include-credentials",action="store_true")
+    parser.add_argument("--sync-cpa-key",action="store_true")
     args=parser.parse_args()
+    if args.sync_cpa_key:
+        sync_cpa_key(args.host)
+        return
     deploy(args.host,args.include_credentials)
     print(json.dumps({"console_session_task": ensure_console_session_task(args.host).strip().splitlines()[-1]}))
     print(json.dumps({"scheduled_discovery_task": ensure_discovery_task(args.host).strip().splitlines()[-1]}))

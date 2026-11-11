@@ -89,6 +89,7 @@ python scripts/crawl_scheduler.py record --results state/crawl_schedule/results.
 - 登记、页面抽取、offer 抽取和服务关联生成的 SQL 经 `state/pending_sql/` 交给本机每小时执行；服务器确认 `applied/` 后才进入下一阶段。被拒的 SQL 基于新快照重新规划，待核验页面留在批次中继续处理。
 - 页面标题与路径共同明确指向其他城市时，审核和抽取都会排除该页面；每次重新抓取使用新的原始数据目录，抽取只读取本次抓取结果。
 - 任务使用 `state/scheduled_discovery/.lock` 避免重复运行，城市调度状态与到期抓取共用 `state/crawl_schedule/.lock`。中断后重新启动同一任务即可恢复；不得手动移动待执行 SQL 充当执行确认。
+- 主模型达到月度支出上限后，本次进程使用 CPA 备用模型；服务器缺少 `CPA_API_KEY` 时，可运行 `python scripts/deploy_monitor_price_sync.py --sync-cpa-key`，从本机 `.env` 经 SSH 标准输入同步该项，服务器已有不同值时终止。
 
 ## 用自部署 Firecrawl Map 发现新促销页 / 会员页
 

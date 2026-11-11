@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MONITOR_HOST_IP = "72.52.161.65"
 MONITOR_DEPLOY_DIR = Path("/home/loong/costfinder_monitor")
-PORTS = {"firecrawl": 3002, "gmaps": 8081, "ocr": 8082}
+PORTS = {"firecrawl": 3002, "gmaps": 8081, "ocr": 8082, "cpa": 8317}
 
 
 def endpoints(project_root: Path) -> dict[str, str]:
@@ -21,3 +21,4 @@ _CURRENT = endpoints(PROJECT_ROOT)
 FIRECRAWL_URL = _CURRENT["firecrawl"]
 GMAPS_URL = _CURRENT["gmaps"]
 OCR_URL = _CURRENT["ocr"]
+CPA_URL = _CURRENT["cpa"]
