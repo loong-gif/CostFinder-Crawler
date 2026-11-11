@@ -97,14 +97,16 @@ def sync_cpa_key(host: str) -> None:
     print(remote_python(code, stdin=key.encode(), host=host))
 
 
-def deploy_quota_client(host: str) -> None:
+def deploy_discovery_component(host: str, relative: str) -> None:
+    if relative not in {"utils/llm_quota_fallback.py", "utils/scheduled_discovery.py"}:
+        raise ValueError(f"unsupported discovery component: {relative}")
     code = '''import fcntl,os,shutil,sys
 from datetime import datetime,timezone
 from pathlib import Path
 base=Path("/home/loong/costfinder_monitor")
 lock=(base/"state/scheduled_discovery/.lock").open("a+")
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-target=base/"utils/llm_quota_fallback.py"
+target=base/RELATIVE
 backup=base/"price_sync_backups"/datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")/"utils"
 backup.mkdir(parents=True,exist_ok=True)
 shutil.copy2(target,backup/target.name)
@@ -112,9 +114,9 @@ staging=target.with_suffix(".py.new")
 staging.write_bytes(sys.stdin.buffer.read())
 staging.chmod(target.stat().st_mode & 0o777)
 os.replace(staging,target)
-print("quota client deployed")
-'''
-    print(remote_python(code, stdin=(ROOT / "utils/llm_quota_fallback.py").read_bytes(), host=host))
+print("discovery component deployed")
+'''.replace("RELATIVE", repr(relative))
+    print(remote_python(code, stdin=(ROOT / relative).read_bytes(), host=host))
 
 
 def deploy(host: str, include_credentials: bool):
